@@ -15,6 +15,7 @@
 
 * Write clean, idiomatic, fully synthesizable Verilog-2001. No SystemVerilog constructs that break Yosys or open-source toolchains.
 * Zero combinatorial loops and zero unclocked latches. Every flip-flop must have an explicit, synchronous active-low reset (`rst_n`).
+  * **Exception:** the `src/imem.v` storage array (`mem[0:31]`) deliberately omits reset. This lets Gowin infer distributed RAM (RAM16SDP4) and keeps the ASIC array to plain non-reset DFFs (512 bits). The host must write every IMEM word it executes; `imem.rd_data` itself is reset.
 * Registered I/O boundary: no purely combinatorial paths from input pins (`gpio_in`) directly through the ALU to output pins (`gpio_out`) in the same machine cycle.
 * Do not introduce slop: avoid speculative wrapper glue, dead ports, fake parameterized features that will never be used, or workarounds that patch bugs in tests instead of fixing the root cause in the datapath.
 * Code comments must be terse, dense, and physically informative: annotate clock edges, setup/hold cycles, protocol bit phases, and non-obvious mux priorities directly in the RTL.
