@@ -5,6 +5,7 @@ and $_DFF_P_ cells; the netlist is compiled into straight-line Python and
 stepped one clock per emu StateMachine.step().
 
 Yosys: $YOSYS, else `yosys`, else `yowasp-yosys` (pip install yowasp-yosys).
+RTL: src/, or $OPENPIO_SRC (e.g. a mutated copy for harness sensitivity checks).
 """
 from __future__ import annotations
 
@@ -19,7 +20,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "sim" / "model"))
 
-SOURCES = ["alu.v", "shifter.v", "imem.v", "pau.v", "openpio_core.v"]
+SRC = Path(os.environ.get("OPENPIO_SRC", ROOT / "src"))
+SOURCES = ["alu.v", "shifter.v", "imem.v", "pau.v", "openpio_core.v",
+           "fifo.v", "spi_cfg_interface.v", "tt_um_openpio.v"]
 
 
 def find_yosys() -> str:
@@ -34,7 +37,7 @@ def build(top: str = "openpio_core") -> dict:
     with tempfile.TemporaryDirectory() as tmp:
         # yowasp-yosys (WASM) only sees the working directory
         for f in SOURCES:
-            shutil.copy(ROOT / "src" / f, tmp)
+            shutil.copy(SRC / f, tmp)
         script = (f"read_verilog -noautowire {' '.join(SOURCES)}; "
                   f"hierarchy -check -top {top}; proc; check -assert; "
                   f"synth -noabc -flatten -top {top}; dffunmap; opt_clean; write_json net.json")
@@ -44,10 +47,15 @@ def build(top: str = "openpio_core") -> dict:
 
 
 class Netlist:
-    """Compiled two-phase simulator: comb(v) settles logic, clk(v) updates DFFs."""
+    """Compiled two-phase simulator: comb(v) settles logic, clk(v) updates DFFs.
+
+    Signals are addressed by port name or by flattened net name
+    (e.g. "u_core.dbg_pc").
+    """
 
     def __init__(self, module: dict, xval: int = 0) -> None:
-        self.ports = {n: p["bits"] for n, p in module["ports"].items()}
+        self.ports = {n: p["bits"] for n, p in module["netnames"].items()}
+        self.ports.update({n: p["bits"] for n, p in module["ports"].items()})
         cells = [c for c in module["cells"].values() if c["type"] != "$scopeinfo"]
         comb = [c for c in cells if c["type"] != "$_DFF_P_"]
         ffs = [c for c in cells if c["type"] == "$_DFF_P_"]
@@ -111,10 +119,17 @@ class Core:
         for i, b in enumerate(self.net.pidx[name]):
             self.v[b] = (int(val) >> i) & 1
 
-    def get(self, name: str) -> int:
+    def get(self, name: str, x_fill: int | None = None) -> int:
+        """Read a signal; bits Yosys removed ('x') raise unless x_fill supplies them."""
         r = 0
         for i, b in enumerate(self.net.pidx[name]):
-            r |= (int(b) if isinstance(b, str) else self.v[b]) << i
+            if b == "x":
+                if x_fill is None:
+                    raise ValueError(f"{name}[{i}] was optimized away")
+                bit = (x_fill >> i) & 1
+            else:
+                bit = int(b) if isinstance(b, str) else self.v[b]
+            r |= bit << i
         return r
 
     def eval(self) -> None:
@@ -182,34 +197,42 @@ class Lockstep:
         emu_step(sm)
         c.clock()
         self.cycle += 1
+        return compare(c.get, sm, tx_pop, rx_push, rx_data, tx_len, rx_len)
 
-        hp2 = 2 * (sm.pau_baud or 1)
-        em_push = len(sm.rx_fifo) > rx_len
-        checks = [
-            ("tx_pop", tx_pop, int(len(sm.tx_fifo) < tx_len)),
-            ("rx_push", rx_push, int(em_push)),
-            ("rx_data", rx_data if em_push else 0, sm.rx_fifo[-1] if em_push else 0),
-            ("pc", c.get("dbg_pc"), sm.pc),
-            ("x", c.get("dbg_x"), sm.x),
-            ("y", c.get("dbg_y"), sm.y),
-            ("isr", c.get("dbg_isr"), sm.isr),
-            ("osr", c.get("dbg_osr"), sm.osr),
-            ("isr_cnt", c.get("dbg_isr_cnt"), sm.isr_count),
-            ("osr_cnt", c.get("dbg_osr_cnt"), sm.osr_count),
-            ("stalled", c.get("dbg_stalled"), int(sm.stalled)),
-            ("delay", c.get("dbg_delay"), sm.delay_counter),
-            ("gpio_out", c.get("gpio_out"), sm.gpio_out),
-            ("pindirs", c.get("gpio_oe"), sm.pindirs),
-            ("irq", c.get("irq_flags"), _bits(sm.irq_flags)),
-            ("peer_irq", c.get("peer_irq_flags"), _bits(sm.peer_irq_flags)),
-            ("tmo_flag", c.get("dbg_timeout_flag"), int(sm.timeout_flag)),
-            ("tmo_cnt", c.get("dbg_timeout"), sm.timeout_counter),
-            ("tmo_val", c.get("dbg_timeout"), sm.timeout_val),
-            ("clkdiv", c.get("dbg_clkdiv"), sm.clkdiv_int),
-            ("pau_cfg", c.get("dbg_pau_cfg"), sm.pau_cfg),
-            ("pau_baud", c.get("dbg_pau_baud"), sm.pau_baud),
-            ("mtx_nsym", c.get("dbg_mtx_nsym"), -(-len(sm.pau_tx_queue) // hp2)),
-            ("nrzi_k", c.get("dbg_nrzi_k"), int(sm.pau_nrzi_state == 2)),
-            ("nrzi_ones", c.get("dbg_nrzi_ones"), min(sm.pau_ones_count, 7)),
-        ]
-        return [f"{n}: hw={h:#x} emu={e:#x}" for n, h, e in checks if h != e]
+
+def compare(get, sm, tx_pop, rx_push, rx_data, tx_len, rx_len) -> list[str]:
+    """Core state after a clock vs emu after step(); get(name) reads a core port.
+
+    tx_pop / rx_push / rx_data are the core's FIFO handshake sampled before
+    the clock, tx_len / rx_len the emu FIFO lengths before step().
+    """
+    hp2 = 2 * (sm.pau_baud or 1)
+    em_push = len(sm.rx_fifo) > rx_len
+    checks = [
+        ("tx_pop", tx_pop, int(len(sm.tx_fifo) < tx_len)),
+        ("rx_push", rx_push, int(em_push)),
+        ("rx_data", rx_data if em_push else 0, sm.rx_fifo[-1] if em_push else 0),
+        ("pc", get("dbg_pc"), sm.pc),
+        ("x", get("dbg_x"), sm.x),
+        ("y", get("dbg_y"), sm.y),
+        ("isr", get("dbg_isr"), sm.isr),
+        ("osr", get("dbg_osr"), sm.osr),
+        ("isr_cnt", get("dbg_isr_cnt"), sm.isr_count),
+        ("osr_cnt", get("dbg_osr_cnt"), sm.osr_count),
+        ("stalled", get("dbg_stalled"), int(sm.stalled)),
+        ("delay", get("dbg_delay"), sm.delay_counter),
+        ("gpio_out", get("gpio_out"), sm.gpio_out),
+        ("pindirs", get("gpio_oe"), sm.pindirs),
+        ("irq", get("irq_flags"), _bits(sm.irq_flags)),
+        ("peer_irq", get("peer_irq_flags"), _bits(sm.peer_irq_flags)),
+        ("tmo_flag", get("dbg_timeout_flag"), int(sm.timeout_flag)),
+        ("tmo_cnt", get("dbg_timeout"), sm.timeout_counter),
+        ("tmo_val", get("dbg_timeout"), sm.timeout_val),
+        ("clkdiv", get("dbg_clkdiv"), sm.clkdiv_int),
+        ("pau_cfg", get("dbg_pau_cfg"), sm.pau_cfg),
+        ("pau_baud", get("dbg_pau_baud"), sm.pau_baud),
+        ("mtx_nsym", get("dbg_mtx_nsym"), -(-len(sm.pau_tx_queue) // hp2)),
+        ("nrzi_k", get("dbg_nrzi_k"), int(sm.pau_nrzi_state == 2)),
+        ("nrzi_ones", get("dbg_nrzi_ones"), min(sm.pau_ones_count, 7)),
+    ]
+    return [f"{n}: hw={h:#x} emu={e:#x}" for n, h, e in checks if h != e]
