@@ -1,0 +1,65 @@
+// Tang Nano 20K physical constraints for tang_top.v
+// Part: GW2AR-LV18QN88C8/I7 (device GW2AR-18C)
+//
+// Pin sources: Sipeed TangNano-20K-example .cst files (clk 4, S1 88,
+// LEDs 15-20, WS2812 79) and litex-boards sipeed_tang_nano_20k.py
+// (J5/J6 header map). Header pins chosen to avoid the SD card (80-85),
+// MAX98357A audio (51, 54-56), HDMI DDC (52-53) and 1.8 V pins 25-26.
+// uio pins 27-31, 41, 42, 48 are shared with the 40-pin RGB LCD
+// connector: leave the LCD panel unplugged.
+
+// 27 MHz crystal
+IO_LOC  "clk_27m" 4;
+IO_PORT "clk_27m" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+
+// S1, reads 1 while pressed
+IO_LOC  "btn_s1" 88;
+IO_PORT "btn_s1" IO_TYPE=LVCMOS33;
+
+// SPI host bridge: SCLK/MOSI/CS_n on J6, MISO/HOST_IRQ on J5
+IO_LOC  "spi_sclk" 73;
+IO_PORT "spi_sclk" IO_TYPE=LVCMOS33 PULL_MODE=DOWN;
+IO_LOC  "spi_mosi" 74;
+IO_PORT "spi_mosi" IO_TYPE=LVCMOS33 PULL_MODE=DOWN;
+IO_LOC  "spi_cs_n" 76;
+IO_PORT "spi_cs_n" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+IO_LOC  "spi_miso" 75;
+IO_PORT "spi_miso" IO_TYPE=LVCMOS33 DRIVE=8;
+IO_LOC  "host_irq" 86;
+IO_PORT "host_irq" IO_TYPE=LVCMOS33 DRIVE=8;
+
+// openPIO uio[7:0]: weak pull-ups so open-drain lines idle high
+IO_LOC  "pio[0]" 27;
+IO_PORT "pio[0]" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_LOC  "pio[1]" 28;
+IO_PORT "pio[1]" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_LOC  "pio[2]" 29;
+IO_PORT "pio[2]" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_LOC  "pio[3]" 30;
+IO_PORT "pio[3]" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_LOC  "pio[4]" 31;
+IO_PORT "pio[4]" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_LOC  "pio[5]" 41;
+IO_PORT "pio[5]" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_LOC  "pio[6]" 42;
+IO_PORT "pio[6]" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+IO_LOC  "pio[7]" 48;
+IO_PORT "pio[7]" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=8;
+
+// Onboard LEDs, active low
+IO_LOC  "led_n[0]" 15;
+IO_PORT "led_n[0]" IO_TYPE=LVCMOS33 DRIVE=8;
+IO_LOC  "led_n[1]" 16;
+IO_PORT "led_n[1]" IO_TYPE=LVCMOS33 DRIVE=8;
+IO_LOC  "led_n[2]" 17;
+IO_PORT "led_n[2]" IO_TYPE=LVCMOS33 DRIVE=8;
+IO_LOC  "led_n[3]" 18;
+IO_PORT "led_n[3]" IO_TYPE=LVCMOS33 DRIVE=8;
+IO_LOC  "led_n[4]" 19;
+IO_PORT "led_n[4]" IO_TYPE=LVCMOS33 DRIVE=8;
+IO_LOC  "led_n[5]" 20;
+IO_PORT "led_n[5]" IO_TYPE=LVCMOS33 DRIVE=8;
+
+// WS2812 RGB LED data, held low
+IO_LOC  "ws2812" 79;
+IO_PORT "ws2812" IO_TYPE=LVCMOS33 DRIVE=8;

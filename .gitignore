@@ -1,2 +1,7 @@
 __pycache__/
 .pyc
+
+# FPGA builds
+fpga/tang_nano_20k/build/
+fpga/tang_nano_20k/impl/
+
