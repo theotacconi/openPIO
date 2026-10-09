@@ -1,0 +1,45 @@
+project:
+  title:        "openPIO"
+  author:       "Matteo Tacconi"
+  discord:      ""
+  description:  "General-purpose hardware protocol emulator ASIC with PAU acceleration"
+  language:     "Verilog"
+  clock_hz:     50000000
+
+  tiles: "6x4"
+
+  top_module:  "tt_um_theotacconi_openpio"
+
+  source_files:
+    - ""
+
+pinout:
+  ui[0]: "HOST_SCK"      # SPI Slave Clock
+  ui[1]: "HOST_MOSI"     # SPI Slave Data In
+  ui[2]: "HOST_CS_N"     # SPI Slave Chip Select (Active Low)
+  ui[3]: "EXT_TRIG"      # Trigger / Wait external src
+  ui[4]: "GPIO_IN_4"
+  ui[5]: "GPIO_IN_5"
+  ui[6]: "GPIO_IN_6"
+  ui[7]: "GPIO_IN_7"
+
+  uo[0]: "HOST_MISO"     # SPI Slave Data Out
+  uo[1]: "HOST_IRQ"      # Interrupt flag
+  uo[2]: "GPIO_OUT_2"
+  uo[3]: "GPIO_OUT_3"
+  uo[4]: "GPIO_OUT_4"
+  uo[5]: "GPIO_OUT_5"
+  uo[6]: "GPIO_OUT_6"
+  uo[7]: "GPIO_OUT_7"
+
+  uio[0]: "PIO_IO_0"
+  uio[1]: "PIO_IO_1"
+  uio[2]: "PIO_IO_2"
+  uio[3]: "PIO_IO_3"
+  uio[4]: "PIO_IO_4"
+  uio[5]: "PIO_IO_5"
+  uio[6]: "PIO_IO_6"
+  uio[7]: "PIO_IO_7"
+
+# Do not change!
+yaml_version: 6
