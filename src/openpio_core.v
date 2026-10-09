@@ -28,10 +28,12 @@
 // (SET writes both, WAIT issue copies val -> counter, each stall cycle copies
 // counter -> val), so a single 5-bit register serves as both.
 //
-// Not implemented here: the PAU datapaths (pau_cfg bit 0 NRZI / bit 1
-// bit-stuffing / bit 3 Manchester TX and the PAU_TX / PAU_BUSY stalls).
-// PAU_CFG and PAU_BAUD are stored and exported; with pau_cfg bits 0 and 3
-// clear the core matches emu.py exactly.
+// PAU (pau.v) on OUT PINS, priority PAU_CFG[3] > PAU_CFG[0] > raw:
+//   Manchester: each strobe first pops one queued sample onto pin out_base
+//   (before side-set). OUT stalls (PAU_TX, PC held, re-issues) while > 1
+//   symbol is pending; IRQ set stalls (PAU_BUSY, flag deferred) until the
+//   queue drains, then raises the flag and, with Wait, becomes an IRQ stall.
+//   NRZI: OUT drives {D+, D-} on pins out_base+1:out_base.
 
 `default_nettype none
 
@@ -84,10 +86,6 @@ module openpio_core (
     output wire [7:0]  irq_flags,
     output wire [7:0]  peer_irq_flags,
 
-    // PAU configuration registers (written by SET, consumed by a PAU block)
-    output wire [4:0]  pau_cfg,
-    output wire [4:0]  pau_baud,
-
     // Debug / verification
     output wire [4:0]  dbg_pc,
     output wire [15:0] dbg_instr,
@@ -101,7 +99,12 @@ module openpio_core (
     output wire        dbg_stalled,
     output wire [4:0]  dbg_clkdiv,
     output wire [4:0]  dbg_timeout,
-    output wire        dbg_timeout_flag
+    output wire        dbg_timeout_flag,
+    output wire [4:0]  dbg_pau_cfg,
+    output wire [4:0]  dbg_pau_baud,
+    output wire [4:0]  dbg_mtx_nsym,     // pending Manchester symbols
+    output wire        dbg_nrzi_k,
+    output wire [2:0]  dbg_nrzi_ones
 );
 
     // ---------------------------------------------------------------
@@ -135,6 +138,7 @@ module openpio_core (
     reg  [4:0]  pc, stage_pc;
     reg  [9:0]  delay_cnt;
     reg         stalled;
+    reg         stall_pau;   // stalled IRQ is in PAU_BUSY (flag not yet set)
     reg  [15:0] x, y;
     reg  [7:0]  gpio_out_r, pindirs_r, prev_gpio_in;
     reg  [7:0]  irq_r, peer_irq_r;
@@ -148,7 +152,7 @@ module openpio_core (
     // Next-state (combinational)
     reg  [4:0]  pc_d, stage_pc_d;
     reg  [9:0]  delay_d;
-    reg         stalled_d;
+    reg         stalled_d, stall_pau_d;
     reg  [15:0] x_d, y_d;
     reg  [7:0]  gpio_out_d, pindirs_d;
     reg  [7:0]  irq_d, peer_irq_d;
@@ -335,6 +339,78 @@ module openpio_core (
     wire [7:0] set_m_lo = {3'b000, ~(5'h1F << cfg_set_count)};
     wire [7:0] set_mask = set_m_lo << cfg_set_base;
     wire [7:0] set_bits = {3'b000, f_imm} << cfg_set_base;
+    wire [7:0] pin1_mask = 8'h01 << cfg_out_base;
+    wire [7:0] pin2_mask = 8'h03 << cfg_out_base;
+
+    // ---------------------------------------------------------------
+    // PAU
+    // ---------------------------------------------------------------
+    // OUT bits in transmit order: shift-right sends osr[0] first,
+    // shift-left sends osr[15] first (= bit-reversed OSR, low n bits).
+    wire [4:0]  out_n    = {(f_cnt == 4'd0), f_cnt};
+    wire [15:0] out_m16  = ~(16'hFFFF << out_n);
+    wire [15:0] osr_rev;
+    genvar gi;
+    generate
+        for (gi = 0; gi < 16; gi = gi + 1) begin : g_osr_rev
+            assign osr_rev[gi] = osr[15 - gi];
+        end
+    endgenerate
+    wire [15:0] pau_bits = cfg_out_shr ? osr_shift_data : (osr_rev & out_m16);
+
+    wire exec_out_pins = ph_exec & (opcode == OP_OUT) & (f_hi == R_PINS);
+    wire exec_set_pins = ph_exec & (opcode == OP_SET) & (f_hi == R_PINS);
+    wire exec_set_cfg  = ph_exec & (opcode == OP_SET) & (f_hi == R_7);
+
+    wire       mtx_pop, mtx_pop_bit, mtx_busy, mtx_full;
+    wire [1:0] nrzi_line;
+    wire [7:0] g_pop  = (gpio_out_r & ~pin1_mask) | ({7'd0, mtx_pop_bit} << cfg_out_base);
+    reg  [7:0] g_ss, p_ss;   // gpio_out / pindirs after queue pop and side-set
+    wire [7:0] g_ss_sh  = g_ss >> cfg_out_base;
+    wire [7:0] nrzi_bits = {6'd0, nrzi_line} << cfg_out_base;
+
+    pau u_pau (
+        .clk           (clk),
+        .rst_n         (rst_n),
+        .step          (step),
+        .baud          (pau_baud_r),
+        .stuff_en      (pau_cfg_r[1]),
+        .tx_bits       (pau_bits),
+        .tx_n          (out_n),
+        .mtx_push      (exec_out_pins & pau_cfg_r[3] & ~mtx_full),
+        .mtx_flush     ((exec_set_pins & pau_cfg_r[3]) | (exec_set_cfg & ~f_imm[3])),
+        .mtx_pop       (mtx_pop),
+        .mtx_pop_bit   (mtx_pop_bit),
+        .mtx_busy      (mtx_busy),
+        .mtx_full      (mtx_full),
+        .nrzi_out      (exec_out_pins & ~pau_cfg_r[3] & pau_cfg_r[0]),
+        .nrzi_line_in  (g_ss_sh[1:0]),
+        .nrzi_load     (exec_set_pins & pau_cfg_r[0] & ((f_imm == 5'd1) | (f_imm == 5'd2))),
+        .nrzi_load_k   (f_imm[1]),
+        .nrzi_line     (nrzi_line),
+        .dbg_mtx_nsym  (dbg_mtx_nsym),
+        .dbg_nrzi_k    (dbg_nrzi_k),
+        .dbg_nrzi_ones (dbg_nrzi_ones)
+    );
+
+    // Every strobe: Manchester sample -> pin out_base, then (execute only)
+    // side-set; open-drain fix-up after each gpio_out write.
+    always @(*) begin
+        g_ss = gpio_out_r;
+        p_ss = pindirs_r;
+        if (mtx_pop) begin
+            g_ss = g_pop;
+            p_ss = (p_ss & ~cfg_od_mask) | (~g_ss & cfg_od_mask);
+        end
+        if (ph_exec & ss_en) begin
+            if (cfg_ss_pindirs) begin
+                p_ss = (p_ss & ~ss_mask) | (ss_bits & ss_mask);
+            end else begin
+                g_ss = (g_ss & ~ss_mask) | (ss_bits & ss_mask);
+                p_ss = (p_ss & ~cfg_od_mask) | (~g_ss & cfg_od_mask);
+            end
+        end
+    end
 
     // ---------------------------------------------------------------
     // Next-state logic
@@ -358,8 +434,9 @@ module openpio_core (
         tmo_flag_d = tmo_flag;
         pau_cfg_d  = pau_cfg_r;
         pau_baud_d = pau_baud_r;
-        g          = gpio_out_r;
-        p          = pindirs_r;
+        stall_pau_d = stall_pau;
+        g          = g_ss;
+        p          = p_ss;
 
         isr_shift      = 1'b0;
         isr_shift_data = in_val;
@@ -411,24 +488,34 @@ module openpio_core (
                         advance  = 1'b1;
                     end
                 end
+                OP_OUT: begin
+                    // PAU_TX: release when <= 1 symbol pending; PC unchanged,
+                    // so the OUT re-issues on the next strobe.
+                    if (!mtx_full) begin
+                        advance   = 1'b1;
+                        adv_delay = 10'd0;
+                        adv_pc    = pc;
+                    end
+                end
                 OP_IRQ: begin
-                    if (!irq_sel)
+                    if (stall_pau) begin
+                        // PAU_BUSY: queue drained -> raise flag now
+                        if (!mtx_busy) begin
+                            if (f_b5) peer_irq_d[f_lo] = 1'b1;
+                            else      irq_d[f_lo]      = 1'b1;
+                            stall_pau_d = 1'b0;
+                            if (!f_b6)
+                                advance = 1'b1;   // else continue as IRQ-wait stall
+                        end
+                    end else if (!irq_sel) begin
                         advance = 1'b1;
+                    end
                 end
                 default: ;
             endcase
 
         end else if (ph_exec) begin
             // -------------------------------------------------- execute
-            if (ss_en) begin
-                if (cfg_ss_pindirs) begin
-                    p = (p & ~ss_mask) | (ss_bits & ss_mask);
-                end else begin
-                    g = (g & ~ss_mask) | (ss_bits & ss_mask);
-                    p = (p & ~cfg_od_mask) | (~g & cfg_od_mask);
-                end
-            end
-
             case (opcode)
                 OP_JMP: begin
                     case (f_hi)
@@ -462,11 +549,26 @@ module openpio_core (
                 end
 
                 OP_OUT: begin
-                    osr_shift = 1'b1;
+                    // PAU_TX: Manchester queue holds > 1 symbol -> stall
+                    // before touching OSR.
+                    osr_shift = ~(exec_out_pins & pau_cfg_r[3] & mtx_full);
                     case (f_hi)
                         R_PINS: begin
-                            g = (g & ~out_mask) | (out_bits & out_mask);
-                            p = (p & ~cfg_od_mask) | (~g & cfg_od_mask);
+                            if (pau_cfg_r[3]) begin
+                                if (mtx_full) begin
+                                    issue_stall = 1'b1;
+                                end else if (!mtx_busy) begin
+                                    // queue empty: first half-sample now
+                                    g = (g & ~pin1_mask) | ({7'd0, pau_bits[0]} << cfg_out_base);
+                                    p = (p & ~cfg_od_mask) | (~g & cfg_od_mask);
+                                end
+                            end else if (pau_cfg_r[0]) begin
+                                g = (g & ~pin2_mask) | (nrzi_bits & pin2_mask);
+                                p = (p & ~cfg_od_mask) | (~g & cfg_od_mask);
+                            end else begin
+                                g = (g & ~out_mask) | (out_bits & out_mask);
+                                p = (p & ~cfg_od_mask) | (~g & cfg_od_mask);
+                            end
                         end
                         R_X:   x_d = osr_shift_data;
                         R_Y:   y_d = osr_shift_data;
@@ -531,6 +633,10 @@ module openpio_core (
                     if (f_b7) begin
                         if (f_b5) peer_irq_d[f_lo] = 1'b0;
                         else      irq_d[f_lo]      = 1'b0;
+                    end else if (pau_cfg_r[3] && mtx_busy) begin
+                        // PAU_BUSY: defer flag until Manchester queue drains
+                        issue_stall = 1'b1;
+                        stall_pau_d = 1'b1;
                     end else begin
                         if (f_b5) peer_irq_d[f_lo] = 1'b1;
                         else      irq_d[f_lo]      = 1'b1;
@@ -586,6 +692,7 @@ module openpio_core (
             stage_pc     <= 5'd0;
             delay_cnt    <= 10'd0;
             stalled      <= 1'b0;
+            stall_pau    <= 1'b0;
             x            <= 16'd0;
             y            <= 16'd0;
             gpio_out_r   <= 8'd0;
@@ -606,6 +713,7 @@ module openpio_core (
             stage_pc   <= stage_pc_d;
             delay_cnt  <= delay_d;
             stalled    <= stalled_d;
+            stall_pau  <= stall_pau_d;
             x          <= x_d;
             y          <= y_d;
             gpio_out_r <= gpio_out_d;
@@ -639,8 +747,6 @@ module openpio_core (
     assign rx_data          = isr;
     assign irq_flags        = irq_r;
     assign peer_irq_flags   = peer_irq_r;
-    assign pau_cfg          = pau_cfg_r;
-    assign pau_baud         = pau_baud_r;
 
     assign dbg_pc           = pc;
     assign dbg_instr        = instr;
@@ -655,6 +761,8 @@ module openpio_core (
     assign dbg_clkdiv       = clkdiv;
     assign dbg_timeout      = tmo_cnt;
     assign dbg_timeout_flag = tmo_flag;
+    assign dbg_pau_cfg      = pau_cfg_r;
+    assign dbg_pau_baud     = pau_baud_r;
 
 endmodule
 
