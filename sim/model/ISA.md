@@ -86,3 +86,8 @@
   The timing of the remaining queued half-periods is undefined: `emu.py` keeps the samples already
   expanded at the old baud, `src/pau.v` re-times them with the new value. Firmware must let the
   queue drain first (e.g. an `IRQ` set, which stalls until the queue is empty) before changing `PAU_BAUD`.
+- **IMEM writes require `CTRL.EN = 0`.** The host must clear `CTRL.EN` before rewriting any IMEM word
+  and may set it again only after the last write. The hardware fetches the next instruction one clock
+  ahead (synchronous IMEM read), so a word rewritten while the state machine runs can execute once with
+  its old contents, whereas `emu.py` always reads the current memory. Behaviour of IMEM writes with
+  `CTRL.EN = 1` is undefined.
