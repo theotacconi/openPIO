@@ -6,17 +6,11 @@ gate-level core; any per-cycle state divergence fails the run.
 import glob
 import importlib.util
 import sys
-import types
 import unittest
 
 from netlist import ROOT, Lockstep, Netlist, build
 
 import emu
-
-# agents/ import shared_tests.base_test, which now lives in test/shared/
-pkg = types.ModuleType("shared_tests")
-pkg.__path__ = [str(ROOT / "test" / "shared")]
-sys.modules["shared_tests"] = pkg
 
 net = Netlist(build())
 emu_step = emu.StateMachine.step

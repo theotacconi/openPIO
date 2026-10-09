@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-shared_tests/base_test.py
+test/shared/base_test.py
 Base test harness for multi-agent protocol verification.
 Provides cycle stepping, rolling trace buffer, and compact LLM-friendly crash dumps.
 """
@@ -10,10 +10,10 @@ import unittest
 from collections import deque
 from pathlib import Path
 
-# Add project root to sys.path
-ROOT_DIR = Path(__file__).resolve().parent.parent
-if str(ROOT_DIR) not in sys.path:
-    sys.path.insert(0, str(ROOT_DIR))
+# Golden model (asm.py, emu.py)
+MODEL_DIR = Path(__file__).resolve().parents[2] / "sim" / "model"
+if str(MODEL_DIR) not in sys.path:
+    sys.path.insert(0, str(MODEL_DIR))
 
 from asm import assemble
 from emu import StateMachine
