@@ -78,3 +78,11 @@
 |                         |                                  |                                                  | Bit 4: Manchester RX Enable (10BASE-T)
 ------------------------------------------------------------------------------------------------------------------------------------------------------------------
 ```
+
+## Constraints
+
+- **PAU_BAUD during Manchester TX is undefined.** Writing `PAU_BAUD` (`SET` dest `101`) while the
+  Manchester TX engine (`PAU_CFG[3]`) still has samples queued for the pin is an illegal condition.
+  The timing of the remaining queued half-periods is undefined: `emu.py` keeps the samples already
+  expanded at the old baud, `src/pau.v` re-times them with the new value. Firmware must let the
+  queue drain first (e.g. an `IRQ` set, which stalls until the queue is empty) before changing `PAU_BAUD`.

@@ -66,7 +66,7 @@ for t in range(args.programs):
         errs = ls.step(emu_step)
         total += 1
         if queued and (sm.pau_baud or 1) != hp:
-            cut += 1        # PAU_BAUD changed with samples queued: unsupported (pau.v)
+            cut += 1        # PAU_BAUD changed with samples queued: undefined (ISA.md)
             break
         if errs:
             fails += 1

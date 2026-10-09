@@ -10,8 +10,8 @@
 //   -> the instruction sees mtx_busy / mtx_full of the post-pop queue.
 //   OUT into an empty queue: core drives sample 0 itself, the queue keeps
 //   samples 1..2*hp*n-1 (position pre-advanced by one).
-//   Limit: hp is read live, so PAU_BAUD must not change while the queue is
-//   non-empty (emu.py keeps the old expansion).
+//   hp is read live; writing PAU_BAUD while the queue is non-empty is
+//   undefined (ISA.md, Constraints).
 //
 // NRZI + bit-stuffing (PAU_CFG[0], PAU_CFG[1]) -- combinational over the
 // OUT bits in transmit order: 0 toggles J/K, 1 holds; with stuffing, the 6th

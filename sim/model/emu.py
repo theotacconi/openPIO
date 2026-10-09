@@ -842,6 +842,8 @@ class StateMachine:
                 self.timeout_counter = val
                 self.timeout_flag = False
             elif dest == 5:  # PAU_BAUD
+                # Undefined while pau_tx_queue is non-empty (ISA.md, Constraints):
+                # queued samples keep the old half-period here, RTL re-times them.
                 self.pau_baud = val
             elif dest == 6:  # PINDIRS
                 set_mask = ((1 << self.set_count) - 1) & 0x1F
