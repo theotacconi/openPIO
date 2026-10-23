@@ -50,7 +50,7 @@ flowchart TD
     subgraph ARCH["Lead Architect (Human + Architect Agent)"]
         A1["Physical Node Constraints<br/>(IHP 130nm CMOS5L, 6x4 TT Tiles)"]
         A2["Silicon Budgeting & Opcode Allocation"]
-        A3["Golden Model & ISA Definition<br/>(sim_model/: ISA.md, asm.py, emu.py)"]
+        A3["Golden Model & ISA Definition<br/>(sim/model/: ISA.md, asm.py, emu.py)"]
         A1 --> A2 --> A3
     end
 
@@ -91,4 +91,4 @@ Lead Architect (Human + Architect Agent): Defined physical node boundaries (IHP 
 
 Protocol Verification Fleet (Worker & Domain Workers): 14 domain-specialized agents autonomously implemented drivers and unit tests for 14 physical communication protocols (UART, SPI 0-3, I2C with clock stretching, 1-Wire, CAN arbitration, LIN, USB-LS, Manchester/10BASE-T, SWD, JTAG, PS/2).
 
-RFC-Driven ISA Convergence: Limitations discovered by worker agents were formalized as architectural RFCs and iteratively integrated into sim_model/ until 100% test convergence was achieved.
+RFC-Driven ISA Convergence: Limitations discovered by worker agents were formalized as architectural RFCs and iteratively integrated into sim/model/ until 100% test convergence was achieved.
