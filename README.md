@@ -92,3 +92,14 @@ Lead Architect (Human + Architect Agent): Defined physical node boundaries (IHP 
 Protocol Verification Fleet (Worker & Domain Workers): 14 domain-specialized agents autonomously implemented drivers and unit tests for 14 physical communication protocols (UART, SPI 0-3, I2C with clock stretching, 1-Wire, CAN arbitration, LIN, USB-LS, Manchester/10BASE-T, SWD, JTAG, PS/2).
 
 RFC-Driven ISA Convergence: Limitations discovered by worker agents were formalized as architectural RFCs and iteratively integrated into sim/model/ until 100% test convergence was achieved.
+
+## Development environment
+
+All tools (Yosys, Icarus Verilog, Verilator, SymbiYosys, nextpnr-himbaechel, openFPGALoader, cocotb) run in a container defined by `Containerfile`; nothing is installed on the host. Requires podman (or docker).
+
+```
+scripts/dev.sh                                    # shell inside the container
+scripts/dev.sh python3 test/lockstep/fuzz.py      # run one command
+```
+
+The image is built on first use and rebuilt whenever `Containerfile` changes. Only the repository is mounted.
