@@ -61,6 +61,8 @@ Notes:
 
 ### Results (6x4, local run, LibreLane 3.0.5, IHP-Open-PDK c4b8b4e5)
 
+Reproduced identically on GitHub Actions (commit 742bc8d, same LibreLane and PDK), with all precheck checks passing: https://github.com/theotacconi/openPIO/actions/runs/39979454358
+
 | Check | Result |
 |---|---|
 | Detailed-route DRC | 0 |
