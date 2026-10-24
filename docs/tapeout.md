@@ -1,6 +1,6 @@
-# Tiny Tapeout (IHP SG13G2) submission and hardening
+# Tiny Tapeout (IHP SG13CMOS5L) submission and hardening
 
-Target flow: TinyTapeout/tt-gds-action `ttihp26b`, tt-support-tools `main`, LibreLane 3.0.5, PDK `ihp-sg13g2`. Note that TT's IHP flow uses SG13G2, not SG13CMOS5L; `ihp-sg13g2` is the only IHP value tt-gds-action accepts.
+Target flow, as TinyTapeout/ttihp-verilog-template branch `cmos5l`: tt-gds-action `ihp-cmos5l`, tt-support-tools `ihp-sg13cmos5l`, LibreLane 3.1.0.dev3 (action default), PDK `ihp-sg13cmos5l` (IHP-Open-PDK `2bbec755`, installed by the action from git). The organisers confirmed CMOS5L as the competition target.
 
 ## Submission files
 
@@ -8,19 +8,13 @@ Target flow: TinyTapeout/tt-gds-action `ttihp26b`, tt-support-tools `main`, Libr
 |---|---|
 | `info.yaml` | project metadata, `top_module`, `source_files`, `tiles`, pinout (yaml_version 6) |
 | `docs/info.md` | datasheet page: How it works / How to test / External hardware |
-| `src/config.json` | LibreLane settings, copied unchanged from ttihp-verilog-template (20 ns clock, 60 % placement density) |
+| `src/config.json` | LibreLane settings, identical to the template's `cmos5l` branch (20 ns clock, 60 % placement density, vertical PDN pitch 50 um / width 2.1 um) |
 | `.github/workflows/gds.yaml` | hardening, precheck and GDS viewer jobs (template `gl_test` job omitted: no cocotb tb yet) |
-| `.github/workflows/docs.yaml` | datasheet build check |
-
-Checked locally with tt-support-tools `main`:
-
-- `tt_tool.py --ihp --print-top-module`: `info.yaml` passes `ProjectInfo` validation.
-- `tt_tool.py --ihp --check-docs`: passes.
-- `tt_tool.py --ihp --create-user-config`: writes `src/config_merged.json` (die `0 0 1289.28 710.64` for 6x4).
+| `.github/workflows/docs.yaml` | `tt_tool.py --check-docs` and datasheet PDF on every push |
 
 ### Tile size
 
-`tiles: "6x4"` is valid for ihp-sg13g2 in tt-support-tools (the template comment only lists sizes up to 8x2). The design does not need that much area:
+tt-support-tools has the same tile sizes for ihp-sg13g2 and ihp-sg13cmos5l, 8x4 included. The competition allows 6x4, and 8x4 once the organisers announce it. The design does not need that much area. Utilisation below uses the SG13G2 post-CTS cell area (140,335 um^2) and must be redone with the CMOS5L figure:
 
 | tiles | die (um) | die area (um^2) | utilisation of post-CTS cell area (140,335 um^2) |
 |---|---|---|---|
@@ -29,39 +23,25 @@ Checked locally with tt-support-tools `main`:
 | 6x2 | 1289.28 x 313.74 | 404,499 | 35 % |
 | 6x4 | 1289.28 x 710.64 | 916,214 | 15 % |
 
-4x2 is the smallest size with headroom under the 60 % density target; it must be confirmed by a hardening run before changing `info.yaml`.
-
 ## Hardening on GitHub Actions (reference flow)
 
-1. Push the repository to GitHub and enable Pages (Settings > Pages > Source: GitHub Actions) for the viewer job.
+1. Enable Pages (Settings > Pages > Source: GitHub Actions) for the viewer job.
 2. The `gds` workflow runs on every push:
    - **gds**: `tt_tool.py --create-user-config --ihp`, then `tt_tool.py --harden --ihp` (LibreLane). The job summary shows cell usage, utilisation, routing stats, linter output and timing.
-   - **precheck**: `tt/precheck/precheck.py --gds tt_submission/*.gds --tech ihp-sg13g2` in the precheck nix shell: Magic DRC, KLayout FEOL/BEOL/offgrid/SG13G2 DRC, pin and boundary checks against the tile template, LEF/DEF/Verilog consistency. Results in the job summary (`reports/results.md`).
+   - **precheck**: Tiny Tapeout precheck on the final GDS (KLayout DRC, pin, boundary, layer and cell-name checks, Verilog syntax). Results in the job summary and the `precheck_reports` artifact.
    - **viewer**: 3D GDS viewer on GitHub Pages.
-3. Sign-off: both jobs green, plus the gds artifact (`tt_submission/`) present. The submission is made from the TT app (app.tinytapeout.com) by pointing it at the repository.
+3. Sign-off: all jobs green, plus the `tt_submission` artifact present. `scripts/tt_signoff.py` summarises a run and fails on any DRC / LVS / antenna / slew / capacitance error or negative setup or hold slack in any corner:
+   ```
+   gh run download <run-id> -n GDS_logs -D /tmp/gds_logs
+   python3 scripts/tt_signoff.py /tmp/gds_logs/runs/wokwi
+   ```
+4. The submission is made from the TT app (app.tinytapeout.com) by pointing it at the repository.
 
-## Hardening locally
+There is no local hardening flow for CMOS5L: no LibreLane container is published for 3.1.0.dev3 (checked 2026-10-24). The earlier SG13G2 script (`scripts/tt_harden.sh`) was removed; it is in git history (commit 388261d).
 
-`scripts/tt_harden.sh` runs the same steps on a workstation:
+## Previous results (SG13G2, 6x4)
 
-```
-scripts/tt_harden.sh                 # docker, or rootless podman if docker is absent
-ENGINE=podman PYTHON=python3.12 scripts/tt_harden.sh
-```
-
-1. Clones tt-support-tools into `./tt` (ref `TT_TOOLS_REF`, default `main`), creates `tt/.venv` and runs `--check-docs` and `--create-user-config`.
-2. Runs LibreLane inside `ghcr.io/librelane/librelane:3.0.5` (5.8 GB). On first use, LibreLane fetches the ihp-sg13g2 PDK into `$PDK_ROOT` (default `~/.ciel`). This is equivalent to `tt_tool.py --harden --ihp`, which needs a host LibreLane install plus docker.
-3. Runs `scripts/tt_signoff.py runs/wokwi`, which reads `runs/wokwi/final/metrics.json` and fails on any non-zero DRC / LVS / antenna / slew / capacitance count or negative setup or hold slack in any corner.
-
-Outputs (gitignored): `runs/wokwi/` (all step logs and reports; `final/gds`, `final/metrics.json`), `tt/`.
-
-Notes:
-- tt-support-tools pins `numpy==1.26.4`, which has no wheel for Python >= 3.13; the script then installs the same packages unpinned. `PYTHON=python3.12` avoids this.
-- tt_tool runs `yowasp-yosys`, which mounts its own temporary directory over `/tmp`; keep the checkout outside `/tmp`.
-
-### Results (6x4, local run, LibreLane 3.0.5, IHP-Open-PDK c4b8b4e5)
-
-Reproduced identically on GitHub Actions (commit 742bc8d, same LibreLane and PDK), with all precheck checks passing: https://github.com/theotacconi/openPIO/actions/runs/39979454358
+Hardened for ihp-sg13g2 before the switch to CMOS5L: LibreLane 3.0.5, IHP-Open-PDK c4b8b4e5, local run reproduced identically on GitHub Actions (commit 742bc8d, https://github.com/theotacconi/openPIO/actions/runs/39979454358) with all precheck checks passing. Kept for reference until the first CMOS5L run.
 
 | Check | Result |
 |---|---|
@@ -82,15 +62,3 @@ Reproduced identically on GitHub Actions (commit 742bc8d, same LibreLane and PDK
 9,849 standard cells (140,335 um^2, 15.6 % of the 6x4 core), 1,054 hold buffers, 3.8 mW total power (LibreLane power report, 50 MHz). Global routing overflow 0.
 
 The slow-corner critical path (18.6 ns of the 20 ns period) starts at the fractional prescaler accumulator `u_core.div_acc`: accumulator add, period compare and `strobe` gate the whole execute datapath and the next-PC IMEM address. Registering `strobe` one cycle ahead would take it off the path if more margin is needed.
-
-### Precheck locally (optional)
-
-Precheck needs Nix, like CI:
-
-```
-python tt/tt_tool.py --ihp --create-tt-submission
-cd tt/precheck && nix-shell --run \
-  "PDK=ihp-sg13g2 PDK_ROOT=$HOME/.ciel python precheck.py --gds ../../tt_submission/tt_um_theotacconi_openpio.gds --tech ihp-sg13g2"
-```
-
-CI pins the precheck PDK to ihp-sg13g2 commit `22f43352dd8219f9007eb659e422e0d5fe28c5fb` (tt-gds-action `precheck/action.yml`).
