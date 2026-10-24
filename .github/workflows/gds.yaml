@@ -1,5 +1,5 @@
-# Tiny Tapeout IHP SG13G2 hardening (copied from TinyTapeout/ttihp-verilog-template).
-# gds: LibreLane 3.0.5 flow via tt_tool --harden; precheck: TT KLayout DRC and
+# Tiny Tapeout IHP SG13CMOS5L hardening (copied from TinyTapeout/ttihp-verilog-template, branch cmos5l).
+# gds: LibreLane flow (3.1.0.dev3, action default) via tt_tool --harden; precheck: TT KLayout DRC and
 # submission checks on the final GDS; viewer: 3D GDS viewer on GitHub Pages.
 # The template's gl_test job is omitted until a cocotb tb exists under test/.
 name: gds
@@ -18,16 +18,16 @@ jobs:
           submodules: recursive
 
       - name: Build GDS
-        uses: TinyTapeout/tt-gds-action@ttihp26b
+        uses: TinyTapeout/tt-gds-action@ihp-cmos5l
         with:
-          pdk: ihp-sg13g2
+          pdk: ihp-sg13cmos5l
 
   precheck:
     needs: gds
     runs-on: ubuntu-24.04
     steps:
       - name: Run Tiny Tapeout Precheck
-        uses: TinyTapeout/tt-gds-action/precheck@ttihp26b
+        uses: TinyTapeout/tt-gds-action/precheck@ihp-cmos5l
 
   viewer:
     needs: gds
@@ -36,4 +36,4 @@ jobs:
       pages: write # to deploy to Pages
       id-token: write # to verify the deployment originates from an appropriate source
     steps:
-      - uses: TinyTapeout/tt-gds-action/viewer@ttihp26b
+      - uses: TinyTapeout/tt-gds-action/viewer@ihp-cmos5l
