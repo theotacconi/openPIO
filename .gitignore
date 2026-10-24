@@ -5,7 +5,7 @@ __pycache__/
 fpga/tang_nano_20k/build/
 fpga/tang_nano_20k/impl/
 
-# Tiny Tapeout local hardening (scripts/tt_harden.sh)
+# Tiny Tapeout tools and outputs, if tt_tool.py is run locally
 /tt/
 /runs/
 /tt_submission/

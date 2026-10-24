@@ -1,6 +1,6 @@
 # openPIO development environment: lint, simulation, formal and FPGA tools.
 # Same base as the GitHub Actions runners (ubuntu-24.04). Hardening (LibreLane)
-# runs in its own image, see scripts/tt_harden.sh.
+# runs on GitHub Actions, see .github/workflows/gds.yaml.
 #
 #   scripts/dev.sh [command]    builds this image on first use, runs command (default: bash)
 FROM docker.io/library/ubuntu:24.04

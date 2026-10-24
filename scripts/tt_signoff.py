@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Sign-off summary of a LibreLane run: DRC, LVS, antenna, timing, area.
 
-    python3 scripts/tt_signoff.py runs/wokwi
+    gh run download <run-id> -n GDS_logs -D /tmp/gds_logs    # gds workflow artifact
+    python3 scripts/tt_signoff.py /tmp/gds_logs/runs/wokwi
 
 Reads <run>/final/metrics.json. Exit status 1 if any DRC/LVS/antenna error
 count is non-zero or any setup/hold worst slack (all corners) is negative.
