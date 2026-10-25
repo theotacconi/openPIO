@@ -23,7 +23,8 @@ fi
 
 cwd=$PWD
 [[ $cwd == "$root" || $cwd == "$root"/* ]] || cwd=$root
-args=(run --rm -i -v "$root:$root:Z" -w "$cwd" -e HOME=/tmp)
+# :z (shared SELinux label), not :Z: a private label would lock out other running containers
+args=(run --rm -i -v "$root:$root:z" -w "$cwd" -e HOME=/tmp)
 [ -t 0 ] && [ -t 1 ] && args+=(-t)
 if [[ $(basename "$ENGINE") == podman ]]; then
     args+=(--userns=keep-id)
