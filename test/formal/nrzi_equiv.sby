@@ -1,0 +1,14 @@
+[options]
+mode prove
+
+[engines]
+smtbmc yices
+
+[script]
+read -formal pau.v nrzi_ref.v nrzi_equiv.v
+prep -top nrzi_equiv
+
+[files]
+../../src/pau.v
+nrzi_ref.v
+nrzi_equiv.v

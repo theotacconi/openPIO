@@ -1,0 +1,17 @@
+[options]
+mode prove
+
+[engines]
+smtbmc yices
+
+[script]
+read -formal alu.v shifter.v imem.v pau.v openpio_core.v core_strobe.v
+prep -top core_strobe
+
+[files]
+../../src/alu.v
+../../src/shifter.v
+../../src/imem.v
+../../src/pau.v
+../../src/openpio_core.v
+core_strobe.v

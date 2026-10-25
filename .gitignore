@@ -11,3 +11,6 @@ fpga/tang_nano_20k/impl/
 /tt_submission/
 src/user_config.json
 src/config_merged.json
+
+# SymbiYosys run directories (test/formal/*.sby)
+test/formal/*/
