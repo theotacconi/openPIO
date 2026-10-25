@@ -25,9 +25,12 @@
 
   "//": "Max slew - design repair only sees the typical corner, but slews in nom_slow_1p08V_125C are",
   "//": "up to 1.66x larger (same 2.507ns limit): repair to half the limit, again after global routing.",
+  "//": "Wire length cap: the execute enable (fanout 8, 871um routed) escaped slew-based repair.",
   "DESIGN_REPAIR_MAX_SLEW_PCT": 50,
+  "DESIGN_REPAIR_MAX_WIRE_LENGTH": 300,
   "RUN_POST_GRT_DESIGN_REPAIR": 1,
   "GRT_DESIGN_REPAIR_MAX_SLEW_PCT": 40,
+  "GRT_DESIGN_REPAIR_MAX_WIRE_LENGTH": 300,
 
   "//": "RUN_LINTER, LINTER_INCLUDE_PDK_MODELS - Disabling the linter is not recommended!",
   "RUN_LINTER": 1,
