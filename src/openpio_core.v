@@ -145,8 +145,10 @@ module openpio_core (
     reg  [4:0]  tmo_cnt;
     reg         tmo_flag;
     reg  [4:0]  clkdiv;
+    reg  [7:0]  div_frac;    // CLKDIV fraction, loaded with clkdiv on reset
     reg  [5:0]  div_cnt, div_period;
     reg  [7:0]  div_acc;
+    reg         strobe;      // this clock is a strobe, decided one clock ahead
     reg  [4:0]  pau_cfg_r, pau_baud_r;
 
     // Next-state (combinational)
@@ -212,12 +214,17 @@ module openpio_core (
     // ---------------------------------------------------------------
     // Prescaler
     // ---------------------------------------------------------------
-    wire       div_active     = (clkdiv != 5'd1) | (|cfg_clkdiv_frac);
-    wire [8:0] div_acc_sum    = {1'b0, div_acc} + {1'b0, cfg_clkdiv_frac};
-    wire [5:0] div_period_now = (div_cnt == 6'd0) ? {1'b0, clkdiv} + {5'b0, div_acc_sum[8]}
-                                                  : div_period;
-    wire [5:0] div_cnt_inc    = div_cnt + 6'd1;
-    wire       strobe         = ~div_active | (div_cnt_inc >= div_period_now);
+    // strobe is registered: strobe_d (below) applies the emu.py step-0 rule
+    // to the post-edge state div_*_d / clkdiv_d, so the accumulator add and
+    // period compare stay off the execute / next-PC path.
+    wire       div_active   = (clkdiv != 5'd1) | (|div_frac);
+    wire [8:0] div_acc_sum  = {1'b0, div_acc} + {1'b0, div_frac};
+    wire       div_tick     = en & div_active;
+    wire       div_load     = div_tick & (div_cnt == 6'd0);   // period starts
+    wire [5:0] div_cnt_d    = ~div_tick ? div_cnt : strobe ? 6'd0 : div_cnt + 6'd1;
+    wire [7:0] div_acc_d    = div_load ? div_acc_sum[7:0] : div_acc;
+    wire [5:0] div_period_d = div_load ? {1'b0, clkdiv} + {5'b0, div_acc_sum[8]}
+                                       : div_period;
 
     wire step     = en & strobe;
     wire ph_delay = step & (|delay_cnt);
@@ -228,6 +235,13 @@ module openpio_core (
     wire       clkdiv_wr = ph_exec & (opcode == OP_SET) & (f_hi == SET_CLKDIV);
     wire [4:0] clkdiv_d  = clkdiv_wr ? ((f_imm == 5'd0) ? 5'd1 : f_imm) : clkdiv;
     wire [9:0] eff_delay = delay_f * clkdiv_d;
+
+    // Next clock's strobe
+    wire       div_active_d  = (clkdiv_d != 5'd1) | (|div_frac);
+    wire       div_carry_d   = (div_acc_d > ~div_frac);   // carry of div_acc_d + div_frac
+    wire [5:0] div_period_n  = (div_cnt_d == 6'd0) ? {1'b0, clkdiv_d} + {5'b0, div_carry_d}
+                                                   : div_period_d;
+    wire       strobe_d      = ~div_active_d | (div_cnt_d + 6'd1 >= div_period_n);
 
     // ---------------------------------------------------------------
     // Shifter / ALU
@@ -703,9 +717,11 @@ module openpio_core (
             tmo_cnt      <= 5'd0;
             tmo_flag     <= 1'b0;
             clkdiv       <= (cfg_clkdiv_int == 5'd0) ? 5'd1 : cfg_clkdiv_int;
+            div_frac     <= cfg_clkdiv_frac;
             div_cnt      <= 6'd0;
             div_period   <= 6'd0;
             div_acc      <= 8'd0;
+            strobe       <= (cfg_clkdiv_int <= 5'd1);   // strobe_d of this state
             pau_cfg_r    <= 5'd0;
             pau_baud_r   <= 5'd0;
         end else begin
@@ -726,18 +742,22 @@ module openpio_core (
             pau_cfg_r  <= pau_cfg_d;
             pau_baud_r <= pau_baud_d;
 
+            div_cnt    <= div_cnt_d;
+            div_acc    <= div_acc_d;
+            div_period <= div_period_d;
+            strobe     <= strobe_d;
+
             if (en)
                 prev_gpio_in <= gpio_in;
-
-            if (en & div_active) begin
-                if (div_cnt == 6'd0) begin
-                    div_acc    <= div_acc_sum[7:0];
-                    div_period <= div_period_now;
-                end
-                div_cnt <= strobe ? 6'd0 : div_cnt_inc;
-            end
         end
     end
+
+`ifdef FORMAL
+    // The strobe register equals the emu.py step-0 rule on the current state.
+    wire [5:0] f_period = (div_cnt == 6'd0) ? {1'b0, clkdiv} + {5'b0, div_acc_sum[8]}
+                                            : div_period;
+    always @(*) if (rst_n) assert (strobe == (~div_active | (div_cnt + 6'd1 >= f_period)));
+`endif
 
     // ---------------------------------------------------------------
     // Outputs

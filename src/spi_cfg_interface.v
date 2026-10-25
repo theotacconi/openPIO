@@ -26,7 +26,7 @@
 //   2 SIDESET  [2:0] count  [3] opt  [4] pindirs  [10:8] base
 //   3 PINBASE  [2:0] in_base  [6:4] out_base  [10:8] set_base  [14:12] set_count=5
 //   4 MISC     [2:0] jmp_pin  [4] in_shift_right=1  [5] out_shift_right=1
-//   5 CLKDIV   [4:0] int=1  [15:8] frac   (int loaded into the SM on RESET)
+//   5 CLKDIV   [4:0] int=1  [15:8] frac   (both loaded into the SM on RESET)
 //   6 GPIO     [7:0] open_drain_mask  [15:11] in_sel[7:3] (1: gpio_in[i] = ui_in[i])
 //   8 STATUS   [0] tx_empty [1] tx_full [2] rx_empty [3] rx_full [4] stalled
 //              [5] timeout_flag [12:8] pc                                  (RO)
