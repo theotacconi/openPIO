@@ -17,6 +17,10 @@
 // OUT bits in transmit order: 0 toggles J/K, 1 holds; with stuffing, the 6th
 // consecutive 1 adds a toggle. Start state is the current line (J = 01,
 // K = 10) or, on SE0/SE1, the last NRZI state. ones saturates at 7 (> 6).
+// Parallel form of the per-bit loop (reference: test/formal/nrzi_ref.v):
+// bit e toggles on a 0, or on a stuffed 1 when the run of 1s ending at e is
+// 6 or 12 -- for the leading run counted on top of ones (0..5; 6/7 never
+// stuff). Every bit is evaluated from its own window: no 16-stage ripple.
 
 `default_nettype none
 
@@ -111,29 +115,53 @@ module pau (
     reg        nrzi_k;     // 0 = J (01), 1 = K (10)
     reg  [2:0] ones;
 
-    reg        k_c;
-    reg  [2:0] ones_c;
-    integer    i;
+    // Count of a monotone thermometer t[0] = t1 .. t[6] = t7
+    function [2:0] therm_cnt;
+        input [6:0] t;
+        therm_cnt = {t[3], (t[1] & ~t[3]) | t[5],
+                     (t[0] & ~t[1]) | (t[2] & ~t[3]) | (t[4] & ~t[5]) | t[6]};
+    endfunction
+
+    wire       k_in   = (nrzi_line_in == 2'b10) ? 1'b1
+                      : (nrzi_line_in == 2'b01) ? 1'b0 : nrzi_k;
+    wire       lead_ok = (ones <= 3'd5);       // leading run can stuff
+    wire [4:0] n_bits  = (tx_n > 5'd16) ? 5'd16 : tx_n;
+
+    reg  [16:1] run;        // run[k]: bits e-k+1..e all 1
+    reg  [4:0]  lead;       // ones + e + 1: leading-run count without stuffing
+    reg  [4:0]  lead_m6;    // lead mod 6
+    reg  [15:0] tog;        // bit e toggles K
+    reg  [47:0] ones_at;    // ones after bit e, 3 bits per e
+    reg         k_c;
+    reg  [2:0]  ones_c;
+    integer     e, k;
 
     always @(*) begin
-        k_c    = (nrzi_line_in == 2'b10) ? 1'b1
-               : (nrzi_line_in == 2'b01) ? 1'b0 : nrzi_k;
-        ones_c = ones;
-        for (i = 0; i < 16; i = i + 1) begin
-            if (i < tx_n) begin
-                if (!tx_bits[i]) begin
-                    k_c    = ~k_c;
-                    ones_c = 3'd0;
-                end else begin
-                    if (ones_c != 3'd7)
-                        ones_c = ones_c + 3'd1;
-                    if (stuff_en && ones_c == 3'd6) begin
-                        k_c    = ~k_c;
-                        ones_c = 3'd0;
-                    end
-                end
+        for (e = 0; e < 16; e = e + 1) begin
+            run    = 16'd0;
+            run[1] = tx_bits[e];
+            for (k = 2; k <= e + 1; k = k + 1)
+                run[k] = run[k - 1] & tx_bits[e - k + 1];
+            lead    = {2'b00, ones} + e[4:0] + 5'd1;
+            lead_m6 = lead % 5'd6;
+            if (run[e + 1]) begin
+                // leading run: bits 0..e all 1
+                tog[e] = stuff_en & lead_ok & (lead_m6 == 5'd0);
+                ones_at[3*e +: 3] = !stuff_en ? ((lead > 5'd7) ? 3'd7 : lead[2:0])
+                                  : lead_ok   ? lead_m6[2:0] : 3'd7;
+            end else begin
+                // run after a 0: exact length from run[]
+                tog[e] = ~tx_bits[e] | (stuff_en & ((run[6] & ~run[7]) | (run[12] & ~run[13])));
+                ones_at[3*e +: 3] = !stuff_en ? therm_cnt(run[7:1])
+                                  : !run[6]   ? therm_cnt({2'b00, run[5:1]})
+                                  : !run[12]  ? therm_cnt({2'b00, run[11:7]})
+                                  :             therm_cnt({3'b000, run[16:13]});
             end
+            if (e >= n_bits)
+                tog[e] = 1'b0;
         end
+        k_c    = k_in ^ (^tog);
+        ones_c = (n_bits == 5'd0) ? ones : ones_at[3*(n_bits - 5'd1) +: 3];
     end
 
     always @(posedge clk) begin
