@@ -1,0 +1,58 @@
+# cocotb tests (test/test.py) on the RTL: a few minutes, on every push that can change
+# their result. The same tests run on the hardened netlist in gds.yaml (gl_test job).
+name: test
+
+on:
+  push:
+    paths:
+      - 'src/**'
+      - 'test/**'
+      - 'sim/model/**'
+      - 'agents/**'
+      - '.github/workflows/test.yaml'
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: checkout repo
+        uses: actions/checkout@v6
+
+      # Same Icarus Verilog build as Tiny Tapeout's gl_test job and the Containerfile
+      - name: Install iverilog
+        run: |
+          wget -q https://github.com/TinyTapeout/iverilog/releases/download/v13.0/iverilog_13.0-1_amd64.deb
+          sudo apt-get update -y
+          sudo apt-get install -y ./iverilog_13.0-1_amd64.deb
+
+      - name: Setup python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install Python packages
+        run: pip install -r test/requirements.txt
+
+      - name: Run tests
+        run: |
+          cd test
+          make clean
+          make
+          # make succeeds even when tests fail: the verdict is in results.xml
+          python -m cocotb_tools.check_results results.xml
+
+      - name: Test summary
+        if: always()
+        uses: test-summary/action@v2.6
+        with:
+          paths: test/results.xml
+
+      - name: Upload waveform and test results
+        if: success() || failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results
+          path: |
+            test/tb.fst
+            test/results.xml

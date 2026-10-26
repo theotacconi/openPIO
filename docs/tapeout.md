@@ -9,7 +9,8 @@ Target flow, as TinyTapeout/ttihp-verilog-template branch `cmos5l`: tt-gds-actio
 | `info.yaml` | project metadata, `top_module`, `source_files`, `tiles`, pinout (yaml_version 6) |
 | `docs/info.md` | datasheet page: How it works / How to test / External hardware |
 | `src/config.json` | LibreLane settings: the template's `cmos5l` branch (20 ns clock, 60 % placement density, vertical PDN pitch 50 um / width 2.1 um) plus the slew repair settings below |
-| `.github/workflows/gds.yaml` | hardening, precheck and GDS viewer jobs (template `gl_test` job omitted: no cocotb tb yet) |
+| `.github/workflows/gds.yaml` | hardening, sign-off, gate-level test, precheck and GDS viewer jobs |
+| `.github/workflows/test.yaml` | cocotb tests (`test/`) on the RTL |
 | `.github/workflows/docs.yaml` | `tt_tool.py --check-docs` and datasheet PDF on every push |
 
 ### Tile size
@@ -30,6 +31,7 @@ tt-support-tools has the same tile sizes for ihp-sg13g2 and ihp-sg13cmos5l, 8x4 
    - **gds**: `tt_tool.py --create-user-config --ihp`, then `tt_tool.py --harden --ihp` (LibreLane). The job summary shows cell usage, utilisation, routing stats, linter output and timing.
    - **precheck**: Tiny Tapeout precheck on the final GDS (KLayout DRC, pin, boundary, layer and cell-name checks, Verilog syntax). Results in the job summary and the `precheck_reports` artifact.
    - **viewer**: 3D GDS viewer on GitHub Pages.
+   - **gl_test**: the cocotb tests of `test/` on the hardened gate-level netlist (TT action).
    - **signoff**: `scripts/tt_signoff.py` on the `GDS_logs` artifact, summary in the job summary. Fails on any DRC / LVS / antenna / slew / capacitance error or negative setup or hold slack in any corner: the gds job alone stays green on timing failures.
 3. Sign-off: all jobs green, plus the `tt_submission` artifact present. To rerun the sign-off script locally on a run:
    ```
