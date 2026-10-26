@@ -143,30 +143,30 @@ async def test_fifo_echo(dut):
 
 @cocotb.test()
 async def test_uart_rx(dut):
-    """UART receiver program (8 clk per bit, pin uio[0]): valid bytes land in RX,
-    a frame with a low stop bit raises IRQ 0 instead (HOST_IRQ = uo_out[1])."""
+    """UART receiver program (8 clk per bit, pin uio[0]): bytes sent back to back land
+    in RX, a frame with a low stop bit raises IRQ 0 instead (HOST_IRQ = uo_out[1])."""
     await start(dut)
     await load(dut, agent("uart", in_base=0, jmp_pin=0))
     dut.uio_in.value = 1                           # line idle high
     await spi(dut, OP_REG_WR, CTRL, EN)
 
-    async def send(byte, stop=1):
-        # start bit, 8 data bits LSB first, stop bit held 2 bit times: uart.asm
-        # samples the stop bit 12 clocks into it, not in the middle
-        for bit in [0] + [(byte >> i) & 1 for i in range(8)] + [stop, stop]:
-            dut.uio_in.value = bit
-            await ClockCycles(dut.clk, 8)
+    async def send(data, stop=1):
+        # 8N1 frames with no gap: start bit, 8 data bits LSB first, 1 stop bit;
+        # the next start bit follows the stop bit. Then the line idles high.
+        for byte in data:
+            for bit in [0] + [(byte >> i) & 1 for i in range(8)] + [stop]:
+                dut.uio_in.value = bit
+                await ClockCycles(dut.clk, 8)
         dut.uio_in.value = 1
         await ClockCycles(dut.clk, 16)
 
     data = [0xA5, 0x00, 0xFF, 0x3C]
-    for b in data:
-        await send(b)
+    await send(data)
     got = [await spi(dut, OP_RX_POP) >> 8 for _ in data]   # in shift right: byte in [15:8]
     assert got == data, f"UART RX: sent {[hex(b) for b in data]}, got {[hex(b) for b in got]}"
 
     assert int(dut.uo_out.value[1]) == 0, "IRQ pin high before any framing error"
-    await send(0x55, stop=0)
+    await send([0x55], stop=0)
     await ClockCycles(dut.clk, 8)
     assert int(dut.uo_out.value[1]) == 1, "framing error did not raise the IRQ pin"
     assert await spi(dut, OP_IRQ, data=0x0001) & 0xFF == 0x01, "IRQ flags: only IRQ 0 expected"

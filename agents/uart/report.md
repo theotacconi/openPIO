@@ -11,12 +11,11 @@ The Universal Asynchronous Receiver-Transmitter (UART) receiver core was impleme
 - **Clocking & Timing**: 8 cycles per bit period. Center-aligned sampling.
 
 ## 3. Assembly Program Analysis
-The assembly program (`uart.asm`) occupies 10 words out of the 32-word IMEM capacity (31.25% occupancy):
+The assembly program (`uart.asm`) occupies 9 words out of the 32-word IMEM capacity (28.12% occupancy):
 - `wait 0 gpio 0 [10]`: Stalls until start bit falling edge is detected. Upon edge detection, applies a 10-cycle delay plus instruction fetch cycles to align execution directly at cycle 12 (center of data bit 0).
 - `set x, 7`: Loads 8-bit loop iteration count into register X.
 - `in pins, 1 [6]`: Captures the serial bit from GPIO 0 into the ISR and delays 6 cycles.
-- `jmp x--, bit_loop`: Decrements X and branches to sample the next bit (total bit loop latency = 1 + 6 + 1 = 8 cycles).
-- `nop [7]`: Delays to land in the center of the stop bit.
+- `jmp x--, bit_loop`: Decrements X and branches to sample the next bit (total bit loop latency = 1 + 6 + 1 = 8 cycles). The last, not-taken jump ends 8 cycles after the bit 7 sample, so the next instruction lands in the center of the stop bit.
 - `jmp pin, stop_ok`: Tests `jmp_pin` (GPIO 0). If high (valid stop bit), branches to FIFO push.
 - `irq 0` / `jmp wait_idle`: If stop bit is low (framing error), raises IRQ 0 and branches to wait for line recovery without pushing corrupted data to FIFO.
 - `push noblock`: Transfers received 8-bit payload from ISR into RX FIFO.
@@ -28,12 +27,15 @@ The assembly program (`uart.asm`) occupies 10 words out of the 32-word IMEM capa
 - **First Data Bit Sample**: Cycle 12 (center of bit 0).
 - **Subsequent Data Bit Samples**: Cycles 20, 28, 36, 44, 52, 60, 68.
 - **Stop Bit Validation**: Sampled at cycle 76 (midpoint of stop bit).
-- **Total Frame Latency**: 93 cycles per byte.
+- **Back in `wait 0`**: Cycle 79, before the next start bit at cycle 80.
+- **Total Frame Latency**: 80 cycles per byte (frames can be sent back to back).
 
 ## 5. Verification Results
 - **Valid 8N1 Frame (`0xA5`)**: PASS. Received payload matched `0xA5`, RX FIFO size = 1, `IRQ 0` remained low.
+- **Back-to-back frames (`0xA5 0x00 0xFF 0x3C`, no idle time)**: PASS. All 4 bytes received, `IRQ 0` low.
 - **Framing Error Injection (`0x5A` corrupted stop bit = 0)**: PASS. `IRQ 0` asserted, corrupt byte rejected from FIFO.
-- **IMEM Occupancy**: 10/32 instructions (31.25%).
+- **IMEM Occupancy**: 9/32 instructions (28.12%).
+- **Fixed bug**: the first version had a `nop [7]` before `jmp pin` and sampled the stop bit at cycle 84, after its end: back-to-back frames were all lost and a 1-bit low stop bit went undetected. The original tests held the stop bit for 2 bit periods and missed it.
 
 ## 6. RFC: ISA & Hardware Recommendations
 - **RFC-UART-1: Hardware Auto-Baud Counter / Fractional Clock Divider**:

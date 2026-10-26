@@ -12,7 +12,7 @@
 
 | Protocol | Category | Status | Instructions (IMEM) | Occupancy (%) | Nominal Latency | Verification Summary & Corner Case Coverage |
 | :--- | :--- | :---: | :---: | :---: | :---: | :--- |
-| **`uart`** | Serial / Bus | [PASS] | 10 / 32 | 31.25% | 93 cycles | 8N1 nominal reception verified at 8 cycles/bit; midpoint framing check asserts `IRQ 0` and rejects frame when stop bit is low. |
+| **`uart`** | Serial / Bus | [PASS] | 9 / 32 | 28.12% | 80 cycles | 8N1 nominal and back-to-back reception verified at 8 cycles/bit; midpoint framing check asserts `IRQ 0` and rejects frame when stop bit is low. |
 | **`spi_mode0`** | Serial / Bus | [PASS] | 6 / 32 | 18.75% | 43 cycles | CPOL=0, CPHA=0 full-duplex transfer verified with SCK side-set 1. Clean setup and hold times on rising edge sampling. |
 | **`spi_mode1`** | Serial / Bus | [PASS] | 6 / 32 | 18.75% | 43 cycles | CPOL=0, CPHA=1 full-duplex transfer verified. MOSI driven on rising edge, MISO sampled on falling edge. |
 | **`spi_mode2`** | Serial / Bus | [PASS] | 6 / 32 | 18.75% | 43 cycles | CPOL=1, CPHA=0 full-duplex transfer verified. SCK idles high, MISO sampled on falling edge. |

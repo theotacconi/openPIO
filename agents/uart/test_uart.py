@@ -26,8 +26,9 @@ class TestUartRx(ProtocolTestCase):
         self.sm.gpio_in = 1  # Idle high
         self.step(1)         # Enter wait 0
 
-    def _transmit_byte(self, byte_val: int, valid_stop: bool = True):
-        """Simulate transmitting 1 start bit, 8 data bits (LSB-first), and 1 stop bit at 8 cycles/bit."""
+    def _transmit_byte(self, byte_val: int, valid_stop: bool = True, idle: int = 8):
+        """Simulate transmitting 1 start bit, 8 data bits (LSB-first), and 1 stop bit at 8 cycles/bit,
+        then `idle` cycles of idle-high line (0 = next frame starts right after the stop bit)."""
         # Start bit: 0 for 8 cycles
         self.sm.gpio_in = 0
         self.step(8)
@@ -38,13 +39,13 @@ class TestUartRx(ProtocolTestCase):
             self.sm.gpio_in = bit
             self.step(8)
 
-        # Stop bit: 1 if valid, 0 if framing error (held for 16 cycles to allow check & push)
+        # Stop bit: 1 if valid, 0 if framing error (one bit period, as a real 8N1 sender)
         self.sm.gpio_in = 1 if valid_stop else 0
-        self.step(16)
+        self.step(8)
 
         # Line returns to idle high
         self.sm.gpio_in = 1
-        self.step(4)
+        self.step(idle)
 
     def test_valid_frame_reception(self):
         """Test standard 8N1 transmission of byte 0xA5."""
@@ -58,6 +59,18 @@ class TestUartRx(ProtocolTestCase):
         self.assertEqual(received_byte, expected_byte, f"Received 0x{received_byte:02x}, expected 0x{expected_byte:02x}")
         self.assertFalse(self.sm.irq_flags[0], "Framing error IRQ 0 should NOT be set")
         self.print_success_summary("uart_valid_frame")
+
+    def test_back_to_back_frames(self):
+        """Test 4 frames sent without idle time: each start bit follows the previous stop bit."""
+        data = [0xA5, 0x00, 0xFF, 0x3C]
+        for byte in data:
+            self._transmit_byte(byte, idle=0)
+        self.step(8)
+
+        received = [(word >> 8) & 0xFF for word in self.sm.rx_fifo]
+        self.assertEqual(received, data, f"Received {[hex(b) for b in received]}, expected {[hex(b) for b in data]}")
+        self.assertFalse(self.sm.irq_flags[0], "Framing error IRQ 0 should NOT be set")
+        self.print_success_summary("uart_back_to_back")
 
     def test_framing_error_detection(self):
         """Test corrupted frame with stop bit missing (line stays low)."""
