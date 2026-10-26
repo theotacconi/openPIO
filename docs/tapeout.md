@@ -30,7 +30,8 @@ tt-support-tools has the same tile sizes for ihp-sg13g2 and ihp-sg13cmos5l, 8x4 
    - **gds**: `tt_tool.py --create-user-config --ihp`, then `tt_tool.py --harden --ihp` (LibreLane). The job summary shows cell usage, utilisation, routing stats, linter output and timing.
    - **precheck**: Tiny Tapeout precheck on the final GDS (KLayout DRC, pin, boundary, layer and cell-name checks, Verilog syntax). Results in the job summary and the `precheck_reports` artifact.
    - **viewer**: 3D GDS viewer on GitHub Pages.
-3. Sign-off: all jobs green, plus the `tt_submission` artifact present. `scripts/tt_signoff.py` summarises a run and fails on any DRC / LVS / antenna / slew / capacitance error or negative setup or hold slack in any corner:
+   - **signoff**: `scripts/tt_signoff.py` on the `GDS_logs` artifact, summary in the job summary. Fails on any DRC / LVS / antenna / slew / capacitance error or negative setup or hold slack in any corner: the gds job alone stays green on timing failures.
+3. Sign-off: all jobs green, plus the `tt_submission` artifact present. To rerun the sign-off script locally on a run:
    ```
    gh run download <run-id> -n GDS_logs -D /tmp/gds_logs
    python3 scripts/tt_signoff.py /tmp/gds_logs/runs/wokwi
