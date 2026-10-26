@@ -6,7 +6,14 @@
 name: gds
 
 on:
+  # Only when the hardened design or this flow changes; run by hand (Actions > gds > Run workflow)
+  # on the commit to submit, so its tt_submission artifact has the current docs/info.md.
   push:
+    paths:
+      - 'src/**'
+      - 'info.yaml'
+      - '.github/workflows/gds.yaml'
+      - 'scripts/tt_signoff.py'
   workflow_dispatch:
 
 jobs:

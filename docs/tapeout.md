@@ -26,7 +26,7 @@ tt-support-tools has the same tile sizes for ihp-sg13g2 and ihp-sg13cmos5l, 8x4 
 ## Hardening on GitHub Actions (reference flow)
 
 1. Enable Pages (Settings > Pages > Source: GitHub Actions) for the viewer job.
-2. The `gds` workflow runs on every push:
+2. The `gds` workflow runs on pushes that change `src/`, `info.yaml`, the workflow or `scripts/tt_signoff.py`, and by hand (Actions > gds > Run workflow):
    - **gds**: `tt_tool.py --create-user-config --ihp`, then `tt_tool.py --harden --ihp` (LibreLane). The job summary shows cell usage, utilisation, routing stats, linter output and timing.
    - **precheck**: Tiny Tapeout precheck on the final GDS (KLayout DRC, pin, boundary, layer and cell-name checks, Verilog syntax). Results in the job summary and the `precheck_reports` artifact.
    - **viewer**: 3D GDS viewer on GitHub Pages.
@@ -36,7 +36,7 @@ tt-support-tools has the same tile sizes for ihp-sg13g2 and ihp-sg13cmos5l, 8x4 
    gh run download <run-id> -n GDS_logs -D /tmp/gds_logs
    python3 scripts/tt_signoff.py /tmp/gds_logs/runs/wokwi
    ```
-4. The submission is made from the TT app (app.tinytapeout.com) by pointing it at the repository.
+4. The submission is made from the TT app (app.tinytapeout.com) by pointing it at the repository. Run `gds` by hand on the commit to submit first if it only changed docs: the `tt_submission` artifact includes `docs/`.
 
 There is no local hardening flow for CMOS5L: no LibreLane container is published for 3.1.0.dev3 (checked 2026-10-24). The earlier SG13G2 script (`scripts/tt_harden.sh`) was removed; it is in git history (commit 388261d).
 
