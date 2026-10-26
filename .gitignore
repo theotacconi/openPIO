@@ -12,5 +12,11 @@ fpga/tang_nano_20k/impl/
 src/user_config.json
 src/config_merged.json
 
+# cocotb outputs (test/Makefile); the gate-level netlist comes from a gds run
+test/sim_build/
+test/results.xml
+test/tb.fst
+test/gate_level_netlist.v
+
 # SymbiYosys run directories (test/formal/*.sby)
 test/formal/*/

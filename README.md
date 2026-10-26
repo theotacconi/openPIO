@@ -103,3 +103,15 @@ scripts/dev.sh python3 test/lockstep/fuzz.py      # run one command
 ```
 
 The image is built on first use and rebuilt whenever `Containerfile` changes. Only the repository is mounted.
+
+### Tests
+
+`test/test.py` holds the cocotb tests of the whole chip (Tiny Tapeout layout): a bit-banged SPI host programs it, and the PIO pins are checked against known data and `sim/model/emu.py`. They run on every relevant push (`test` workflow) and on the hardened netlist after each gds run (`gl_test` job).
+
+```
+cd test
+../scripts/dev.sh make -B                                 # RTL; results.xml, waveforms in tb.fst
+../scripts/dev.sh make -B GATES=yes PDK_ROOT=<pdk dir>    # gate level, see below
+```
+
+Gate level needs `test/gate_level_netlist.v` (the `.v` file of the `tt_submission` artifact of a gds run) and the IHP cell models `ihp-sg13cmos5l/libs.ref/{sg13cmos5l_stdcell,sg13cmos5l_io}/verilog/*.v` from IHP-Open-PDK under `<pdk dir>`, inside the repository so the container sees them.
