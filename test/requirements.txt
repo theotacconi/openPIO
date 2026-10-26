@@ -1,2 +1,4 @@
-cocotb==2.1.0
-pytest==9.1.1
+# Same versions as the Tiny Tapeout template: the ihp-cmos5l gl_test action fails on any
+# "failure" in results.xml, and cocotb >= 2.1 always writes failures="0" there.
+cocotb==2.0.1
+pytest==8.4.2

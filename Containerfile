@@ -29,7 +29,7 @@ RUN curl -fsSLO https://github.com/TinyTapeout/iverilog/releases/download/v13.0/
  && rm /opt/oss-cad-suite/bin/iverilog /opt/oss-cad-suite/bin/vvp
 
 RUN python3 -m venv /opt/venv \
- && /opt/venv/bin/pip install --no-cache-dir cocotb==2.1.0 pytest==9.1.1
+ && /opt/venv/bin/pip install --no-cache-dir cocotb==2.0.1 pytest==8.4.2
 
 # venv first: oss-cad-suite ships its own python3
 ENV PATH=/opt/venv/bin:/opt/oss-cad-suite/bin:$PATH \
