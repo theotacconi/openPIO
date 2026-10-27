@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "sim" / "model"))
 from asm import assemble                                             # noqa: E402
 from chip import (Chip, header, CTRL, GPIO, ID, IRQ, IRQ_MASK, PC, PINS, STATUS, WRAP, X, FIFO_LEVEL,  # noqa: E402
                   COND_CFG01, COND_CFG23, CRC_LO, IRQ_SUM, PINBASE, PIN_MASK, MISC, CLKDIV, SM_STATUS,
+                  PINS_IN, PINS_OE, PADS_BIDIR, PADS_IN, PADS_OUT,
                   OP_IMEM_RD, OP_IMEM_WR, OP_REG_RD, OP_REG_WR, OP_RX_POP, OP_TX_PUSH)
 from host import Host                                                # noqa: E402
 
@@ -24,7 +25,7 @@ class HostInterface(unittest.TestCase):
     def test_reset_values_and_id(self):
         chip = Chip(2)
         regs = chip.spi(header(OP_REG_RD, 1, WRAP), [0] * 6)[1:]
-        self.assertEqual(regs, [0x3F00, 0, 0x5000, 0xFF, 0x0003, 0x0001])   # WRAP .. CLKDIV
+        self.assertEqual(regs, [0x3F00, 0, 0x5000, 0xFFFF, 0x0003, 0x0001])   # WRAP .. CLKDIV
         self.assertEqual(chip.reg_read(0, COND_CFG01), 0x6160)
         self.assertEqual(chip.reg_read(0, COND_CFG23), 0xE400)
         self.assertEqual(chip.reg_read(0, ID), 0x2250)
@@ -162,11 +163,11 @@ class HostInterface(unittest.TestCase):
         load(chip, 0, prog, jmp_pin=6)
         slot = prog.pin_slot
         self.assertEqual(chip.reg_read(0, COND_CFG01 + slot // 2) >> 8 * (slot % 2) & 0xFF, 0x06)
-        chip.uio_in = 1 << 0                        # the default pin: ignored
+        chip.pin_in = 1 << 0                        # the default pin: ignored
         chip.reg_write(0, CTRL, 1)
         chip.step(8)
         self.assertEqual(chip.reg_read(0, PC), 0, "waiting for pin 6")
-        chip.uio_in = 1 << 6
+        chip.pin_in = 1 << 6
         chip.step(8)
         self.assertEqual(chip.sms[0].irq_flags[:2], [False, True], "pin 6 high: jumped")
 
@@ -286,7 +287,7 @@ class MultiSm(unittest.TestCase):
         chip.step(20)
         self.assertEqual(chip.sms[0].x, 9)
         self.assertTrue(chip.sms[1].irq_flags[0])
-        self.assertEqual(chip.reg_read(0, 0x24), 0b10)          # IRQ_SUM: only SM 1
+        self.assertEqual(chip.reg_read(0, IRQ_SUM), 0b10)      # only SM 1
 
     def test_wait_on_a_peer_flag(self):
         chip = Chip(2)
@@ -361,6 +362,29 @@ class MultiSm(unittest.TestCase):
         chip.step()
         out, oe = chip.pins
         self.assertEqual((out & 7, oe & 7), (0, 0b001), "pin 0 pulled low, pin 1 floats, pin 2 off")
+
+    def test_pads_of_the_tiny_tapeout_chip(self):
+        """Pins 0..7 on uio; pin 8 + k on uo_out[k] / ui_in[k]: outputs 10..15, inputs 11..15."""
+        chip = Chip(2)
+        self.assertEqual([chip.reg_read(0, r) for r in (PADS_OUT, PADS_IN, PADS_BIDIR)],
+                         [0xFCFF, 0xF8FF, 0x00FF])
+        load(chip, 0, assemble("mov pins, x\nend: jmp end"), x=0xFFFF)
+        chip.reg_write(0, GPIO, 0xFFFF)                          # open drain everywhere
+        chip.reg_write(0, CTRL, 1)
+        chip.step()
+        out, oe = chip.pins
+        self.assertEqual((out, oe), (0xFC00, 0xFC00),
+                         "uio: latch 1 in open drain floats; pins 10..15 always drive, 8 and 9 have no pad")
+        self.assertEqual((chip.reg_read(0, PINS), chip.reg_read(0, PINS_OE)), (out, oe))
+        self.assertEqual(chip.uo_out, 0xFC)
+        chip.pin_in = 0xFFFF
+        chip.step(2)                                             # input synchronizer
+        self.assertEqual(chip.reg_read(0, PINS_IN), 0xF8FF, "pins 8..10: no input pad, read 0")
+
+    def test_host_refuses_open_drain_without_a_bidirectional_pad(self):
+        with self.assertRaises(ValueError):
+            load(Chip(2), 0, assemble(".open_drain 11\nend: jmp end"))
+        load(Chip(2, pads=(0xFFFF,) * 3), 0, assemble(".open_drain 11\nend: jmp end"))   # an FPGA
 
     def test_status_word(self):
         chip = Chip(2)

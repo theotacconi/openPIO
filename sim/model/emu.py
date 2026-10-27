@@ -26,6 +26,8 @@ HEADER = "CYC  | PC | INSTR              | DLY | X      | Y      | OSR    | ISR 
 SEPARATOR = "-----+----+--------------------+-----+--------+--------+--------+--------+--------+---------+------"
 
 PAU_QUEUE_BITS = 32
+PIN_BITS = 16                       # pin positions (ISA.md, Pins)
+PIN_ALL = (1 << PIN_BITS) - 1
 BUFFER_WORDS = 128                  # SRAM part of each FIFO (ISA.md, FIFOs)
 SRAM_TX_REFILL, SRAM_TX_STORE, SRAM_RX_STORE, SRAM_RX_FETCH = range(4)   # SRAM port requests
 
@@ -79,10 +81,10 @@ class PinBus:
         for i, lt, m, val in self._writes:
             if i == sm and lt == latch:
                 v = (v & ~m) | (val & m)
-        return v & 0xFF
+        return v & PIN_ALL
 
     def write(self, sm: int, latch: int, mask: int, value: int) -> None:
-        self._writes.append((sm, latch, mask & 0xFF, value & 0xFF))
+        self._writes.append((sm, latch, mask & PIN_ALL, value & PIN_ALL))
 
     def commit(self) -> None:
         for _, lt, m, val in sorted(self._writes, key=lambda w: w[0]):
@@ -93,13 +95,18 @@ class PinBus:
         self._writes.clear()
 
 
-def pad_outputs(bus: PinBus, sms: Sequence["StateMachine"]) -> tuple[int, int]:
-    """(values, output enables) of the 8 pins: latches, PAU TX overrides in SM order, open drain."""
-    out, oe = bus.out, bus.dirs
+def pin_values(bus: PinBus, sms: Sequence["StateMachine"]) -> int:
+    """Values of the 16 pins: the output latch, PAU TX overrides in SM order."""
+    out = bus.out
     for sm in sms:
         out = sm.pau_override(out)
-    od = bus.od_mask
-    return out & ~od & 0xFF, oe & ~(out & od) & 0xFF        # open drain: enabled and 0 pulls low
+    return out
+
+
+def pad_outputs(bus: PinBus, sms: Sequence["StateMachine"]) -> tuple[int, int]:
+    """(values, output enables) of 16 bidirectional pins: pin values, then open drain."""
+    out, od = pin_values(bus, sms), bus.od_mask
+    return out & ~od & PIN_ALL, bus.dirs & ~(out & od) & PIN_ALL   # open drain: enabled and 0 pulls low
 
 
 class StateMachine:
@@ -131,7 +138,7 @@ class StateMachine:
         crc_cfg: int = 0,
         crc_poly: int = 0,
         crc_res: int = 0,
-        pin_mask: int = 0xFF,
+        pin_mask: int = PIN_ALL,
         bus: PinBus | None = None,
         index: int = 0,
         buffer: bool = False,
@@ -140,7 +147,7 @@ class StateMachine:
         self.index = index
         self._own_bus = bus is None
         self.bus = bus if bus is not None else PinBus()
-        self.pin_mask = pin_mask & 0xFF
+        self.pin_mask = pin_mask & PIN_ALL
         self.strobed = False                            # the last step() was a strobe
 
         # Host configuration
@@ -150,7 +157,7 @@ class StateMachine:
         self.side_set_opt = side_set_opt
         self.side_set_pindirs = side_set_pindirs
         if open_drain_mask:
-            self.bus.od_mask = open_drain_mask & 0xFF
+            self.bus.od_mask = open_drain_mask & PIN_ALL
         self.clkdiv_cfg_int = clkdiv_int if clkdiv_int > 0 else 1
         self.clkdiv_cfg_frac = clkdiv_frac & 0xFF
         self.in_base, self.out_base, self.set_base = in_base, out_base, set_base
@@ -186,7 +193,7 @@ class StateMachine:
             self.load_program(program)
         if jmp_pin is not None and getattr(program, "pin_slot", None) is not None:
             s = program.pin_slot
-            self.cond_cfg[s] = (self.cond_cfg[s] & 0xF0) | (jmp_pin & 7)
+            self.cond_cfg[s] = (self.cond_cfg[s] & 0xF0) | (jmp_pin & 15)
         self.reset()
 
     # ------------------------------------------------------------------ configuration
@@ -203,7 +210,7 @@ class StateMachine:
 
     @pindirs.setter
     def pindirs(self, val: int) -> None:
-        self.bus.dirs = val & 0xFF
+        self.bus.dirs = val & PIN_ALL
 
     @property
     def open_drain_mask(self) -> int:
@@ -211,7 +218,7 @@ class StateMachine:
 
     @open_drain_mask.setter
     def open_drain_mask(self, val: int) -> None:
-        self.bus.od_mask = val & 0xFF
+        self.bus.od_mask = val & PIN_ALL
 
     @property
     def clkdiv_frac(self) -> int:
@@ -234,11 +241,11 @@ class StateMachine:
         if not self.tx_drives:
             return out
         line = self.tx_line ^ (self.pau_mode >> 2 & 1)
-        val = line << (self.out_base & 7)
-        mask = 1 << (self.out_base & 7)
+        val = line << (self.out_base & 15)
+        mask = 1 << (self.out_base & 15)
         if self.pau_mode >> 3 & 1:
-            val |= (1 - line) << ((self.out_base + 1) & 7)
-            mask |= 1 << ((self.out_base + 1) & 7)
+            val |= (1 - line) << ((self.out_base + 1) & 15)
+            mask |= 1 << ((self.out_base + 1) & 15)
         mask &= self.pin_mask
         return (out & ~mask) | (val & mask)
 
@@ -434,7 +441,7 @@ class StateMachine:
         if val & 1 and not old & 1:
             self.tx_bit_err = False
         if val & 1 and not old & 1 and not draining:
-            self.tx_line = ((self.gpio_out >> (self.out_base & 7)) & 1) ^ (self.pau_mode >> 2 & 1)
+            self.tx_line = ((self.gpio_out >> (self.out_base & 15)) & 1) ^ (self.pau_mode >> 2 & 1)
             self.tx_stuff = _Stuffer()
             self.tx_stuff_pending = None
         if val & 2 and not old & 2:
@@ -505,7 +512,7 @@ class StateMachine:
         self.pau_ctl &= ~1
 
     def _rx_input(self) -> int:
-        return ((self.gpio_in >> (self.in_base & 7)) & 1) ^ (self.pau_mode >> 2 & 1)
+        return ((self.gpio_in >> (self.in_base & 15)) & 1) ^ (self.pau_mode >> 2 & 1)
 
     def _rx_bit(self, b: int) -> None:
         """A decoded bit: destuff, CRC, queue."""
@@ -596,7 +603,7 @@ class StateMachine:
             return int(self.rx_stuff_err)
         if idx == 7:
             return int(self.rx_overrun)
-        pair = (self.gpio_in >> (self.in_base & 7)) & 1, (self.gpio_in >> ((self.in_base + 1) & 7)) & 1
+        pair = (self.gpio_in >> (self.in_base & 15)) & 1, (self.gpio_in >> ((self.in_base + 1) & 15)) & 1
         if idx == 8:
             return int(pair == (0, 0))
         if idx == 9:
@@ -623,9 +630,9 @@ class StateMachine:
         c = self.cond[slot]
         src, idx = (c >> 4) & 7, c & 0xF
         if src == CS_GPIO:
-            v = (self.gpio_in >> (idx & 7)) & 1
+            v = (self.gpio_in >> idx) & 1
         elif src == CS_INBASE:
-            v = (self.gpio_in >> ((self.in_base + idx) & 7)) & 1
+            v = (self.gpio_in >> ((self.in_base + idx) & 15)) & 1
         elif src == CS_IRQ:
             v = int(self.irq_flags[idx & 7])
         elif src == CS_PEER:
@@ -668,7 +675,7 @@ class StateMachine:
         if side_val is None or self.side_set_count == 0:
             return
         mask = ((1 << self.side_set_count) - 1) << self.sideset_base
-        val = (side_val << self.sideset_base) & mask & 0xFF
+        val = (side_val << self.sideset_base) & mask & PIN_ALL
         if self.side_set_pindirs:
             self._write_dirs(mask, val)
         else:
@@ -678,7 +685,7 @@ class StateMachine:
 
     def _end_strobe(self, trace_pc: int) -> None:
         self.cond_prev = [self._cond_value(s) for s in range(4)]
-        self.prev_gpio_in = self.gpio_in & 0xFF
+        self.prev_gpio_in = self.gpio_in & PIN_ALL
         self.history.append(self._format_trace_row(trace_pc, self._current_instr_str))
 
     def step(self) -> None:
@@ -834,7 +841,7 @@ class StateMachine:
                     bits.reverse()
                 val = sum(b << i for i, b in enumerate(bits))
             elif src == R_PINS:
-                val = (self.gpio_in >> (self.in_base & 7)) & mask
+                val = (self.gpio_in >> (self.in_base & 15)) & mask
             elif src == R_PINDIRS:
                 val = 0
             else:
@@ -878,9 +885,9 @@ class StateMachine:
                     if self.pau_ctl & 8:
                         self._crc_feed(b)
             elif dest == R_PINS:
-                self._write_pins((mask << (self.out_base & 7)) & 0xFF, val << (self.out_base & 7))
+                self._write_pins(mask << (self.out_base & 15), val << (self.out_base & 15))
             elif dest == R_PINDIRS:
-                self._write_dirs(mask << (self.out_base & 7), val << (self.out_base & 7))
+                self._write_dirs(mask << (self.out_base & 15), val << (self.out_base & 15))
             elif dest == R_X:
                 self.x = val
             elif dest == R_Y:
@@ -898,9 +905,9 @@ class StateMachine:
                  R_ISR: self.isr, R_OSR: self.osr}.get(dest, 0)
             res = [s, _rev16(s), d & s, d | s, d ^ s, ~(d ^ s), d + s, d - s][op] & 0xFFFF
             if dest == R_PINS:
-                self._write_pins(0xFF, res)
+                self._write_pins(PIN_ALL, res)
             elif dest == R_PINDIRS:
-                self._write_dirs(0xFF, res)
+                self._write_dirs(PIN_ALL, res)
             elif dest == R_X:
                 self.x = res
             elif dest == R_Y:
@@ -972,8 +979,8 @@ class StateMachine:
         else:  # SET
             dest, val = (args >> 5) & 7, args & 0x1F
             if dest in (0, 1):
-                m = (((1 << self.set_count) - 1) & 0x1F) << (self.set_base & 7)
-                (self._write_dirs if dest else self._write_pins)(m, val << (self.set_base & 7))
+                m = (((1 << self.set_count) - 1) & 0x1F) << (self.set_base & 15)
+                (self._write_dirs if dest else self._write_pins)(m, val << (self.set_base & 15))
             elif dest == 2:
                 self.x = val
             elif dest == 3:
@@ -995,7 +1002,7 @@ class StateMachine:
     def _format_trace_row(self, pc: int, instr_str: str) -> str:
         return (f"{self.cycle_count:4d} | {pc:2d} | {instr_str:<18} | {self.delay_counter:3d} | "
                 f"0x{self.x:04x} | 0x{self.y:04x} | 0x{self.osr:04x} | 0x{self.isr:04x} | "
-                f"  0x{self.gpio_in:02x} |    0x{self.pins:02x} | {'1' if self.stalled else '0':^5}")
+                f"0x{self.gpio_in:04x} |  0x{self.pins:04x} | {'1' if self.stalled else '0':^5}")
 
     def get_trace_table(self, last_n: int = 15) -> str:
         """Compact rolling window trace table."""

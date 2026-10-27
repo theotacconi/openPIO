@@ -12,7 +12,7 @@ from typing import Sequence
 
 from asm import CONFIG_RESET, Program
 from chip import (COND_CFG, CTRL, GPIO, OP_IMEM_WR, OP_REG_RD, OP_REG_WR, OP_RX_POP, OP_TX_PUSH,
-                  PAU_MODE, PC, WRAP, Chip, header)
+                  PADS_BIDIR, PAU_MODE, PC, WRAP, Chip, header)
 
 
 class Host:
@@ -32,14 +32,17 @@ class Host:
     def load(self, n: int, program: Program, **over) -> None:
         """Stop SM n, write its IMEM and every configuration register from the program (keyword
         arguments override its fields; jmp_pin moves the `pin` condition), RESET it and preset
-        PC, X and Y. The SM is left stopped; the program's open-drain pins are added to GPIO."""
+        PC, X and Y. The SM is left stopped; the program's open-drain pins are added to GPIO.
+        Open drain on a pin without a bidirectional pad is refused (PADS_BIDIR)."""
         unknown = set(over) - set(CONFIG_RESET) - {"jmp_pin"}
         if unknown:
             raise TypeError(f"unknown configuration fields: {sorted(unknown)}")
         c = {**program.config(), **over}
         cond = list(c["cond_cfg"])
         if "jmp_pin" in over and program.pin_slot is not None:
-            cond[program.pin_slot] = cond[program.pin_slot] & 0xF8 | over["jmp_pin"] & 7
+            cond[program.pin_slot] = cond[program.pin_slot] & 0xF0 | over["jmp_pin"] & 15
+        if c["open_drain_mask"] & ~self.read(0, PADS_BIDIR)[0]:
+            raise ValueError(f"open drain on pins without a bidirectional pad: {c['open_drain_mask']:#06x}")
         en = self.read(0, CTRL)[0] & ~(1 << n)
         self.write(0, CTRL, en)
         self.chip.spi(header(OP_IMEM_WR, n, 0), program)

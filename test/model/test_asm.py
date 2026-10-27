@@ -62,7 +62,9 @@ class Errors(unittest.TestCase):
         "set value": "set x, 32",
         "five conditions": "jmp !x 1, 0\njmp !x 2, 0\njmp !x 3, 0\njmp !x 4, 0\njmp !x 5, 0",
         "too long": "nop\n" * 65,
-        "pin out of range": ".pin_mask 1, 8",
+        "pin out of range": ".pin_mask 1, 16",
+        "base out of range": ".in_pins 16",
+        "condition pin out of range": "jmp !gpio 16, 0",
         "set count": ".set_pins 0 6",
         "shift direction": ".shift_in up",
         "threshold": ".push_thresh 17",
@@ -83,7 +85,8 @@ class Directives(unittest.TestCase):
     def test_config(self):
         prog = assemble("""
             .set_pins 2 3
-            .pin_mask 2, 3, 4
+            .pin_mask 2, 3, 15
+            .in_pins 15
             .open_drain 3
             .shift_out left
             .x 0xBEEF
@@ -94,7 +97,8 @@ class Directives(unittest.TestCase):
         """)
         cfg = prog.config()
         self.assertEqual((cfg["set_base"], cfg["set_count"], cfg["pin_mask"], cfg["open_drain_mask"]),
-                         (2, 3, 0b11100, 0b1000))
+                         (2, 3, 1 << 15 | 0b1100, 0b1000))
+        self.assertEqual(cfg["in_base"], 15)
         self.assertEqual((cfg["shift_out_right"], cfg["shift_in_right"]), (False, True))
         self.assertEqual((cfg["x"], cfg["y"], cfg["start"]), (0xBEEF, 0, 1))
         self.assertEqual((cfg["wrap_bottom"], cfg["wrap_top"]), (0, 1))

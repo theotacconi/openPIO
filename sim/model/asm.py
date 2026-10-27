@@ -119,7 +119,7 @@ def cond_text(c: int) -> str:
 CONFIG_RESET = dict(
     wrap_bottom=0, wrap_top=IMEM_WORDS - 1, side_set_count=0, side_set_opt=False,
     side_set_pindirs=False, sideset_base=0, in_base=0, out_base=0, set_base=0, set_count=5,
-    pin_mask=0xFF, shift_in_right=True, shift_out_right=True, push_thresh=0, pull_thresh=0,
+    pin_mask=0xFFFF, shift_in_right=True, shift_out_right=True, push_thresh=0, pull_thresh=0,
     clkdiv_int=1, clkdiv_frac=0, cond_cfg=tuple(COND_RESET), pau_mode=0, crc_cfg=0, crc_poly=0,
     crc_res=0, open_drain_mask=0, start=0, x=0, y=0)
 
@@ -301,7 +301,7 @@ def _parse_cond(tokens: list[str], line_num: int, text: str) -> tuple[int | None
     names = STATUS_NAMES if src == CS_STATUS else PAU_STATUS_NAMES if src == CS_PAU else {}
     idx_tok = tokens[1].lower()
     idx = names[idx_tok] if idx_tok in names else _parse_int(idx_tok, line_num, text)
-    limit = 15 if src in (CS_XBIT, CS_YBIT, CS_STATUS, CS_PAU) else 7
+    limit = 7 if src in (CS_IRQ, CS_PEER) else 15
     if not 0 <= idx <= limit:
         raise AssemblerError(f"Condition index out of range (0-{limit}): {idx}", line_num, text)
     return cond_byte(inv, src, idx), 0, False
@@ -312,8 +312,8 @@ def _pins(parts: list[str], line_num: int, text: str) -> int:
     mask = 0
     for p in "".join(parts).split(","):
         pin = _parse_int(p, line_num, text)
-        if not 0 <= pin <= 7:
-            raise AssemblerError(f"Pin out of range (0-7): {pin}", line_num, text)
+        if not 0 <= pin <= 15:
+            raise AssemblerError(f"Pin out of range (0-15): {pin}", line_num, text)
         mask |= 1 << pin
     return mask
 
@@ -364,8 +364,8 @@ def assemble(source_code: str) -> Program:
                     _pins(parts[1:], line_num, raw_line)
             elif directive in (".in_pins", ".out_pins", ".sideset_pins", ".set_pins"):
                 n = _parse_int(parts[1], line_num, raw_line) if len(parts) > 1 else -1
-                if not 0 <= n <= 7:
-                    raise AssemblerError(f"{directive} requires a base pin 0..7", line_num, raw_line)
+                if not 0 <= n <= 15:
+                    raise AssemblerError(f"{directive} requires a base pin 0..15", line_num, raw_line)
                 cfg[{".in_pins": "in_base", ".out_pins": "out_base", ".sideset_pins": "sideset_base",
                      ".set_pins": "set_base"}[directive]] = n
                 if directive == ".set_pins" and len(parts) > 2:

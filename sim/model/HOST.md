@@ -38,9 +38,9 @@ the header. Chip registers (`Addr` >= 0x20) ignore `SM`.
 |---|---|---|---|
 | 0x00 | STATUS | R | whole FIFOs (ISA.md, FIFOs): [0] TX empty, [1] TX full, [2] RX empty, [3] RX full, [4] stalled, [5] enabled, [13:8] PC |
 | 0x01 | WRAP | RW | [5:0] wrap_bottom (0), [13:8] wrap_top (63) |
-| 0x02 | SIDESET | RW | [2:0] count (0), [3] opt (0), [4] drives pindirs (0), [10:8] base (0) |
-| 0x03 | PINBASE | RW | [2:0] in_base, [6:4] out_base, [10:8] set_base (0), [14:12] set_count (5) |
-| 0x04 | PIN_MASK | RW | [7:0] pins this SM may change (0xFF) |
+| 0x02 | SIDESET | RW | [2:0] count (0), [3] opt (0), [4] drives pindirs (0), [11:8] base (0) |
+| 0x03 | PINBASE | RW | [3:0] in_base, [7:4] out_base, [11:8] set_base (0), [14:12] set_count (5) |
+| 0x04 | PIN_MASK | RW | [15:0] pins this SM may change (0xFFFF) |
 | 0x05 | MISC | RW | [0] ISR shift right (1), [1] OSR shift right (1), [11:8] push threshold (0 = 16), [15:12] pull threshold (0 = 16) |
 | 0x06 | CLKDIV | RW | strobe divider: [7:0] integer (1; 0 = 1), [15:8] fraction / 256 (0); loaded on RESET |
 | 0x07 | COND_CFG | W | `{Slot[9:8], condition[7:0]}`, one condition per write (ISA.md, Conditions) |
@@ -74,11 +74,15 @@ RW*: written only while the SM is stopped (CTRL EN = 0); writes while it runs ar
 | Addr | Name | R/W | Fields |
 |---|---|---|---|
 | 0x20 | CTRL | RW | [3:0] EN: SM i runs while bit i is 1 (0). Write only: [7:4] RESET, [11:8] STEP, one bit per SM |
-| 0x21 | GPIO | RW | [7:0] open-drain mask (0), [15:11] `ui_in[7:3]` replaces `gpio_in[7:3]` (0) |
-| 0x22 | PINS | R | [7:0] pin values driven, [15:8] pin output enables |
-| 0x23 | PINS_IN | R | [7:0] `gpio_in` |
-| 0x24 | IRQ_SUM | R | bit i: SM i requests HOST_IRQ (its IRQ_MASK) |
-| 0x25 | ID | R | [15:12] ISA version (2), [11:8] number of SMs, [7:0] 0x50 ('P') |
+| 0x21 | GPIO | RW | open-drain mask, bit = pin (0); effective on bidirectional pads only |
+| 0x22 | PINS | R | values at the output pads, bit = pin |
+| 0x23 | PINS_OE | R | output enables of the output pads |
+| 0x24 | PINS_IN | R | `gpio_in`, bit = pin |
+| 0x25 | IRQ_SUM | R | bit i: SM i requests HOST_IRQ (its IRQ_MASK) |
+| 0x26 | ID | R | [15:12] ISA version (2), [11:8] number of SMs, [7:0] 0x50 ('P') |
+| 0x27 | PADS_OUT | R | pins with an output pad (0xFCFF) |
+| 0x28 | PADS_IN | R | pins with an input pad (0xF8FF) |
+| 0x29 | PADS_BIDIR | R | pins whose output and input pads are one bidirectional line (0x00FF) |
 
 - **RESET** (bit i): SM i as CTRL.RESET in ISA.md: registers, IRQ flags, FIFOs, PAU, PC = 0,
   COND = COND_CFG, DLYMUL = 1, CRC = its initial value, CLKDIV and PAU_BAUD reloaded.
@@ -89,14 +93,26 @@ RW*: written only while the SM is stopped (CTRL EN = 0); writes while it runs ar
 
 ## Pins
 
-- `uio[7:0]`: value = pin latch, output enable = direction latch, both overridden by an active
-  PAU TX and by open drain (ISA.md, Multiple state machines). `gpio_in` = `uio_in`, except bits
-  [7:3] taken from `ui_in[7:3]` where GPIO selects them. All inputs pass a 2-flip-flop
-  synchronizer.
+The 16 pin positions of ISA.md on the Tiny Tapeout pads: pin k is `uio[k]`, pin 8 + k is
+`uo_out[k]` (output) and `ui_in[k]` (input), the pads the host does not use.
+
+| Pin | Output pad | Input pad | Kind |
+|---|---|---|---|
+| 0..7 | `uio_out[k]`, `uio_oe[k]` | `uio_in[k]` | bidirectional: direction latch, open drain |
+| 8, 9 | - (MISO, HOST_IRQ) | - (SCLK, MOSI) | none: reads 0 |
+| 10 | `uo_out[2]` | - (CS_N) | output only |
+| 11..15 | `uo_out[3..7]` | `ui_in[3..7]` | output and input on separate pads |
+
+- A pin's value is its latch, overridden by an active PAU TX (ISA.md, Multiple state machines);
+  on a bidirectional pad the direction latch enables it and open drain applies, an output-only
+  pad always drives it. On pins 11..15 an input reads `ui_in`, not the value the chip drives:
+  open drain, WAIT on the own output and the PAU line monitor need pins 0..7.
+- All inputs pass a 2-flip-flop synchronizer.
 - `uo_out[1]` HOST_IRQ: high while any SM requests it through its IRQ_MASK: a flag set (flags
   SMs use only between themselves stay off it), RX FIFO not empty, TX FIFO at most 64 words.
   The FIFO requests end by themselves once the host has drained or refilled the FIFO.
-- `uo_out[7:2]`: pin values [7:2] as push-pull outputs.
+- Other implementations (an FPGA) report their pads in PADS_OUT, PADS_IN and PADS_BIDIR; the
+  reference driver `host.py` refuses open drain on a pin without a bidirectional pad.
 
 ## Host data rate
 

@@ -133,8 +133,8 @@ def architecture():
                 "A host microcontroller talks over SPI to the openPIO chip. Inside, a host interface "
                 "feeds two identical state machines; each has a TX FIFO and OSR that shift data out to "
                 "the pins, an ISR and RX FIFO that collect data in, a core that runs a 64-instruction "
-                "program, and an optional PAU on the line. A pin-control block shares 8 pins with the "
-                "circuit.")
+                "program, and an optional PAU on the line. A pin-control block shares 16 pin positions "
+                "(14 on the chip) with the circuit.")
     g.add('<g transform="translate(20,-40)">')
     # legend, centred
     g.arrow([(560, 90), (610, 90)], "data"); g.text(620, 95, "data")
@@ -152,7 +152,7 @@ def architecture():
     g.box(320, 170, 130, 730, "Host interface", ["SPI + registers", "", "write program", "set options",
                                                  "start / stop / step", "move FIFO data", "read status"],
           cls="bar", gap=19)
-    g.box(1030, 170, 130, 730, "Pin control", ["8 pins, shared", "", "direction", "(in or out)", "open drain",
+    g.box(1030, 170, 130, 730, "Pin control", ["16 pins, shared", "", "direction", "(in or out)", "open drain",
                                                "input sync", "(2 clocks)"], cls="bar", gap=19)
     g.add('<rect x="475" y="182" width="530" height="560" rx="12" class="sm"/>')
     g.text(495, 210, "State machine 0", "smtitle")
@@ -184,13 +184,13 @@ def architecture():
     g.arrow([(730, 610), (730, 632)], "ctl"); g.text(738, 626, "in", "lc")
     g.add('<rect x="475" y="790" width="530" height="96" rx="12" class="sm"/>')
     g.text(495, 818, "State machine 1", "smtitle")
-    g.text(495, 842, "Identical to state machine 0. The two run side by side, on the same 8 pins,")
+    g.text(495, 842, "Identical to state machine 0. The two run side by side, on the same pins,")
     g.text(495, 862, "and can start on the same clock (4 state machines in a larger build).")
     g.arrow([(740, 744), (740, 788)], "data", both=True)
     g.text(752, 763, "peer link: pass data and", "ld"); g.text(752, 779, "flags directly", "ld")
     g.arrow([(1005, 838), (1028, 838)]); g.arrow([(452, 838), (473, 838)], "ctl")
     g.arrow([(1160, 470), (1258, 470)], "data", both=True)
-    g.text(1209, 457, "8 pins", "ld", "middle"); g.text(1209, 491, "uio[7:0]", "small", "middle")
+    g.text(1209, 457, "14 pins", "ld", "middle"); g.text(1209, 491, "uio, uo, ui", "small", "middle")
     g.box(1260, 350, 160, 240, "Your circuit", ["", "LEDs, sensors,", "displays, radios,", "buses: UART, SPI,",
                                                 "I2C, USB, CAN, …"])
     g.add("</g>")

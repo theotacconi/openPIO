@@ -11,19 +11,23 @@ from __future__ import annotations
 from typing import Sequence
 
 from asm import IMEM_WORDS
-from emu import PinBus, StateMachine, pad_outputs
+from emu import PIN_ALL, PinBus, StateMachine, pin_values
 
 # Registers of an SM (HOST.md)
 STATUS, WRAP, SIDESET, PINBASE, PIN_MASK, MISC, CLKDIV, COND_CFG = range(8)
 COND_CFG01, COND_CFG23, PAU_MODE, CRC_CFG, CRC_POLY_LO, CRC_POLY_HI, CRC_RES_LO, CRC_RES_HI = range(8, 16)
 IRQ, PC, X, Y, ISR, OSR, COUNTS, COND01, COND23, CRC_LO, CRC_HI, SM_STATUS, FIFO_LEVEL, IRQ_MASK = range(16, 30)
 # Chip registers
-CTRL, GPIO, PINS, PINS_IN, IRQ_SUM, ID = range(0x20, 0x26)
+CTRL, GPIO, PINS, PINS_OE, PINS_IN, IRQ_SUM, ID, PADS_OUT, PADS_IN, PADS_BIDIR = range(0x20, 0x2A)
 
 # SPI commands
 OP_NOP, OP_REG_WR, OP_REG_RD, OP_TX_PUSH, OP_RX_POP, OP_IMEM_WR, OP_IMEM_RD = 0, 2, 3, 4, 5, 6, 7
 
 ISA_VERSION = 2
+
+# Pads of the 16 pin positions (HOST.md, Pins), Tiny Tapeout chip: pin k = uio[k] (k < 8), pin 8 + k
+# = uo_out[k] out, ui_in[k] in; uo_out[1:0] and ui_in[2:0] belong to the host.
+TT_PADS = (0xFCFF, 0xF8FF, 0x00FF)      # pins with an output pad, with an input pad, bidirectional
 
 
 def header(op: int, sm: int = 0, addr: int = 0) -> int:
@@ -34,8 +38,10 @@ def header(op: int, sm: int = 0, addr: int = 0) -> int:
 class Chip:
     """openPIO chip: SMs, shared pins, host registers."""
 
-    def __init__(self, n_sm: int = 2, fifo_depth: int = 4, spi_word_clocks: int = 96) -> None:
-        """spi_word_clocks: clocks a 16-bit SPI word takes (SCLK = clk / 6: 96)."""
+    def __init__(self, n_sm: int = 2, fifo_depth: int = 4, spi_word_clocks: int = 96,
+                 pads: tuple[int, int, int] = TT_PADS) -> None:
+        """spi_word_clocks: clocks a 16-bit SPI word takes (SCLK = clk / 6: 96). pads: masks of
+        the pins with an output pad, an input pad, and both on one bidirectional line."""
         assert n_sm in (2, 4), "an even number of SMs, at most 4 (CTRL has 4 bits per field)"
         self.bus = PinBus()
         self.sms = [StateMachine(bus=self.bus, index=i, fifo_depth=fifo_depth, buffer=True)
@@ -45,20 +51,13 @@ class Chip:
             sm.peer_irq_flags = sm.peer.irq_flags
         self.irq_mask = [0xFF] * n_sm
         self.spi_word_clocks = spi_word_clocks
+        self.pads_out, self.pads_in, self.pads_bidir = pads
         self.en = 0
-        self.in_sel = 0
-        self.uio_in = 0                 # pin levels now
-        self.ui_in = 0
+        self.pin_in = 0                 # levels at the input pads now, bit = pin
         self._sync = [0, 0]             # 2-flip-flop input synchronizer: gpio_in of 2 clocks ago
         self.cycle = 0
 
     # ------------------------------------------------------------------ clock and pins
-
-    @property
-    def pins_in(self) -> int:
-        """Input pin levels now: uio_in, with ui_in[7:3] where GPIO selects them."""
-        sel = (self.in_sel << 3) & 0xF8
-        return (self.uio_in & ~sel | self.ui_in & sel) & 0xFF
 
     @property
     def gpio_in(self) -> int:
@@ -69,7 +68,7 @@ class Chip:
         """Advance `cycles` clocks (ISA.md, Timing within a clock)."""
         for _ in range(cycles):
             gpio_in = self._sync[0]
-            self._sync = [self._sync[1], self.pins_in]
+            self._sync = [self._sync[1], self.pin_in & self.pads_in]
             for sm in self.sms:
                 sm.gpio_in = gpio_in
             for sm in self.sms:
@@ -82,8 +81,13 @@ class Chip:
 
     @property
     def pins(self) -> tuple[int, int]:
-        """(uio_out, uio_oe)."""
-        return pad_outputs(self.bus, self.sms)
+        """(values, output enables) at the output pads, bit = pin. A bidirectional pad has the
+        direction latch and open drain; an output-only pad always drives the pin value."""
+        out, od = pin_values(self.bus, self.sms), self.bus.od_mask
+        only = self.pads_out & ~self.pads_bidir
+        bidir_out, bidir_oe = out & ~od, self.bus.dirs & ~(out & od)
+        return ((bidir_out & self.pads_bidir | out & only) & PIN_ALL,
+                (bidir_oe & self.pads_bidir | only) & PIN_ALL)
 
     @property
     def host_irq(self) -> int:
@@ -97,7 +101,8 @@ class Chip:
 
     @property
     def uo_out(self) -> int:
-        return (self.pins[0] & 0xFC) | self.host_irq << 1
+        """Tiny Tapeout uo_out without MISO: pins 10..15 on [7:2], HOST_IRQ on [1]."""
+        return (self.pins[0] >> 8 & 0xFC) | self.host_irq << 1
 
     # ------------------------------------------------------------------ host registers
 
@@ -156,12 +161,12 @@ class Chip:
             sm.wrap_bottom, sm.wrap_top = val & 0x3F, val >> 8 & 0x3F
         elif addr == SIDESET:
             sm.side_set_count, sm.side_set_opt = val & 7, bool(val >> 3 & 1)
-            sm.side_set_pindirs, sm.sideset_base = bool(val >> 4 & 1), val >> 8 & 7
+            sm.side_set_pindirs, sm.sideset_base = bool(val >> 4 & 1), val >> 8 & 15
         elif addr == PINBASE:
-            sm.in_base, sm.out_base = val & 7, val >> 4 & 7
-            sm.set_base, sm.set_count = val >> 8 & 7, val >> 12 & 7
+            sm.in_base, sm.out_base = val & 15, val >> 4 & 15
+            sm.set_base, sm.set_count = val >> 8 & 15, val >> 12 & 7
         elif addr == PIN_MASK:
-            sm.pin_mask = val & 0xFF
+            sm.pin_mask = val
         elif addr == MISC:
             sm.shift_in_right, sm.shift_out_right = bool(val & 1), bool(val >> 1 & 1)
             sm.push_thresh, sm.pull_thresh = val >> 8 & 0xF, val >> 12 & 0xF
@@ -206,16 +211,17 @@ class Chip:
         if addr == CTRL:
             return self.en
         if addr == GPIO:
-            return self.in_sel << 11 | self.bus.od_mask
-        if addr == PINS:
-            out, oe = self.pins
-            return oe << 8 | out
+            return self.bus.od_mask
+        if addr in (PINS, PINS_OE):
+            return self.pins[addr - PINS]
         if addr == PINS_IN:
             return self.gpio_in
         if addr == IRQ_SUM:
             return sum(int(self._irq_pending(sm)) << sm.index for sm in self.sms)
         if addr == ID:
             return ISA_VERSION << 12 | len(self.sms) << 8 | 0x50
+        if addr in (PADS_OUT, PADS_IN, PADS_BIDIR):
+            return (self.pads_out, self.pads_in, self.pads_bidir)[addr - PADS_OUT]
         return 0
 
     def _chip_write(self, addr: int, val: int) -> None:
@@ -229,7 +235,7 @@ class Chip:
                 if val >> (8 + sm.index) & 1 and not self.en >> sm.index & 1:
                     self._step_one(sm)
         elif addr == GPIO:
-            self.bus.od_mask, self.in_sel = val & 0xFF, val >> 11 & 0x1F
+            self.bus.od_mask = val
 
     def _step_one(self, sm: StateMachine) -> None:
         """STEP: clock SM until it has executed one strobe."""

@@ -1,8 +1,10 @@
 """bench.py - pin-level test bench around the chip model (sim/model/chip.py).
 
 The chip drives its pins (value and output enable, after open drain); devices on the board drive
-or pull them; each pin resolves to one level, which is what the chip and the devices see. Tests
-judge a program only by the levels on the pins and by the data it exchanges with the host.
+or pull them; each pin resolves to one level, which is what the chip and the devices see. A pin
+without a bidirectional pad has two wires: the devices see the chip's output pad and drive its
+input pad. Tests judge a program only by the levels on the pins and by the data it exchanges with
+the host.
 
     bench = Bench(pullups=0b11)
     bench.load(0, source, set_base=0)      # the program's configuration, set_base overridden
@@ -98,22 +100,26 @@ class Bench:
 
     # ------------------------------------------------------------------ running
 
-    def levels(self) -> int:
-        """Resolve the 8 pins from the chip outputs and the device drives."""
+    def _resolve(self, pin: int, drivers: list[int]) -> int:
+        if 0 in drivers and 1 in drivers:
+            self.contention.append(f"t={self.t}: pin {pin} driven 0 and 1")
+        return (0 if 0 in drivers else 1) if drivers else self.pullups >> pin & 1
+
+    def levels(self) -> tuple[int, int]:
+        """(levels the devices see, levels at the chip's input pads) of the 16 pins, from the
+        chip outputs and the device drives."""
         out, oe = self.chip.pins
-        level = 0
-        for pin in range(8):
+        seen = chip_in = 0
+        for pin in range(16):
             dev = [d.drive[pin] for d in self.devices if pin in d.drive]
-            chip = (out >> pin & 1) if oe >> pin & 1 else None
-            drivers = dev + ([chip] if chip is not None else [])
-            if 0 in drivers and 1 in drivers:
-                self.contention.append(f"t={self.t}: pin {pin} driven 0 and 1")
-            if drivers:
-                bit = 0 if 0 in drivers else 1
+            chip = [out >> pin & 1] if oe >> pin & 1 else []
+            if self.chip.pads_bidir >> pin & 1:
+                seen_bit = in_bit = self._resolve(pin, dev + chip)
             else:
-                bit = self.pullups >> pin & 1
-            level |= bit << pin
-        return level
+                seen_bit, in_bit = self._resolve(pin, chip), self._resolve(pin, dev)
+            seen |= seen_bit << pin
+            chip_in |= in_bit << pin
+        return seen, chip_in
 
     def run(self, cycles: int, until: Callable[[], bool] | None = None) -> int:
         """Run up to `cycles` clocks, stopping after the clock where until() is true."""
@@ -122,11 +128,10 @@ class Bench:
             for sm, words in enumerate(self.to_send):
                 if host_turn and words and self.chip.tx_push(sm, words[0]):
                     words.pop(0)
-            lv = self.levels()
+            lv, self.chip.pin_in = self.levels()
             self.trace.append(lv)
             for d in self.devices:
                 d.tick(self.t, lv)
-            self.chip.uio_in = lv
             self.chip.step()
             for sm, s in enumerate(self.chip.sms):
                 while host_turn and (word := s.rx_read()) is not None:

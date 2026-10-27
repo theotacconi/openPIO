@@ -134,13 +134,21 @@ class Out(unittest.TestCase):
 
     def test_destinations(self):
         sm = sm_of("out pins, 3\nout pindirs, 2\nout isr, 5\nout null, 2\nout pc, 6\nnop\nnop\nset x, 1" + HALT,
-                   out_base=6)
+                   out_base=14)
         sm.osr, sm.osr_count = 0b000111_10_10101_01_111, 0      # pc 7, null, isr 0x15, dirs 01, pins 111
         run(sm, 6)
-        self.assertEqual(sm.gpio_out, 0b11000000, "pins 6, 7; pin 8 does not exist")
-        self.assertEqual(sm.pindirs, 0b01000000)
+        self.assertEqual(sm.gpio_out, 0b11 << 14, "pins 14, 15; pin 16 does not exist")
+        self.assertEqual(sm.pindirs, 0b01 << 14)
         self.assertEqual((sm.isr, sm.isr_count), (0x15, 5))
         self.assertEqual(sm.x, 1, "OUT PC jumped to 7")
+
+    def test_pin_groups_stop_at_pin_15_single_pins_wrap(self):
+        sm = sm_of("set pins, 7\nwait 1 in_base 15\nset x, 1" + HALT, set_base=14, set_count=3, in_base=1)
+        run(sm, 2)
+        self.assertEqual((sm.gpio_out, sm.x), (0b11 << 14, 0), "SET stops at pin 15; in_base + 15 = pin 0")
+        sm.gpio_in = 1
+        run(sm, 2)
+        self.assertEqual(sm.x, 1)
 
     def test_reserved_osr_destination_discards(self):
         sm = sm_of(".word 0x60A4" + HALT)                       # out osr, 4
@@ -185,9 +193,9 @@ class Alu(unittest.TestCase):
 
     def test_pins_pindirs_cond_null(self):
         sm = sm_of("mov pins, x\nmov pindirs, x\nmov y, pins\nmov cond, osr\nmov null, x" + HALT)
-        sm.x, sm.osr, sm.gpio_in = 0x1A5, 0x0242, 0x3C
+        sm.x, sm.osr, sm.gpio_in = 0x81A5, 0x0242, 0x903C
         run(sm, 5)
-        self.assertEqual((sm.gpio_out, sm.pindirs, sm.y), (0xA5, 0xA5, 0x3C))
+        self.assertEqual((sm.gpio_out, sm.pindirs, sm.y), (0x81A5, 0x81A5, 0x903C), "all 16 pins")
         self.assertEqual(sm.cond[2], 0x42, "slot from bits [9:8]")
 
     def test_status_source(self):

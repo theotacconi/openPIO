@@ -31,7 +31,7 @@ cmd:
     jmp !y, byte
     set pins, 1 [3]             ; release SDA (SCL may be low: repeated START)
     nop side 1                  ; release SCL
-    wait 1 in_base 7            ; SCL (pin in_base - 1) really high
+    wait 1 in_base 15           ; SCL (pin in_base - 1) really high
     set pins, 0 [3]             ; START: SDA falls while SCL is high
 byte:
     out y, 1                    ; READ?
@@ -43,7 +43,7 @@ byte:
 rbit:
     nop side 0 [3]
     nop side 1                  ; release SCL
-    wait 1 in_base 7
+    wait 1 in_base 15
     in pins, 1 [1]              ; sample SDA while SCL is high
     jmp x--, rbit
     out y, 1 side 0             ; SCL low; NACK?
@@ -54,7 +54,7 @@ rack:
     set pins, 0 [1]             ; ACK: pull SDA low
 aclk:
     nop side 1
-    wait 1 in_base 7
+    wait 1 in_base 15
     in pins, 1                  ; the ACK bit as seen on SDA
     jmp tail
 
@@ -63,7 +63,7 @@ wbit:
     jmp !y, w0
     set pins, 1 [1]             ; 1: release SDA
     nop side 1
-    wait 1 in_base 7
+    wait 1 in_base 15
     in pins, 1
     jmp !in_base 0, lost        ; released but low: arbitration lost
     jmp x--, wbit
@@ -71,7 +71,7 @@ wbit:
 w0:
     set pins, 0 [1]             ; 0: pull SDA low
     nop side 1
-    wait 1 in_base 7
+    wait 1 in_base 15
     in pins, 1
     nop                         ; as long as the arbitration check
     jmp x--, wbit
@@ -79,7 +79,7 @@ wack:
     out null, 1 side 0          ; SCL low; no NACK bit on writes
     set pins, 1 [1]             ; release SDA: the target ACKs
     nop side 1
-    wait 1 in_base 7
+    wait 1 in_base 15
     in pins, 1                  ; the target's ACK bit
 
 tail:
@@ -87,7 +87,7 @@ tail:
     jmp !y, done
     set pins, 0 [1]             ; SDA low while SCL is low
     nop side 1
-    wait 1 in_base 7
+    wait 1 in_base 15
     set pins, 1 [3]             ; STOP: SDA rises while SCL is high
 done:
     push block                  ; 8 bits seen on SDA + ACK bit

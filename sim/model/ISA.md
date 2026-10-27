@@ -54,8 +54,7 @@ a write is discarded.
 | `110` | NULL | zeros | discard | 0 | discard |
 | `111` | special | STATUS | PC (indirect jump) | STATUS | COND |
 
-ALU PINS / PINDIRS are all 8 pins, bits [7:0] (no base); the upper bits read 0 and are not
-written. STATUS (read-only) is the SM status in bits [7:0] and the PAU status in bits [15:8],
+ALU PINS / PINDIRS are all 16 pin positions, bit i = pin i (no base). STATUS (read-only) is the SM status in bits [7:0] and the PAU status in bits [15:8],
 indices 0..7 of the Conditions tables, bit i = index i.
 
 ## JMP `00A`
@@ -181,8 +180,8 @@ The condition is the selected signal, inverted when `Inv` = 1.
 
 | Src | Signal | Index | Pair |
 |---|---|---|---|
-| `000` | GPIO pin | pin 0..7 | pins |
-| `001` | pin `in_base + Index` | 0..7 | |
+| `000` | GPIO pin | pin 0..15 | pins |
+| `001` | pin `in_base + Index` | 0..15 | |
 | `010` | IRQ flag | 0..7 | flags |
 | `011` | peer IRQ flag | 0..7 | |
 | `100` | bit of X | 0..15 | registers |
@@ -374,17 +373,23 @@ RX: PUSH -> front (4) -> SRAM ring -> OUT register, or the front (if nothing wai
 - **Peer**: SM i and SM i XOR 1 are peers (0 and 1, 2 and 3). Peer IRQ flags are the peer's own
   flags: `irq peer 3` sets flag 3 of the peer, a peer IRQ condition reads the peer's flags.
   PUSH / PULL `Peer` reach the peer's FIFOs (see FIFOs).
-- **Pins**: the SMs share the 8 pins: one output latch and one direction latch. An SM changes
+- **Pin positions**: the ISA has 16 pins, 0..15. An implementation connects each to pads (the
+  chip's: HOST.md, Pins). A pin without an input pad reads 0, one without an output pad drives
+  nothing; on an output-only pad the direction latch and open drain have no effect, the pad always
+  drives the pin value. A program is portable between implementations that have the pins it uses.
+- **Pins**: the SMs share the 16 pins: one output latch and one direction latch. An SM changes
   only the pins in its PIN_MASK; when several SMs change the same pin in the same strobe, the
   highest-numbered SM wins. The PAU TX of an SM drives its pins over the latch, also within
   PIN_MASK and with the same priority. An instruction sees the latches as they were at the
   start of the clock, with the writes it made itself (side-set) applied.
 - **Pin groups**: IN / OUT PINS and PINDIRS, SET and side-set use consecutive pins upward from
-  their base and stop at pin 7 (bits beyond it are not written and read 0). Single pins
-  (`in_base + Index` in conditions, `out_base + 1` and `in_base + 1` of the PAU) count mod 8.
-- **Open drain** (chip, HOST.md GPIO): a pin in the open-drain mask never drives high: it is
-  pulled low when its direction bit is 1 and its latch bit 0, and floats otherwise. Writing 1 to
-  the latch releases the line, 0 pulls it low once the program has enabled the pin.
+  their base and stop at pin 15 (bits beyond it are not written and read 0). Single pins
+  (`in_base + Index` in conditions, `out_base + 1` and `in_base + 1` of the PAU) count mod 16:
+  `in_base + 15` is the pin below `in_base`.
+- **Open drain** (chip, HOST.md GPIO; bidirectional pads only): a pin in the open-drain mask
+  never drives high: it is pulled low when its direction bit is 1 and its latch bit 0, and floats
+  otherwise. Writing 1 to the latch releases the line, 0 pulls it low once the program has
+  enabled the pin.
 - **Start**: the host enables, resets or single-steps any set of SMs with one write (HOST.md
   CTRL), so SMs can start on the same clock.
 
@@ -460,3 +465,5 @@ the shift counts. A program carries all of it as assembler directives (`sim/mode
 - FIFOs of 133 words (4 front + 128 in a data SRAM per SM + an IN / OUT register; v1: 4).
 - STATUS as IN / ALU source `111`; PUSH / PULL `Peer`; several SMs with shared pins, PIN_MASK
   and chip-level open drain (v1: one SM, open drain rewrote its pindirs).
+- 16 pin positions mapped to the implementation's pads (v1: 8 pins; the chip's `ui_in[7:3]` were
+  alternative inputs and `uo_out[7:2]` copies of pins 2..7, now pins 11..15 and 10..15).
