@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 agents/manchester/test_manchester.py
-Verification suite for Manchester / 10BASE-T Encoding.
-Demonstrates the architectural limitation of pure firmware bit-banging versus PAU hardware assist.
+Manchester transmitter on the PAU: the pin must carry the exact IEEE 802.3 waveform of every
+pushed word, MSB first, with no gap between words (one instruction, autopull).
 """
 
 import sys
@@ -16,6 +16,7 @@ if str(SHARED_DIR) not in sys.path:
 from base_test import ProtocolTestCase
 
 ASM_PATH = Path(__file__).resolve().parent / "manchester.asm"
+HALF = 3
 
 
 class TestManchester(ProtocolTestCase):
@@ -25,35 +26,24 @@ class TestManchester(ProtocolTestCase):
         self.load_assembly(str(ASM_PATH), set_base=0, out_base=0)
         self.sm.shift_out_right = False  # MSB first
 
-    def test_manchester_firmware_overhead_failure(self):
-        """Stress-test software Manchester serializer; detects inter-bit pipeline delay violation."""
-        payload = 0xAA00  # Alternating 1s and 0s
-        self.sm.tx_fifo.append(payload)
-
-        pin_history = []
-        for _ in range(80):
-            pin_history.append(self.sm.gpio_out & 1)
+    def test_gapless_stream(self):
+        words = [0xA5F0, 0x1234, 0xFFFF, 0x0001]
+        pending = list(words) * 2                     # 8 words through a 4-word FIFO
+        line = []
+        for _ in range(16 * 2 * HALF * len(pending) + 40):
+            if pending and len(self.sm.tx_fifo) < self.sm.fifo_depth:
+                self.sm.tx_fifo.append(pending.pop(0))
             self.step(1)
-
-            if self.sm.irq_flags[0]:
-                break
-
-        # Calculate maximum consecutive run of unchanged logic level
-        max_run = 0
-        current_run = 1
-        for i in range(1, len(pin_history)):
-            if pin_history[i] == pin_history[i - 1]:
-                current_run += 1
-                max_run = max(max_run, current_run)
-            else:
-                current_run = 1
-
-        # Manchester specification mandates a transition at every bit center; no state may persist > 2 half-periods (6 cycles)
-        if max_run > 6:
-            self.dump_crash_log(f"Inter-bit instruction latency stretched level to {max_run} consecutive cycles")
-            self.fail(f"ARCHITECTURAL LIMITATION: Software bit-banging produces {max_run}-cycle run (max allowed: 6). PAU Manchester TX hardware engine (PAU_CFG bit 3) is required to sustain 10BASE-T compliance.")
-
-        self.print_success_summary("manchester_encoding")
+            line.append(self.sm.pins & 1)
+        words = words * 2
+        expected = []
+        for w in words:
+            for i in range(15, -1, -1):
+                b = (w >> i) & 1
+                expected += [1 - b] * HALF + [b] * HALF
+        text = "".join(map(str, line))
+        self.assertIn("".join(map(str, expected)), text, "waveform differs from IEEE 802.3 Manchester")
+        self.print_success_summary("manchester_stream")
 
 
 if __name__ == "__main__":

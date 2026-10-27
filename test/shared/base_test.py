@@ -38,9 +38,9 @@ class ProtocolTestCase(unittest.TestCase):
             source = f.read()
 
         self.program_words = assemble(source)
-        if len(self.program_words) > 32:
+        if len(self.program_words) > 64:
             self.fail(
-                f"PROGRAM OVERFLOW: Program size is {len(self.program_words)} words (max 32)"
+                f"PROGRAM OVERFLOW: Program size is {len(self.program_words)} words (max 64)"
             )
 
         self.sm = StateMachine(program=self.program_words, **kwargs)
@@ -90,6 +90,6 @@ class ProtocolTestCase(unittest.TestCase):
             "status": "PASS",
             "cycles_taken": self.cycle_count,
             "instructions_used": len(self.program_words),
-            "imem_occupancy_pct": round((len(self.program_words) / 32) * 100, 2),
+            "imem_occupancy_pct": round((len(self.program_words) / 64) * 100, 2),
         }
         print(f"RESULT: {summary}")

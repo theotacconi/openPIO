@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 agents/usb_ls/test_usb_ls.py
-Verification suite for USB Low-Speed Transmitter.
-Validates Sync, EOP (SE0 for 2 bit times, J-state for 1 bit time), and PAU NRZI / Bit-Stuffing datapath.
+USB Low-Speed transmitter on the PAU: the D-/D+ waveform is decoded like a USB receiver
+(NRZI, bit unstuffing, CRC16 against a software CRC-16/USB) and the EOP is timed.
 """
 
 import sys
@@ -16,65 +16,77 @@ if str(SHARED_DIR) not in sys.path:
 from base_test import ProtocolTestCase
 
 ASM_PATH = Path(__file__).resolve().parent / "usb_ls.asm"
+BIT = 4                       # strobes per bit
+J, K, SE0 = 1, 2, 0           # pins [1:0] = {D+, D-}
+
+
+def crc16_usb(data: list[int]) -> int:
+    crc = 0xFFFF
+    for byte in data:
+        crc ^= byte
+        for _ in range(8):
+            crc = (crc >> 1) ^ 0xA001 if crc & 1 else crc >> 1
+    return crc ^ 0xFFFF
 
 
 class TestUsbLs(ProtocolTestCase):
 
     def setUp(self):
         super().setUp()
-        self.load_assembly(str(ASM_PATH), set_base=0, out_base=0)
-        self.sm.shift_out_right = True  # USB transmits LSB-first
+        self.load_assembly(str(ASM_PATH), set_base=0, out_base=0, set_count=2)
 
-    def test_eop_generation_and_packet_timing(self):
-        """Verify End-of-Packet (EOP) timing: SE0 held for exactly 8 cycles, then J-state for 4 cycles."""
-        # Load Sync (0x80) + Data (0xAA) into TX FIFO
-        payload = (0xAA << 8) | 0x80
-        self.sm.tx_fifo.append(payload)
-
-        pins_history = []
-        for _ in range(120):
-            pins = self.sm.gpio_out & 3
-            pins_history.append(pins)
+    def send(self, pid: int, payload: list[int]) -> list[int]:
+        """Run one packet; return the pin states [1:0], one per strobe."""
+        words = [0x80 | pid << 8, len(payload)] + payload
+        line = []
+        while not self.sm.irq_flags[0] and len(line) < 2000:
+            if words and len(self.sm.tx_fifo) < self.sm.fifo_depth:   # the host keeps the FIFO fed
+                self.sm.tx_fifo.append(words.pop(0))
             self.step(1)
+            line.append(self.sm.pins & 3)
+        self.assertTrue(self.sm.irq_flags[0], "packet never completed")
+        return line
 
-            if self.sm.irq_flags[0]:
-                break
-
-        self.assertTrue(self.sm.irq_flags[0], "Packet Complete IRQ 0 must be asserted")
-
-        # Verify SE0 (pins == 0) sequence at end of packet
-        # Find continuous sequence of pins == 0
-        se0_len = 0
-        max_se0 = 0
-        for p in pins_history:
-            if p == 0:
-                se0_len += 1
-                max_se0 = max(max_se0, se0_len)
+    def decode(self, line: list[int]) -> tuple[list[int], int, int]:
+        """USB receiver: (unstuffed bits, stuffed bits removed, strobe where SE0 starts)."""
+        start = line.index(K)                           # first SYNC bit is a 0: J -> K
+        bits, state, ones, stuffed, t = [], J, 0, 0, start
+        while line[t] != SE0:
+            level = line[t + 1]                         # sample inside the bit
+            self.assertIn(level, (J, K), f"illegal line state at strobe {t}")
+            b = int(level == state)
+            state = level
+            if ones == 6:
+                self.assertEqual(b, 0, "missing stuffed 0 after six 1s")
+                ones, stuffed = 0, stuffed + 1
             else:
-                se0_len = 0
+                bits.append(b)
+                ones = ones + 1 if b else 0
+            t += BIT
+        return bits, stuffed, t
 
-        self.assertGreaterEqual(max_se0, 8, f"EOP SE0 duration {max_se0} must be >= 8 cycles (2 bit times)")
-        self.print_success_summary("usb_ls_eop")
+    def test_data_packet(self):
+        """DATA0 with a payload that needs stuffing: SYNC, PID, payload and CRC16 decode back."""
+        payload = [0x01, 0xFF, 0xFF, 0x7E, 0x00]
+        line = self.send(0xC3, payload)
+        bits, stuffed, se0 = self.decode(line)
+        to_bytes = lambda b: [sum(b[i + k] << k for k in range(8)) for i in range(0, len(b) - 7, 8)]
+        body = to_bytes(bits[:-16])
+        crc = sum(b << k for k, b in enumerate(bits[-16:]))
+        self.assertEqual(body, [0x80, 0xC3] + payload)
+        self.assertEqual(crc, crc16_usb(payload), "CRC16 differs from CRC-16/USB")
+        self.assertGreater(stuffed, 0, "payload with 0xFF must carry stuffed bits")
+        # EOP: SE0 for exactly 2 bit times right after the last bit, then J for one bit time
+        self.assertEqual(line[se0:se0 + 2 * BIT], [SE0] * (2 * BIT), "SE0 must last 2 bit times")
+        self.assertEqual(line[se0 + 2 * BIT:se0 + 3 * BIT], [J] * BIT, "J must follow for 1 bit time")
+        self.print_success_summary("usb_ls_data_packet")
 
-    def test_pau_nrzi_and_bitstuffing(self):
-        """Verify that PAU hardware performs in-flight NRZI encoding and bit stuffing on GPIO output."""
-        payload = (0xFF << 8) | 0x80  # 0xFF contains eight consecutive 1s (requires bit stuff after six 1s)
-        self.sm.tx_fifo.append(payload)
-
-        # Inspect if PAU transforms output to differential NRZI J/K states (pins in {1, 2})
-        nrzi_active = False
-        for _ in range(80):
-            pins = self.sm.gpio_out & 3
-            if pins == 2:  # K-state (D-=0, D+=1) can only be generated if NRZI transitions occur
-                nrzi_active = True
-                break
-            self.step(1)
-
-        if not nrzi_active:
-            self.dump_crash_log("PAU hardware engine did not generate NRZI K-state transitions on D+/D-")
-            self.fail("ARCHITECTURAL LIMITATION: emu.py does not implement PAU in-flight NRZI / bit-stuffing datapath")
-
-        self.print_success_summary("usb_ls_pau")
+    def test_empty_payload(self):
+        """Zero-length DATA1: SYNC, PID, CRC16 of nothing (0x0000)."""
+        bits, _, _ = self.decode(self.send(0x4B, []))
+        self.assertEqual(len(bits), 32)
+        self.assertEqual(sum(b << k for k, b in enumerate(bits[16:])), crc16_usb([]))
+        self.print_success_summary("usb_ls_empty_packet")
 
 
 if __name__ == "__main__":

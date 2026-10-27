@@ -1,21 +1,13 @@
 .program manchester_tx
-; Manchester / 10BASE-T Transmitter
-; Pin 0: TX (Differential / Single-ended Manchester line)
-; PAU Hardware Engine: pau_cfg bit 3 (manchester_tx), pau_baud = 3
-; Bit 0: Low-to-High transition in middle of bit cell
-; Bit 1: High-to-Low transition in middle of bit cell
+; Manchester (IEEE 802.3: 1 = rising edge at mid-bit) on the PAU (ISA v2)
+; Pin 0: TX. 6 strobes per bit (PAU half-bit 3), MSB first. The PAU keeps the bit timing and
+; autopull refills the OSR from the TX FIFO in the same strobe: one instruction streams every
+; word pushed by the host, without gaps.
+.pau enc=manchester baud=3
 
-    set pau_baud, 3     ; 3 machine cycles per half-period (6 cycles/bit)
-    set pau_cfg, 8      ; Enable PAU Manchester TX engine (Bit 3)
-
+    set pins, 0
+    set pindirs, 1
+    set pau_ctl, tx
 .wrap_target
-    pull block          ; Fetch byte payload from TX FIFO
-    set x, 7            ; 8 bits to serialize
-
-bit_loop:
-    out pins, 1         ; PAU hardware modulates bit into two half-periods
-    jmp x--, bit_loop   ; Loop for all 8 bits
-
-    irq 0               ; Frame complete IRQ 0
-    push noblock        ; Acknowledge frame completion
+    out pins, 16 auto
 .wrap
