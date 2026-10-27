@@ -1,34 +1,64 @@
-"""emu.py - Cycle-Accurate Minimal Emulator for 16-bit Custom PIO ASIC Architecture.
+"""emu.py - Cycle-accurate emulator of one openPIO state machine, ISA v2 (ISA.md).
 
-Based on ISA.md specification.
-Executes 16-bit binary instructions cycle-by-cycle against the ISA semantics
-and produces concise, LLM-optimized tabular traces.
+step() is one clock. On a strobe (see CLKDIV), in order: the PAU advances (TX line, RX
+sampling), then the SM delays, re-evaluates a stall, or executes the instruction at PC; at the
+end the condition values are kept for WAIT edges. Traces are concise fixed-width rows.
 """
 
 from __future__ import annotations
 
 import argparse
-import collections
 from collections import deque
 import struct
-import sys
 from typing import Sequence
 
 import asm
 from asm import (
-    OP_ALU,
-    OP_IN,
-    OP_IRQ,
-    OP_JMP,
-    OP_OUT,
-    OP_PUSH,
-    OP_SET,
-    OP_WAIT,
+    CS_GPIO, CS_INBASE, CS_IRQ, CS_PAU, CS_PEER, CS_STATUS, CS_XBIT, CS_YBIT,
+    COND_RESET, CT_FIFO, CT_IRQ, CT_PAU, CT_WAIT, IMEM_WORDS,
+    JC_ALWAYS, JC_NEVER, JC_XDEC, JC_YDEC,
+    OP_ALU, OP_CTRL, OP_IN, OP_JMP, OP_OUT, OP_SET,
+    R_ISR, R_NULL, R_OSR, R_PINDIRS, R_PINS, R_SPECIAL, R_X, R_Y,
     disassemble,
 )
 
 HEADER = "CYC  | PC | INSTR              | DLY | X      | Y      | OSR    | ISR    | PIN_IN | PIN_OUT | STALL"
 SEPARATOR = "-----+----+--------------------+-----+--------+--------+--------+--------+--------+---------+------"
+
+PAU_QUEUE_BITS = 32
+
+
+def _rev16(v: int) -> int:
+    return int(f"{v & 0xFFFF:016b}"[::-1], 2)
+
+
+class _Stuffer:
+    """Run counter for bit stuffing (ISA.md, PAU): after `length` qualifying bits, a stuffed bit."""
+
+    def __init__(self) -> None:
+        self.run = 0
+        self.last: int | None = None
+
+    def due(self, mode: int, length: int) -> int | None:
+        """Value of the stuffed bit owed now, or None."""
+        if self.run < length:
+            return None
+        return {0: 0, 1: 1}.get(mode, 1 - (self.last or 0))
+
+    def count(self, bit: int, mode: int) -> None:
+        """Account for a bit sent / received (data or stuffed)."""
+        if mode == 2:
+            self.run = self.run + 1 if bit == self.last else 1
+        else:
+            self.run = self.run + 1 if bit == (1 if mode == 0 else 0) else 0
+        self.last = bit
+
+    def stuffed(self, bit: int, mode: int) -> None:
+        """A stuffed bit went by: in modes 00 / 01 it ends the run, in 10 it starts one."""
+        if mode == 2:
+            self.run, self.last = 1, bit
+        else:
+            self.run, self.last = 0, bit
 
 
 class StateMachine:
@@ -51,100 +81,57 @@ class StateMachine:
         set_base: int = 0,
         set_count: int = 5,
         sideset_base: int = 0,
-        jmp_pin: int = 0,
+        jmp_pin: int | None = None,
+        cond_cfg: Sequence[int] | None = None,
+        push_thresh: int = 0,
+        pull_thresh: int = 0,
+        pau_mode: int = 0,
+        crc_cfg: int = 0,
+        crc_poly: int = 0,
+        crc_res: int = 0,
         instructions: Sequence[int] | None = None,
     ) -> None:
         if program is None and instructions is not None:
             program = instructions
-        # Instruction memory: 32 16-bit words
-        self.memory: list[int] = [0] * 32
+        self.memory: list[int] = [0] * IMEM_WORDS
 
-        # Wrap configuration
-        self.wrap_bottom: int = wrap_bottom
-        self.wrap_top: int = wrap_top if wrap_top is not None else 31
+        # Host configuration
+        self.wrap_bottom = wrap_bottom
+        self.wrap_top = wrap_top if wrap_top is not None else IMEM_WORDS - 1
+        self.side_set_count = side_set_count
+        self.side_set_opt = side_set_opt
+        self.side_set_pindirs = side_set_pindirs
+        self._open_drain_mask = open_drain_mask & 0xFF
+        self.clkdiv_int = clkdiv_int if clkdiv_int > 0 else 1
+        self._clkdiv_frac = clkdiv_frac & 0xFF
+        self.in_base, self.out_base, self.set_base = in_base, out_base, set_base
+        self.set_count, self.sideset_base = set_count, sideset_base
+        self.shift_in_right = True
+        self.shift_out_right = True
+        self.push_thresh, self.pull_thresh = push_thresh & 0xF, pull_thresh & 0xF
+        self.cond_cfg: list[int] = list(cond_cfg if cond_cfg is not None else COND_RESET)
+        self.pau_mode, self.crc_cfg = pau_mode & 0xFFFF, crc_cfg & 0xFFFF
+        self.crc_poly, self.crc_res = crc_poly & 0xFFFFFFFF, crc_res & 0xFFFFFFFF
 
-        # Side-set configuration
-        self.side_set_count: int = side_set_count
-        self.side_set_opt: bool = side_set_opt
-        self.side_set_pindirs: bool = side_set_pindirs
-
-        # Open-drain IO control interface (RFC-I2C-2)
-        self._open_drain_mask: int = open_drain_mask & 0xFF
-
-        # Clock divider & 8-bit fractional prescaler (RFC-04, RFC-UART-1)
-        self.clkdiv_int: int = clkdiv_int if clkdiv_int > 0 else 1
-        self._clkdiv_frac: int = clkdiv_frac & 0xFF
-        self.clkdiv_counter: int = 0
-        self.clkdiv_accum: int = 0
-        self._current_clkdiv_period: int = 0
-
-        # PAU execution datapath states (RFC-01, RFC-02)
-        self.pau_nrzi_state: int = 1  # 1 = J-state (D-=1, D+=0), 2 = K-state (D-=0, D+=1)
-        self.pau_ones_count: int = 0  # Consecutive ones counter for bit-stuffing
-        self.pau_tx_queue: deque[int] = deque()  # Output pin queue for Manchester / PAU modulator
-
-        # Load program if provided
-        if program is not None:
-            self.load_program(program)
-
-        # 16-bit registers
-        self.x: int = 0
-        self.y: int = 0
-        self.isr: int = 0
-        self.osr: int = 0
-
-        # Shift bit counters (0-16)
-        self.isr_count: int = 0
-        self.osr_count: int = 0
-        self.shift_in_right: bool = True
-        self.shift_out_right: bool = True
-
-        # Control registers
-        self.pc: int = 0
-        self.delay_counter: int = 0
-        self.stalled: bool = False
-
-        # Internal control state
-        self._stage_next_pc: int = 0
-        self._current_instr_str: str = "nop"
-        self.stall_reason: str = ""
-        self.stall_info: dict = {}
-
-        # FIFOs
-        self.fifo_depth: int = fifo_depth
+        self.fifo_depth = fifo_depth
         self.tx_fifo: deque[int] = deque(maxlen=fifo_depth)
         self.rx_fifo: deque[int] = deque(maxlen=fifo_depth)
-
-        # Pins (8-bit)
-        self.gpio_in: int = 0
-        self.gpio_out: int = 0
-        self.pindirs: int = 0
-        self.prev_gpio_in: int = 0
-
-        # Pin mapping configurations
-        self.in_base: int = in_base
-        self.out_base: int = out_base
-        self.set_base: int = set_base
-        self.set_count: int = set_count
-        self.sideset_base: int = sideset_base
-        self.jmp_pin: int = jmp_pin
-
-        # Guard timeout & IRQ flags
-        self.timeout_val: int = 0
-        self.timeout_counter: int = 0
-        self.timeout_flag: bool = False
-        self.irq_flags: list[bool] = [False] * 8
-        self.peer_irq_flags: list[bool] = [False] * 8
-
-        # PAU config registers
-        self.pau_baud: int = 0
-        self.pau_cfg: int = 0
-
-        # Execution tracking & LLM-optimized trace rolling buffer
-        self.cycle_count: int = 0
+        self.gpio_in = 0
+        self.gpio_out = 0
+        self.pindirs = 0
+        self.irq_flags = [False] * 8
+        self.peer_irq_flags = [False] * 8
         self.history: deque[str] = deque(maxlen=15)
 
-    # Upper-case properties for ISA register naming conventions
+        if program is not None:
+            self.load_program(program)
+        if jmp_pin is not None and getattr(program, "pin_slot", None) is not None:
+            s = program.pin_slot
+            self.cond_cfg[s] = (self.cond_cfg[s] & 0xF0) | (jmp_pin & 7)
+        self.reset()
+
+    # ------------------------------------------------------------------ configuration
+
     @property
     def X(self) -> int:
         return self.x
@@ -162,44 +149,12 @@ class StateMachine:
         self.y = val & 0xFFFF
 
     @property
-    def ISR(self) -> int:
-        return self.isr
-
-    @ISR.setter
-    def ISR(self, val: int) -> None:
-        self.isr = val & 0xFFFF
-
-    @property
-    def OSR(self) -> int:
-        return self.osr
-
-    @OSR.setter
-    def OSR(self, val: int) -> None:
-        self.osr = val & 0xFFFF
-
-    @property
     def PC(self) -> int:
         return self.pc
 
     @PC.setter
     def PC(self, val: int) -> None:
-        self.pc = val & 0x1F
-
-    @property
-    def wrap_target(self) -> int:
-        return self.wrap_bottom
-
-    @wrap_target.setter
-    def wrap_target(self, val: int) -> None:
-        self.wrap_bottom = val & 0x1F
-
-    @property
-    def wrap(self) -> int:
-        return self.wrap_top
-
-    @wrap.setter
-    def wrap(self, val: int) -> None:
-        self.wrap_top = val & 0x1F
+        self.pc = val % IMEM_WORDS
 
     @property
     def open_drain_mask(self) -> int:
@@ -225,682 +180,651 @@ class StateMachine:
     def clkdiv_frac(self, val: int) -> None:
         self._clkdiv_frac = val & 0xFF
 
-    def _apply_open_drain(self) -> None:
-        """Apply open-drain IO behavior: when open_drain_mask bit is set,
-        driving 1 sets pindirs to 0 (Hi-Z float), driving 0 sets pindirs to 1 (active low drive)."""
-        if not self._open_drain_mask:
-            return
-        for pin in range(8):
-            if (self._open_drain_mask >> pin) & 1:
-                bit = (self.gpio_out >> pin) & 1
-                if bit == 1:
-                    self.pindirs &= ~(1 << pin)
-                else:
-                    self.pindirs |= (1 << pin)
-                    self.gpio_out &= ~(1 << pin)
+    @property
+    def tx_drives(self) -> bool:
+        """The PAU drives the TX pins: TX on, or off and still draining its queue."""
+        return (bool(self.pau_ctl & 1) or self.tx_active or bool(self.tx_queue)
+                or self.tx_stuff_pending is not None)
+
+    @property
+    def pins(self) -> int:
+        """Pin output values: gpio_out, with the PAU TX line on out_base (+1) while it drives."""
+        out = self.gpio_out
+        if self.tx_drives:
+            line = self.tx_line ^ (self.pau_mode >> 2 & 1)
+            out = self._put_pin(out, self.out_base, line)
+            if self.pau_mode >> 3 & 1:
+                out = self._put_pin(out, self.out_base + 1, 1 - line)
+        return out
+
+    @staticmethod
+    def _put_pin(word: int, pin: int, bit: int) -> int:
+        pin &= 7
+        return (word & ~(1 << pin)) | (bit << pin)
 
     def load_program(self, program: Sequence[int], origin: int = 0) -> None:
-        """Load assembled instruction words into memory."""
+        """Load instruction words and the configuration carried by an asm.Program."""
         for i, word in enumerate(program):
-            if origin + i < 32:
+            if origin + i < IMEM_WORDS:
                 self.memory[origin + i] = word & 0xFFFF
-
-        # If program carries assembler metadata, apply it
-        if hasattr(program, "wrap_bottom"):
-            self.wrap_bottom = getattr(program, "wrap_bottom")
-        elif origin == 0:
-            self.wrap_bottom = 0
-
-        if hasattr(program, "wrap_top"):
-            self.wrap_top = getattr(program, "wrap_top")
-        elif origin == 0:
-            self.wrap_top = max(0, len(program) - 1)
-
-        if hasattr(program, "side_set_count"):
-            self.side_set_count = getattr(program, "side_set_count")
-        if hasattr(program, "side_set_opt"):
-            self.side_set_opt = getattr(program, "side_set_opt")
-        if hasattr(program, "side_set_pindirs"):
-            self.side_set_pindirs = getattr(program, "side_set_pindirs")
-
-        # Open-drain IO control interface (RFC-I2C-2)
-        if getattr(program, "_has_explicit_open_drain", False):
-            self._open_drain_mask = getattr(program, "open_drain_mask", 0) & 0xFF
-        elif hasattr(program, "open_drain_mask") and getattr(program, "open_drain_mask") != 0:
-            self._open_drain_mask = getattr(program, "open_drain_mask") & 0xFF
-
-        # Fractional Clock Divider (RFC-UART-1)
+        if origin == 0:
+            self.wrap_bottom = getattr(program, "wrap_bottom", 0)
+            self.wrap_top = getattr(program, "wrap_top", max(0, len(program) - 1))
+        for attr in ("side_set_count", "side_set_opt", "side_set_pindirs", "push_thresh",
+                     "pull_thresh", "pau_mode", "crc_cfg", "crc_poly", "crc_res"):
+            if hasattr(program, attr):
+                setattr(self, attr, getattr(program, attr))
+        if hasattr(program, "cond_cfg"):
+            self.cond_cfg = list(program.cond_cfg)
+        if getattr(program, "_has_explicit_open_drain", False) or getattr(program, "open_drain_mask", 0):
+            self._open_drain_mask = program.open_drain_mask & 0xFF
         if getattr(program, "_has_explicit_clkdiv", False):
-            if getattr(program, "clkdiv_int", None) is not None:
-                self.clkdiv_int = getattr(program, "clkdiv_int")
-            if getattr(program, "clkdiv_frac", None) is not None:
-                self._clkdiv_frac = getattr(program, "clkdiv_frac") & 0xFF
-        else:
-            if hasattr(program, "clkdiv_int") and getattr(program, "clkdiv_int") > 1:
-                self.clkdiv_int = getattr(program, "clkdiv_int")
-            if hasattr(program, "clkdiv_frac") and getattr(program, "clkdiv_frac") != 0:
-                self._clkdiv_frac = getattr(program, "clkdiv_frac") & 0xFF
+            self.clkdiv_int = program.clkdiv_int or 1
+            self._clkdiv_frac = program.clkdiv_frac & 0xFF
 
     def reset(self, pc: int = 0) -> None:
-        """Reset state machine registers, control flags, and FIFOs."""
-        self.x = 0
-        self.y = 0
-        self.isr = 0
-        self.osr = 0
+        """CTRL.RESET: SM registers, FIFOs, PAU; COND = COND_CFG, PAU_BAUD = PAU_MODE.BAUD."""
+        self.x = self.y = self.isr = self.osr = 0
         self.isr_count = 0
-        self.osr_count = 0
-        self.pc = pc & 0x1F
+        self.osr_count = 16                             # OSR empty: autopull loads first
+        self.pc = pc % IMEM_WORDS
         self.delay_counter = 0
         self.stalled = False
         self.stall_reason = ""
-        self.stall_info.clear()
+        self.stall_info: dict = {}
+        self._stage_next_pc = 0
+        self._current_instr_str = "nop"
         self.tx_fifo.clear()
         self.rx_fifo.clear()
-        self.timeout_counter = 0
+        self.prev_gpio_in = self.gpio_in
+        self.timeout_val = self.timeout_counter = 0
         self.timeout_flag = False
+        self.cond = list(self.cond_cfg)
+        self.clkdiv_counter = self.clkdiv_accum = self._current_clkdiv_period = 0
         self.cycle_count = 0
         self.history.clear()
-        self.pau_nrzi_state = 1
-        self.pau_ones_count = 0
-        self.pau_tx_queue.clear()
-        self.clkdiv_counter = 0
-        self.clkdiv_accum = 0
-        self._current_clkdiv_period = 0
+        # PAU
+        self.pau_ctl = 0
+        self.pau_baud = (self.pau_mode >> 10) & 0x1F
+        self.crc = 0
+        self.tx_queue: deque[tuple[int, bool]] = deque()   # (bit, stuffed while queued)
+        self.tx_line = 0
+        self.tx_active = False
+        self.tx_half = 0
+        self.tx_cnt = 0
+        self.tx_bit = 0
+        self.tx_stuff = _Stuffer()
+        self.tx_stuff_pending: int | None = None
+        self.rx_queue: deque[int] = deque()
+        self.rx_prev_in = 0
+        self.rx_armed = True
+        self.rx_cnt = 0
+        self.rx_since = 0
+        self.rx_quiet = 0
+        self.rx_mid = False
+        self.rx_last_sample = 0
+        self.rx_stuff = _Stuffer()
+        self.rx_stuff_err = False
+        self.rx_overrun = False
+        self.cond_prev = [self._cond_value(s) for s in range(4)]
+
+    # ------------------------------------------------------------------ PAU
+
+    @property
+    def _half(self) -> int:
+        return self.pau_baud or 32
+
+    @property
+    def _crc_width(self) -> int:
+        return (self.crc_cfg & 0x1F) + 1
+
+    @property
+    def _crc_mask(self) -> int:
+        return (1 << self._crc_width) - 1
+
+    def _crc_feed(self, bit: int) -> None:
+        w, mask = self._crc_width, self._crc_mask
+        fb = ((self.crc >> (w - 1)) & 1) ^ bit
+        self.crc = (self.crc << 1) & mask
+        if fb:
+            self.crc ^= self.crc_poly & mask
+
+    def _stuff_cfg(self) -> tuple[bool, int, int]:
+        on = bool(self.pau_ctl & 4)
+        return on, (self.pau_mode >> 8) & 3, ((self.pau_mode >> 4) & 0xF) or 16
+
+    def _set_pau_ctl(self, val: int) -> None:
+        draining = self.tx_drives
+        old, self.pau_ctl = self.pau_ctl, val & 0xF
+        if val & 1 and not old & 1 and not draining:
+            self.tx_line = ((self.gpio_out >> (self.out_base & 7)) & 1) ^ (self.pau_mode >> 2 & 1)
+            self.tx_stuff = _Stuffer()
+            self.tx_stuff_pending = None
+        if val & 2 and not old & 2:
+            self.rx_queue.clear()
+            self.rx_armed = True
+            self.rx_mid = False
+            self.rx_cnt = self.rx_since = self.rx_quiet = 0
+            self.rx_prev_in = self.rx_last_sample = self._rx_input()
+            self.rx_stuff = _Stuffer()
+            self.rx_stuff_err = self.rx_overrun = False
+        if not val & 4:
+            self.rx_stuff = _Stuffer()
+
+    def _tx_start_bit(self) -> None:
+        """Start the next bit (a stuffed one first) and drive its first half."""
+        _, mode, length = self._stuff_cfg()
+        if self.tx_stuff_pending is not None:
+            b = self.tx_stuff_pending
+            self.tx_stuff_pending = None
+            self.tx_stuff.stuffed(b, mode)
+        else:
+            b, stuffed = self.tx_queue.popleft()
+            if stuffed:
+                self.tx_stuff.count(b, mode)
+                self.tx_stuff_pending = self.tx_stuff.due(mode, length)
+            else:
+                self.tx_stuff = _Stuffer()
+        self.tx_bit, self.tx_half, self.tx_cnt, self.tx_active = b, 0, self._half, True
+        enc = self.pau_mode & 3
+        if enc == 0:
+            self.tx_line = b
+        elif enc == 1:
+            self.tx_line ^= 1 - b
+        elif enc == 2:
+            self.tx_line = 1 - b
+        else:
+            self.tx_line ^= 1
+
+    def _pau_tx_strobe(self) -> None:
+        if not self.tx_drives:
+            return
+        if self.tx_active:
+            self.tx_cnt -= 1
+            if self.tx_cnt:
+                return
+            if self.tx_half == 0:                       # middle of the bit
+                self.tx_half, self.tx_cnt = 1, self._half
+                enc = self.pau_mode & 3
+                if enc == 2:
+                    self.tx_line = self.tx_bit
+                elif enc == 3 and self.tx_bit:
+                    self.tx_line ^= 1
+                return
+            self.tx_active = False                      # end of the bit
+        if self.tx_queue or self.tx_stuff_pending is not None:
+            self._tx_start_bit()
+
+    def _rx_input(self) -> int:
+        return ((self.gpio_in >> (self.in_base & 7)) & 1) ^ (self.pau_mode >> 2 & 1)
+
+    def _rx_bit(self, b: int) -> None:
+        """A decoded bit: destuff, CRC, queue."""
+        on, mode, length = self._stuff_cfg()
+        if on:
+            due = self.rx_stuff.due(mode, length)
+            if due is not None:
+                if b == due:
+                    self.rx_stuff.stuffed(b, mode)
+                    return
+                self.rx_stuff_err = True
+            self.rx_stuff.count(b, mode)
+        if self.pau_ctl & 8 and not self.pau_ctl & 1:
+            self._crc_feed(b)
+        if len(self.rx_queue) >= PAU_QUEUE_BITS:
+            self.rx_overrun = True
+        else:
+            self.rx_queue.append(b)
+
+    def _pau_rx_strobe(self) -> None:
+        if not self.pau_ctl & 2:
+            return
+        inp = self._rx_input()
+        edge = inp != self.rx_prev_in
+        rising = edge and inp == 1
+        self.rx_prev_in = inp
+        self.rx_quiet = 0 if edge else self.rx_quiet + 1
+        h = self._half
+        enc = self.pau_mode & 3
+        if enc < 2:                                     # NRZ / NRZI: sample mid-bit
+            if edge:
+                self.rx_armed, self.rx_cnt = False, h
+                return
+            if self.rx_armed:
+                return
+            self.rx_cnt -= 1
+            if self.rx_cnt:
+                return
+            self.rx_cnt = 2 * h
+            if enc == 0:
+                self._rx_bit(inp)
+            else:
+                self._rx_bit(1 if inp == self.rx_last_sample else 0)
+            self.rx_last_sample = inp
+            return
+        if self.rx_armed:                               # Manchester / biphase mark: edge timing
+            if edge:
+                self.rx_armed, self.rx_since, self.rx_mid = False, 0, False
+                if enc == 2:
+                    self._rx_bit(1 if rising else 0)
+            return
+        self.rx_since += 1
+        t2 = 2 * self.rx_since                          # compare in half-H units
+        if edge:
+            if enc == 2:
+                if 3 * h <= t2 <= 5 * h:
+                    self._rx_bit(1 if rising else 0)
+                    self.rx_since = 0
+            elif h <= t2 < 3 * h:
+                self.rx_mid = True
+            elif 3 * h <= t2 <= 5 * h:
+                self._rx_bit(1 if self.rx_mid else 0)
+                self.rx_since, self.rx_mid = 0, False
+            return
+        if t2 > 5 * h:                                  # no edge in time: end of frame
+            if enc == 3:
+                self._rx_bit(1 if self.rx_mid else 0)   # the last bit has no closing boundary
+            self.rx_armed = True
+
+    def _pau_status(self, idx: int) -> int:
+        if idx == 0:
+            return int(not self.tx_active and not self.tx_queue and self.tx_stuff_pending is None)
+        if idx == 1:
+            return int(not self.pau_ctl & 2 or self.rx_quiet >= 4 * self._half)
+        if idx == 2:
+            return int(len(self.tx_queue) <= PAU_QUEUE_BITS - 16)
+        if idx == 3:
+            return int(bool(self.rx_queue))
+        if idx == 4:
+            return int(self.crc == self.crc_res & self._crc_mask)
+        if idx == 5:
+            return int(self.crc == 0)
+        if idx == 6:
+            return int(self.rx_stuff_err)
+        if idx == 7:
+            return int(self.rx_overrun)
+        pair = (self.gpio_in >> (self.in_base & 7)) & 1, (self.gpio_in >> ((self.in_base + 1) & 7)) & 1
+        if idx == 8:
+            return int(pair == (0, 0))
+        if idx == 9:
+            return int(pair == (1, 1))
+        return 0
+
+    # ------------------------------------------------------------------ conditions
+
+    def _sm_status(self, idx: int) -> int:
+        return int([
+            self.x == 0, self.y == 0, self.x == self.y, self.timeout_flag,
+            self.osr_count >= (self.pull_thresh or 16), self.isr_count >= (self.push_thresh or 16),
+            not self.tx_fifo, len(self.rx_fifo) >= self.fifo_depth,
+        ][idx] if idx < 8 else 0)
+
+    def _cond_value(self, slot: int) -> int:
+        c = self.cond[slot]
+        src, idx = (c >> 4) & 7, c & 0xF
+        if src == CS_GPIO:
+            v = (self.gpio_in >> (idx & 7)) & 1
+        elif src == CS_INBASE:
+            v = (self.gpio_in >> ((self.in_base + idx) & 7)) & 1
+        elif src == CS_IRQ:
+            v = int(self.irq_flags[idx & 7])
+        elif src == CS_PEER:
+            v = int(self.peer_irq_flags[idx & 7])
+        elif src == CS_XBIT:
+            v = (self.x >> idx) & 1
+        elif src == CS_YBIT:
+            v = (self.y >> idx) & 1
+        elif src == CS_STATUS:
+            v = self._sm_status(idx)
+        else:
+            v = self._pau_status(idx)
+        return v ^ (c >> 7)
+
+    def _wait_met(self, pol: int, edge: int, slot: int) -> bool:
+        cur = self._cond_value(slot)
+        if not edge:
+            return cur == pol
+        return self.cond_prev[slot] == 1 - pol and cur == pol
+
+    # ------------------------------------------------------------------ pins
+
+    def _apply_open_drain(self) -> None:
+        """Open-drain pins: driving 1 floats the pin (pindir 0), driving 0 drives it low."""
+        for pin in range(8):
+            if (self._open_drain_mask >> pin) & 1:
+                if (self.gpio_out >> pin) & 1:
+                    self.pindirs &= ~(1 << pin)
+                else:
+                    self.pindirs |= 1 << pin
+
+    def _write_pins(self, mask: int, value: int) -> None:
+        self.gpio_out = ((self.gpio_out & ~mask) | (value & mask)) & 0xFF
+        self._apply_open_drain()
 
     def _decode_delay_sideset(self, delay_ss: int) -> tuple[int, int | None]:
-        """Decode the 5-bit Delay / Side-Set field."""
         if self.side_set_count == 0:
             return delay_ss & 0x1F, None
-
-        total_ss_bits = self.side_set_count + (1 if self.side_set_opt else 0)
-        delay_bits = 5 - total_ss_bits
-        delay_mask = (1 << delay_bits) - 1
-        delay = delay_ss & delay_mask
+        delay_bits = 5 - self.side_set_count - (1 if self.side_set_opt else 0)
+        delay = delay_ss & ((1 << delay_bits) - 1)
         ss_field = delay_ss >> delay_bits
-
-        if self.side_set_opt:
-            en_bit = (ss_field >> self.side_set_count) & 1
-            if en_bit:
-                return delay, ss_field & ((1 << self.side_set_count) - 1)
+        if self.side_set_opt and not (ss_field >> self.side_set_count) & 1:
             return delay, None
-
         return delay, ss_field & ((1 << self.side_set_count) - 1)
 
     def _apply_sideset(self, side_val: int | None) -> None:
-        """Apply side-set pin update to gpio_out or pindirs."""
         if side_val is None or self.side_set_count == 0:
             return
         mask = ((1 << self.side_set_count) - 1) << self.sideset_base
+        val = (side_val << self.sideset_base) & mask & 0xFF
         if self.side_set_pindirs:
-            self.pindirs = ((self.pindirs & ~mask) | ((side_val << self.sideset_base) & mask)) & 0xFF
+            self.pindirs = ((self.pindirs & ~mask) | val) & 0xFF
         else:
-            self.gpio_out = ((self.gpio_out & ~mask) | ((side_val << self.sideset_base) & mask)) & 0xFF
-            self._apply_open_drain()
+            self._write_pins(mask & 0xFF, val)
 
-    def _evaluate_wait_condition(self, pol: int, edge: int, src: int, idx: int) -> bool:
-        """Sample condition source and evaluate if WAIT is satisfied."""
-        if src == 0:  # GPIO pin
-            curr = (self.gpio_in >> (idx & 7)) & 1
-            prev = (self.prev_gpio_in >> (idx & 7)) & 1
-        elif src == 1:  # IN_BASE
-            pin = (self.in_base + idx) & 7
-            curr = (self.gpio_in >> pin) & 1
-            prev = (self.prev_gpio_in >> pin) & 1
-        elif src == 2:  # IRQ
-            curr = 1 if self.irq_flags[idx & 7] else 0
-            prev = curr
-        elif src == 3:  # Peer SM IRQ
-            curr = 1 if self.peer_irq_flags[idx & 7] else 0
-            prev = curr
-        else:
-            return False
+    # ------------------------------------------------------------------ execution
 
-        if edge == 0:  # Level
-            return curr == pol
-
-        # Edge: pol=1 is rising (0->1), pol=0 is falling (1->0)
-        if pol == 1:
-            return prev == 0 and curr == 1
-        return prev == 1 and curr == 0
+    def _end_strobe(self, trace_pc: int) -> None:
+        self.cond_prev = [self._cond_value(s) for s in range(4)]
+        self.prev_gpio_in = self.gpio_in & 0xFF
+        self.history.append(self._format_trace_row(trace_pc, self._current_instr_str))
 
     def step(self) -> None:
         """Advance the state machine by exactly one clock cycle."""
         self.cycle_count += 1
         trace_pc = self.pc
 
-        # -------------------------------------------------------------
-        # 0. Fractional Clock Prescaler (RFC-UART-1)
-        # -------------------------------------------------------------
+        # Fractional prescaler: only every Nth clock is a strobe
         if self.clkdiv_int > 1 or self._clkdiv_frac > 0:
             if self.clkdiv_counter == 0:
                 self.clkdiv_accum += self._clkdiv_frac
-                carry = 0
-                if self.clkdiv_accum >= 256:
-                    carry = 1
-                    self.clkdiv_accum -= 256
+                carry = int(self.clkdiv_accum >= 256)
+                self.clkdiv_accum -= 256 * carry
                 self._current_clkdiv_period = self.clkdiv_int + carry
-
             self.clkdiv_counter += 1
             if self.clkdiv_counter < self._current_clkdiv_period:
-                # Sub-strobe cycle: SM execution paused this clock cycle
-                self.prev_gpio_in = self.gpio_in & 0xFF
-                row = self._format_trace_row(trace_pc, self._current_instr_str)
-                self.history.append(row)
+                self.history.append(self._format_trace_row(trace_pc, self._current_instr_str))
                 return
             self.clkdiv_counter = 0
 
-        # Advance PAU Manchester TX modulator queue if active
-        if self.pau_tx_queue:
-            next_bit = self.pau_tx_queue.popleft()
-            mask_pin = 1 << (self.out_base & 7)
-            self.gpio_out = ((self.gpio_out & ~mask_pin) | ((next_bit << (self.out_base & 7)) & mask_pin)) & 0xFF
-            self._apply_open_drain()
+        self._pau_tx_strobe()
+        self._pau_rx_strobe()
 
-        # -------------------------------------------------------------
-        # 1. State Machine is Delaying
-        # -------------------------------------------------------------
         if self.delay_counter > 0:
             self.delay_counter -= 1
             if self.delay_counter == 0:
                 self.pc = self._stage_next_pc
-
-            self.prev_gpio_in = self.gpio_in & 0xFF
-            row = self._format_trace_row(trace_pc, self._current_instr_str)
-            self.history.append(row)
+            self._end_strobe(trace_pc)
             return
 
-        # -------------------------------------------------------------
-        # 2. State Machine is Stalled
-        # -------------------------------------------------------------
         if self.stalled:
-            un_stalled = False
-
-            if self.stall_reason == "WAIT":
-                t_en = self.stall_info.get("t_en", 0)
-                if t_en:
-                    if self.timeout_counter > 0:
-                        self.timeout_counter -= 1
-                        self.timeout_val = self.timeout_counter
-                    if self.timeout_counter == 0:
-                        self.timeout_val = 0
-                        self.timeout_flag = True
-                        un_stalled = True
-
-                if not un_stalled:
-                    pol = self.stall_info["pol"]
-                    edge = self.stall_info["edge"]
-                    src = self.stall_info["src"]
-                    idx = self.stall_info["idx"]
-                    if self._evaluate_wait_condition(pol, edge, src, idx):
-                        un_stalled = True
-
-            elif self.stall_reason == "PULL":
-                if len(self.tx_fifo) > 0:
-                    self.osr = self.tx_fifo.popleft() & 0xFFFF
-                    self.osr_count = 0
-                    un_stalled = True
-
-            elif self.stall_reason == "PUSH":
-                if len(self.rx_fifo) < self.fifo_depth:
-                    self.rx_fifo.append(self.isr & 0xFFFF)
-                    self.isr = 0
-                    self.isr_count = 0
-                    un_stalled = True
-
-            elif self.stall_reason == "IRQ":
-                idx = self.stall_info.get("idx", 0)
-                peer = self.stall_info.get("peer", 0)
-                flags = self.peer_irq_flags if peer else self.irq_flags
-                if not flags[idx]:
-                    un_stalled = True
-
-            elif self.stall_reason == "PAU_TX":
-                half_period = self.pau_baud if self.pau_baud > 0 else 1
-                if len(self.pau_tx_queue) <= half_period * 2:
-                    un_stalled = True
-
-            elif self.stall_reason == "PAU_BUSY":
-                if len(self.pau_tx_queue) == 0:
-                    un_stalled = True
-
-            if un_stalled:
+            if self.stall_reason == "RETRY":            # blocked without effect: issue again
                 self.stalled = False
-                delay = self.stall_info.get("delay", 0)
-                next_pc = self.stall_info.get("next_pc", (self.pc + 1) & 0x1F)
-                if self.stall_reason == "PAU_BUSY":
-                    idx = self.stall_info.get("idx", 0)
-                    peer = self.stall_info.get("peer", 0)
-                    flags = self.peer_irq_flags if peer else self.irq_flags
-                    flags[idx] = True
-                    if self.stall_info.get("wait", 0):
-                        self.stalled = True
-                        self.stall_reason = "IRQ"
-                        self.stall_info = {
-                            "peer": peer,
-                            "idx": idx,
-                            "delay": delay,
-                            "next_pc": next_pc,
-                        }
-                        self.prev_gpio_in = self.gpio_in & 0xFF
-                        row = self._format_trace_row(trace_pc, self._current_instr_str)
-                        self.history.append(row)
-                        return
-                self.stall_reason = ""
-                self.stall_info.clear()
-
-                if delay > 0:
-                    self.delay_counter = delay
-                    self._stage_next_pc = next_pc
-                else:
-                    self.pc = next_pc
-
-                self.prev_gpio_in = self.gpio_in & 0xFF
-                row = self._format_trace_row(trace_pc, self._current_instr_str)
-                self.history.append(row)
-                return
             else:
-                self.prev_gpio_in = self.gpio_in & 0xFF
-                row = self._format_trace_row(trace_pc, self._current_instr_str)
-                self.history.append(row)
+                self._stall_strobe()
+                self._end_strobe(trace_pc)
                 return
 
-        # -------------------------------------------------------------
-        # 3. Normal Instruction Execution
-        # -------------------------------------------------------------
-        trace_pc = self.pc
-        word = self.memory[self.pc] & 0xFFFF
-        self._current_instr_str = disassemble(word, self.side_set_count, self.side_set_opt)
+        self._execute()
+        self._end_strobe(trace_pc)
 
-        opcode = (word >> 13) & 0x7
-        delay_ss = (word >> 8) & 0x1F
-        args = word & 0xFF
-
-        delay, side_val = self._decode_delay_sideset(delay_ss)
-        self._apply_sideset(side_val)
-
-        # Default wrap handling
-        if self.pc == self.wrap_top:
-            default_next_pc = self.wrap_bottom
+    def _finish(self, delay: int, next_pc: int) -> None:
+        if delay > 0:
+            self.delay_counter = delay
+            self._stage_next_pc = next_pc
         else:
-            default_next_pc = (self.pc + 1) & 0x1F
+            self.pc = next_pc
 
-        next_pc = default_next_pc
-        inst_stalled = False
+    def _stall_strobe(self) -> None:
+        info, done = self.stall_info, False
+        if self.stall_reason == "WAIT":
+            if info["t_en"]:
+                if self.timeout_counter > 0:
+                    self.timeout_counter -= 1
+                    self.timeout_val = self.timeout_counter
+                if self.timeout_counter == 0:
+                    self.timeout_val = 0
+                    self.timeout_flag = True
+                    done = True
+            done = done or self._wait_met(info["pol"], info["edge"], info["slot"])
+        elif self.stall_reason == "PULL":
+            if self.tx_fifo:
+                self.osr, self.osr_count, done = self.tx_fifo.popleft(), 0, True
+        elif self.stall_reason == "PUSH":
+            if len(self.rx_fifo) < self.fifo_depth:
+                self.rx_fifo.append(self.isr)
+                self.isr = self.isr_count = 0
+                done = True
+        elif self.stall_reason == "IRQ":
+            flags = self.peer_irq_flags if info["peer"] else self.irq_flags
+            done = not flags[info["idx"]]
+        if done:
+            self.stalled = False
+            self.stall_reason = ""
+            self._finish(info["delay"], info["next_pc"])
 
-        if opcode == OP_JMP:
-            cond_code = (args >> 5) & 0x7
-            target = args & 0x1F
-            taken = False
+    def _stall(self, reason: str, **info) -> None:
+        self.stalled = True
+        self.stall_reason = reason
+        self.stall_info = info
 
-            if cond_code == 0:  # ALWAYS
+    def _operand(self, code: int) -> int:
+        return {R_PINS: self.gpio_in, R_PINDIRS: self.pindirs, R_X: self.x, R_Y: self.y,
+                R_ISR: self.isr, R_OSR: self.osr}.get(code, 0)
+
+    def _execute(self) -> None:
+        word = self.memory[self.pc]
+        self._current_instr_str = disassemble(word, self.side_set_count, self.side_set_opt)
+        opcode, args = word >> 13, word & 0xFF
+        delay, side_val = self._decode_delay_sideset((word >> 8) & 0x1F)
+        self._apply_sideset(side_val)
+        delay *= self.clkdiv_int
+
+        next_pc = self.wrap_bottom if self.pc == self.wrap_top else (self.pc + 1) % IMEM_WORDS
+
+        if opcode >> 1 == OP_JMP >> 1:
+            cond = (args >> 5) & 7
+            if cond == JC_ALWAYS:
                 taken = True
-            elif cond_code == 1:  # !X
-                taken = (self.x == 0)
-            elif cond_code == 2:  # X-- (Post-decr)
-                taken = (self.x != 0)
-                self.x = (self.x - 1) & 0xFFFF
-            elif cond_code == 3:  # !Y
-                taken = (self.y == 0)
-            elif cond_code == 4:  # Y-- (Post-decr)
-                taken = (self.y != 0)
-                self.y = (self.y - 1) & 0xFFFF
-            elif cond_code == 5:  # TIMEOUT
-                taken = self.timeout_flag
-            elif cond_code == 6:  # PIN
-                taken = bool((self.gpio_in >> (self.jmp_pin & 7)) & 1)
-            elif cond_code == 7:  # !OSRE (OSR not empty)
-                taken = (self.osr_count < 16)
-
-            if taken:
-                next_pc = target
-
-        elif opcode == OP_WAIT:
-            pol = (args >> 7) & 1
-            edge = (args >> 6) & 1
-            t_en = (args >> 5) & 1
-            src = (args >> 3) & 3
-            idx = args & 7
-
-            if self._evaluate_wait_condition(pol, edge, src, idx):
-                next_pc = default_next_pc
+            elif cond == JC_NEVER:
+                taken = False
+            elif cond == JC_XDEC:
+                taken, self.x = self.x != 0, (self.x - 1) & 0xFFFF
+            elif cond == JC_YDEC:
+                taken, self.y = self.y != 0, (self.y - 1) & 0xFFFF
             else:
-                inst_stalled = True
-                self.stalled = True
-                self.stall_reason = "WAIT"
-                self.stall_info = {
-                    "pol": pol,
-                    "edge": edge,
-                    "src": src,
-                    "idx": idx,
-                    "t_en": t_en,
-                    "delay": delay,
-                    "next_pc": default_next_pc,
-                }
-                if t_en:
-                    self.timeout_counter = self.timeout_val
-                    self.timeout_flag = False
+                taken = bool(self._cond_value(cond - 4))
+            if taken:
+                next_pc = ((opcode & 1) << 5) | (args & 0x1F)
 
         elif opcode == OP_IN:
-            src = (args >> 5) & 7
-            count_raw = args & 0xF
-            count = 16 if count_raw == 0 else count_raw
+            src, auto = (args >> 5) & 7, (args >> 4) & 1
+            count = (args & 0xF) or 16
             mask = (1 << count) - 1
-
-            if src == 0:  # PINS
+            if src == R_PINS and self.pau_ctl & 2:
+                if len(self.rx_queue) < count:
+                    return self._stall("RETRY")
+                bits = [self.rx_queue.popleft() for _ in range(count)]
+                if not self.shift_in_right:
+                    bits.reverse()
+                val = sum(b << i for i, b in enumerate(bits))
+            elif src == R_PINS:
                 val = (self.gpio_in >> (self.in_base & 7)) & mask
-            elif src == 1:  # X
-                val = self.x & mask
-            elif src == 2:  # Y
-                val = self.y & mask
-            elif src == 3:  # NULL
+            elif src == R_PINDIRS:
                 val = 0
-            elif src == 4:  # ISR
-                val = self.isr & mask
-            elif src == 5:  # OSR
-                val = self.osr & mask
             else:
-                val = 0
-
+                val = self._operand(src) & mask
             if self.shift_in_right:
                 self.isr = ((self.isr >> count) | (val << (16 - count))) & 0xFFFF
             else:
                 self.isr = ((self.isr << count) | val) & 0xFFFF
-
             self.isr_count = min(16, self.isr_count + count)
+            if auto and self.isr_count >= (self.push_thresh or 16):
+                if len(self.rx_fifo) < self.fifo_depth:
+                    self.rx_fifo.append(self.isr)
+                    self.isr = self.isr_count = 0
+                else:
+                    return self._stall("PUSH", delay=delay, next_pc=next_pc)
 
         elif opcode == OP_OUT:
-            dest = (args >> 5) & 7
-            count_raw = args & 0xF
-            count = 16 if count_raw == 0 else count_raw
+            dest, auto = (args >> 5) & 7, (args >> 4) & 1
+            count = (args & 0xF) or 16
             mask = (1 << count) - 1
-
-            if dest == 0 and (self.pau_cfg & (1 << 3)) and len(self.pau_tx_queue) > (self.pau_baud if self.pau_baud > 0 else 1) * 2:
-                inst_stalled = True
-                self.stalled = True
-                self.stall_reason = "PAU_TX"
-                self.stall_info = {"delay": 0, "next_pc": self.pc}
+            pull_at = self.pull_thresh or 16
+            if auto and self.osr_count >= pull_at:
+                if self.tx_fifo:
+                    self.osr, self.osr_count = self.tx_fifo.popleft(), 0
+                return self._stall("RETRY")
+            if dest == R_PINS and self.pau_ctl & 1 and PAU_QUEUE_BITS - len(self.tx_queue) < count:
+                return self._stall("RETRY")
+            if self.shift_out_right:
+                val = self.osr & mask
+                self.osr = (self.osr >> count) & 0xFFFF
             else:
-                if self.shift_out_right:
-                    val = self.osr & mask
-                    self.osr = (self.osr >> count) & 0xFFFF
-                else:
-                    val = (self.osr >> (16 - count)) & mask
-                    self.osr = (self.osr << count) & 0xFFFF
+                val = (self.osr >> (16 - count)) & mask
+                self.osr = (self.osr << count) & 0xFFFF
+            self.osr_count = min(16, self.osr_count + count)
+            if auto and self.osr_count >= pull_at and self.tx_fifo:
+                self.osr, self.osr_count = self.tx_fifo.popleft(), 0
+            if dest == R_PINS and self.pau_ctl & 1:
+                order = range(count) if self.shift_out_right else range(count - 1, -1, -1)
+                for i in order:
+                    b = (val >> i) & 1
+                    self.tx_queue.append((b, bool(self.pau_ctl & 4)))
+                    if self.pau_ctl & 8:
+                        self._crc_feed(b)
+            elif dest == R_PINS:
+                self._write_pins((mask << (self.out_base & 7)) & 0xFF, val << (self.out_base & 7))
+            elif dest == R_PINDIRS:
+                m = (mask << (self.out_base & 7)) & 0xFF
+                self.pindirs = ((self.pindirs & ~m) | ((val << (self.out_base & 7)) & m)) & 0xFF
+            elif dest == R_X:
+                self.x = val
+            elif dest == R_Y:
+                self.y = val
+            elif dest == R_ISR:
+                self.isr, self.isr_count = val, count
+            elif dest == R_SPECIAL:
+                next_pc = val % IMEM_WORDS
 
-                self.osr_count = min(16, self.osr_count + count)
+        elif opcode >> 1 == OP_ALU >> 1:
+            op = ((opcode & 1) << 2) | ((args >> 3) & 3)
+            dest, src = (args >> 5) & 7, args & 7
+            s = self._operand(src) if src != R_SPECIAL else 0
+            d = {R_PINS: self.gpio_out, R_PINDIRS: self.pindirs, R_X: self.x, R_Y: self.y,
+                 R_ISR: self.isr, R_OSR: self.osr}.get(dest, 0)
+            res = [s, _rev16(s), d & s, d | s, d ^ s, ~(d ^ s), d + s, d - s][op] & 0xFFFF
+            if dest == R_PINS:
+                self._write_pins(0xFF, res)
+            elif dest == R_PINDIRS:
+                self.pindirs = res & 0xFF
+            elif dest == R_X:
+                self.x = res
+            elif dest == R_Y:
+                self.y = res
+            elif dest == R_ISR:
+                self.isr, self.isr_count = res, 16
+            elif dest == R_OSR:
+                self.osr, self.osr_count = res, 0
+            elif dest == R_SPECIAL:
+                self.cond[(res >> 8) & 3] = res & 0xFF
 
-                if dest == 0:  # PINS (via PAU)
-                    if self.pau_cfg & (1 << 3):  # Manchester TX Modulator
-                        half_period = self.pau_baud if self.pau_baud > 0 else 1
-                        bits = []
-                        for b in range(count):
-                            if self.shift_out_right:
-                                bit = (val >> b) & 1
-                            else:
-                                bit = (val >> (count - 1 - b)) & 1
-                            bits.append(bit)
-
-                        pin_seq = []
-                        for bit in bits:
-                            p1 = 1 if bit == 1 else 0
-                            p2 = 0 if bit == 1 else 1
-                            pin_seq.extend([p1] * half_period)
-                            pin_seq.extend([p2] * half_period)
-
-                        if self.pau_tx_queue:
-                            self.pau_tx_queue.extend(pin_seq)
-                        else:
-                            first_val = pin_seq[0]
-                            mask_pin = 1 << (self.out_base & 7)
-                            self.gpio_out = ((self.gpio_out & ~mask_pin) | ((first_val << (self.out_base & 7)) & mask_pin)) & 0xFF
-                            self._apply_open_drain()
-                            self.pau_tx_queue.extend(pin_seq[1:])
-
-                    elif self.pau_cfg & 1:  # NRZI Encode (USB-LS)
-                        curr_hw = (self.gpio_out >> (self.out_base & 7)) & 3
-                        if curr_hw in (1, 2):
-                            self.pau_nrzi_state = curr_hw
-                        elif self.pau_nrzi_state not in (1, 2):
-                            self.pau_nrzi_state = 1
-
-                        for b in range(count):
-                            bit = (val >> b) & 1 if self.shift_out_right else (val >> (count - 1 - b)) & 1
-                            if bit == 0:
-                                self.pau_nrzi_state = 2 if self.pau_nrzi_state == 1 else 1
-                                self.pau_ones_count = 0
-                            else:
-                                self.pau_ones_count += 1
-                                if (self.pau_cfg & 2) and self.pau_ones_count == 6:
-                                    self.pau_nrzi_state = 2 if self.pau_nrzi_state == 1 else 1
-                                    self.pau_ones_count = 0
-
-                        diff_mask = 0x3 << (self.out_base & 7)
-                        self.gpio_out = ((self.gpio_out & ~diff_mask) | ((self.pau_nrzi_state << (self.out_base & 7)) & diff_mask)) & 0xFF
-                        self._apply_open_drain()
-
+        elif opcode == OP_CTRL:
+            ctype, a = args >> 6, args & 0x3F
+            if ctype == CT_IRQ:
+                clear, wait, peer, idx = a >> 5 & 1, a >> 4 & 1, a >> 3 & 1, a & 7
+                flags = self.peer_irq_flags if peer else self.irq_flags
+                flags[idx] = not clear
+                if wait and not clear:
+                    return self._stall("IRQ", peer=peer, idx=idx, delay=delay, next_pc=next_pc)
+            elif ctype == CT_FIFO and not a & 7:
+                is_pull, block, ifcond = a >> 5 & 1, a >> 4 & 1, a >> 3 & 1
+                if is_pull:
+                    if ifcond and self.osr_count < (self.pull_thresh or 16):
+                        pass
+                    elif self.tx_fifo:
+                        self.osr, self.osr_count = self.tx_fifo.popleft(), 0
+                    elif not block:
+                        self.osr, self.osr_count = self.x, 0
                     else:
-                        pin_mask = (mask << (self.out_base & 7)) & 0xFF
-                        self.gpio_out = ((self.gpio_out & ~pin_mask) | ((val << (self.out_base & 7)) & pin_mask)) & 0xFF
-                        self._apply_open_drain()
-                elif dest == 1:  # X
-                    self.x = val & 0xFFFF
-                elif dest == 2:  # Y
-                    self.y = val & 0xFFFF
-                elif dest == 3:  # NULL (discard)
-                    pass
-                elif dest == 4:  # ISR
-                    self.isr = val & 0xFFFF
-                    self.isr_count = count
-                elif dest == 6:  # PINDIRS
-                    pin_mask = (mask << (self.out_base & 7)) & 0xFF
-                    self.pindirs = ((self.pindirs & ~pin_mask) | ((val << (self.out_base & 7)) & pin_mask)) & 0xFF
-                elif dest == 7:  # PC (Indirect JMP)
-                    next_pc = val & 0x1F
-
-        elif opcode == OP_PUSH:
-            is_pull = (args >> 7) & 1
-            block = (args >> 6) & 1
-            ifcond = (args >> 5) & 1
-
-            if is_pull:  # PULL
-                if ifcond and self.osr_count < 16:
-                    pass  # condition not met, skip
-                elif len(self.tx_fifo) > 0:
-                    self.osr = self.tx_fifo.popleft() & 0xFFFF
-                    self.osr_count = 0
-                elif not block:
-                    self.osr = self.x & 0xFFFF
-                    self.osr_count = 0
+                        return self._stall("PULL", delay=delay, next_pc=next_pc)
                 else:
-                    inst_stalled = True
-                    self.stalled = True
-                    self.stall_reason = "PULL"
-                    self.stall_info = {"delay": delay, "next_pc": default_next_pc}
-            else:  # PUSH
-                if ifcond and self.isr_count < 16:
-                    pass  # condition not met, skip
-                elif len(self.rx_fifo) < self.fifo_depth:
-                    self.rx_fifo.append(self.isr & 0xFFFF)
-                    self.isr = 0
-                    self.isr_count = 0
-                elif not block:
-                    self.isr = 0
-                    self.isr_count = 0
+                    if ifcond and self.isr_count < (self.push_thresh or 16):
+                        pass
+                    elif len(self.rx_fifo) < self.fifo_depth:
+                        self.rx_fifo.append(self.isr)
+                        self.isr = self.isr_count = 0
+                    elif not block:
+                        self.isr = self.isr_count = 0
+                    else:
+                        return self._stall("PUSH", delay=delay, next_pc=next_pc)
+            elif ctype == CT_WAIT and not a & 4:
+                pol, edge, t_en, slot = a >> 5 & 1, a >> 4 & 1, a >> 3 & 1, a & 3
+                if t_en:
+                    self.timeout_counter = self.timeout_val
+                    self.timeout_flag = False
+                if not self._wait_met(pol, edge, slot):
+                    return self._stall("WAIT", pol=pol, edge=edge, t_en=t_en, slot=slot,
+                                       delay=delay, next_pc=next_pc)
+            elif ctype == CT_PAU and not a & 0xF:
+                action = a >> 4
+                if action == 0:
+                    self.crc = self._crc_mask if self.crc_cfg >> 5 & 1 else 0
+                elif action == 2:
+                    self.tx_queue.clear()
+                    self.tx_active = False
+                    self.tx_stuff_pending = None
+                    self.pau_ctl &= ~1
+                elif action == 1:
+                    w = self._crc_width
+                    if PAU_QUEUE_BITS - len(self.tx_queue) < w:
+                        return self._stall("RETRY")
+                    out = self.crc ^ (self._crc_mask if self.crc_cfg >> 6 & 1 else 0)
+                    self.tx_queue.extend(((out >> i) & 1, bool(self.pau_ctl & 4)) for i in range(w - 1, -1, -1))
+
+        else:  # SET
+            dest, val = (args >> 5) & 7, args & 0x1F
+            if dest in (0, 1):
+                m = ((((1 << self.set_count) - 1) & 0x1F) << (self.set_base & 7)) & 0xFF
+                if dest == 0:
+                    self._write_pins(m, val << (self.set_base & 7))
                 else:
-                    inst_stalled = True
-                    self.stalled = True
-                    self.stall_reason = "PUSH"
-                    self.stall_info = {"delay": delay, "next_pc": default_next_pc}
-
-        elif opcode == OP_ALU:
-            dest = (args >> 5) & 7
-            op = (args >> 3) & 3
-            src = args & 7
-
-            if src == 0:
-                src_val = self.gpio_in & 0xFF
-            elif src == 1:
-                src_val = self.x
-            elif src == 2:
-                src_val = self.y
-            elif src == 3:
-                src_val = 0
-            elif src == 4:
-                src_val = self.isr
-            elif src == 5:
-                src_val = self.osr
-            elif src == 6:
-                src_val = 0  # STATUS
-            else:
-                src_val = 0
-
-            dest_val = {1: self.x, 2: self.y, 4: self.isr, 5: self.osr}.get(dest, 0)
-
-            if op == 0:  # MOV
-                res = src_val
-            elif op == 1:  # XOR
-                res = (dest_val ^ src_val) & 0xFFFF
-            elif op == 2:  # ADD
-                res = (dest_val + src_val) & 0xFFFF
-            elif op == 3:  # REV (16-bit BitRev)
-                res = 0
-                for b in range(16):
-                    if (src_val >> b) & 1:
-                        res |= 1 << (15 - b)
-            else:
-                res = 0
-
-            if dest == 1:
-                self.x = res & 0xFFFF
+                    self.pindirs = ((self.pindirs & ~m) | ((val << (self.set_base & 7)) & m)) & 0xFF
             elif dest == 2:
-                self.y = res & 0xFFFF
+                self.x = val
+            elif dest == 3:
+                self.y = val
             elif dest == 4:
-                self.isr = res & 0xFFFF
-                self.isr_count = 16
+                self.clkdiv = val
             elif dest == 5:
-                self.osr = res & 0xFFFF
-                self.osr_count = 0
-
-        elif opcode == OP_IRQ:
-            clear = (args >> 7) & 1
-            wait = (args >> 6) & 1
-            peer = (args >> 5) & 1
-            idx = args & 7
-            flags = self.peer_irq_flags if peer else self.irq_flags
-
-            eff_delay = delay * (self.clkdiv if self.clkdiv > 0 else 1)
-
-            if (self.pau_cfg & (1 << 3)) and len(self.pau_tx_queue) > 0 and not clear:
-                inst_stalled = True
-                self.stalled = True
-                self.stall_reason = "PAU_BUSY"
-                self.stall_info = {
-                    "peer": peer,
-                    "idx": idx,
-                    "wait": wait,
-                    "delay": eff_delay,
-                    "next_pc": default_next_pc,
-                }
-            else:
-                if clear:
-                    flags[idx] = False
-                else:
-                    flags[idx] = True
-                    if wait:
-                        inst_stalled = True
-                        self.stalled = True
-                        self.stall_reason = "IRQ"
-                        self.stall_info = {
-                            "peer": peer,
-                            "idx": idx,
-                            "delay": eff_delay,
-                            "next_pc": default_next_pc,
-                        }
-
-        elif opcode == OP_SET:
-            dest = (args >> 5) & 7
-            val = args & 0x1F
-
-            if dest == 0:  # PINS
-                set_mask = ((1 << self.set_count) - 1) & 0x1F
-                mask = (set_mask << (self.set_base & 7)) & 0xFF
-                self.gpio_out = ((self.gpio_out & ~mask) | ((val << (self.set_base & 7)) & mask)) & 0xFF
-                self._apply_open_drain()
-                if (self.pau_cfg & 1) and val in (1, 2):
-                    self.pau_nrzi_state = val
-                    self.pau_ones_count = 0
-                if self.pau_cfg & (1 << 3):
-                    self.pau_tx_queue.clear()
-            elif dest == 1:  # X
-                self.x = val & 0xFFFF
-            elif dest == 2:  # Y
-                self.y = val & 0xFFFF
-            elif dest == 3:  # CLKDIV / PRESCALER
-                self.clkdiv = val if val > 0 else 1
-            elif dest == 4:  # TIMEOUT_VAL
-                self.timeout_val = val
-                self.timeout_counter = val
+                self.timeout_val = self.timeout_counter = val
                 self.timeout_flag = False
-            elif dest == 5:  # PAU_BAUD
-                # Undefined while pau_tx_queue is non-empty (ISA.md, Constraints):
-                # queued samples keep the old half-period here, RTL re-times them.
+            elif dest == 6:
                 self.pau_baud = val
-            elif dest == 6:  # PINDIRS
-                set_mask = ((1 << self.set_count) - 1) & 0x1F
-                mask = (set_mask << (self.set_base & 7)) & 0xFF
-                self.pindirs = ((self.pindirs & ~mask) | ((val << (self.set_base & 7)) & mask)) & 0xFF
-            elif dest == 7:  # PAU_CFG
-                self.pau_cfg = val
-                if not (val & (1 << 3)):
-                    self.pau_tx_queue.clear()
-
-        # Update control state
-        if not inst_stalled:
-            eff_delay = delay * (self.clkdiv if self.clkdiv > 0 else 1)
-            if eff_delay > 0:
-                self.delay_counter = eff_delay
-                self._stage_next_pc = next_pc
             else:
-                self.pc = next_pc
+                self._set_pau_ctl(val)
 
-        self.prev_gpio_in = self.gpio_in & 0xFF
-        row = self._format_trace_row(trace_pc, self._current_instr_str)
-        self.history.append(row)
+        self._finish(delay, next_pc)
+
+    # ------------------------------------------------------------------ traces
 
     def _format_trace_row(self, pc: int, instr_str: str) -> str:
-        """Format the cycle's execution state into a fixed-width row."""
-        stall_str = "1" if self.stalled else "0"
-        return (
-            f"{self.cycle_count:4d} | "
-            f"{pc:2d} | "
-            f"{instr_str:<18} | "
-            f"{self.delay_counter:3d} | "
-            f"0x{self.x:04x} | "
-            f"0x{self.y:04x} | "
-            f"0x{self.osr:04x} | "
-            f"0x{self.isr:04x} | "
-            f"  0x{self.gpio_in:02x} | "
-            f"   0x{self.gpio_out:02x} | "
-            f"{stall_str:^5}"
-        )
+        return (f"{self.cycle_count:4d} | {pc:2d} | {instr_str:<18} | {self.delay_counter:3d} | "
+                f"0x{self.x:04x} | 0x{self.y:04x} | 0x{self.osr:04x} | 0x{self.isr:04x} | "
+                f"  0x{self.gpio_in:02x} |    0x{self.pins:02x} | {'1' if self.stalled else '0':^5}")
 
     def get_trace_row(self, cycle: int | None = None) -> str:
-        """Return the most recently formatted trace row (or current state)."""
+        """Most recent trace row (or the current state)."""
         if self.history:
             return self.history[-1]
-        word = self.memory[self.pc] & 0xFFFF
-        instr_str = disassemble(word, self.side_set_count, self.side_set_opt)
-        return self._format_trace_row(self.pc, instr_str)
+        instr = disassemble(self.memory[self.pc], self.side_set_count, self.side_set_opt)
+        return self._format_trace_row(self.pc, instr)
 
     def get_trace_table(self, last_n: int = 15) -> str:
-        """Return a compact rolling window trace table (e.g., last 15 cycles)."""
-        lines = [HEADER, SEPARATOR]
-        rows = list(self.history)[-last_n:]
-        lines.extend(rows)
-        return "\n".join(lines)
+        """Compact rolling window trace table."""
+        return "\n".join([HEADER, SEPARATOR] + list(self.history)[-last_n:])
 
     def run(self, max_cycles: int = 1000) -> int:
-        """Run execution until stalled or max_cycles reached. Returns cycles run."""
+        """Run until stalled or max_cycles reached. Returns cycles run."""
         for _ in range(max_cycles):
             self.step()
             if self.stalled:
@@ -910,24 +834,20 @@ class StateMachine:
 
 def main() -> None:
     """CLI entry point for emu.py."""
-    parser = argparse.ArgumentParser(description="openPIO Minimal Emulator")
+    parser = argparse.ArgumentParser(description="openPIO emulator (ISA v2)")
     parser.add_argument("input", help="Binary (.bin) or Assembly (.asm) file")
     parser.add_argument("-c", "--cycles", type=int, default=32, help="Number of cycles to run")
     args = parser.parse_args()
-
     if args.input.endswith(".asm"):
         with open(args.input, "r", encoding="utf-8") as f:
             prog = asm.assemble(f.read())
     else:
         with open(args.input, "rb") as f:
             data = f.read()
-            count = len(data) // 2
-            prog = list(struct.unpack(f"<{count}H", data[:count * 2]))
-
+        prog = list(struct.unpack(f"<{len(data) // 2}H", data[:len(data) // 2 * 2]))
     sm = StateMachine(prog)
     for _ in range(args.cycles):
         sm.step()
-
     print(sm.get_trace_table(args.cycles))
 
 

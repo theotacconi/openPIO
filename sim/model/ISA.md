@@ -17,9 +17,9 @@ differ only in their least significant bit.
 | `001` | JMP, target 32..63 | |
 | `010` | IN | IN / OUT: opposite |
 | `011` | OUT | |
-| `100` | reserved (NOP), to be assigned with PAU v2 | |
-| `101` | IRQ, PUSH / PULL, WAIT | events and FIFOs |
-| `110` | ALU | ALU / SET: write a register from a register / a constant |
+| `100` | ALU, operations 0..3 | ALU: bit 13 is operation bit 2 |
+| `101` | ALU, operations 4..7 | |
+| `110` | IRQ, PUSH / PULL, WAIT, PAU action | control / constants |
 | `111` | SET | |
 
 Reserved encodings execute as a NOP: delay and side-set apply, nothing else changes.
@@ -42,7 +42,7 @@ a write is discarded.
 
 | Code | Operand | IN src | OUT dest | ALU src | ALU dest |
 |---|---|---|---|---|---|
-| `000` | PINS | pins from `in_base` | pins from `out_base`, through the PAU | `gpio_in` | `gpio_out` |
+| `000` | PINS | pins from `in_base`, or the PAU RX | pins from `out_base`, or the PAU TX | `gpio_in` | `gpio_out` |
 | `001` | PINDIRS | - | pindirs from `out_base` | pindirs | pindirs |
 | `010` | X | X | X | X | X |
 | `011` | Y | Y | Y | Y | Y |
@@ -80,33 +80,56 @@ Target = `{A, A4..A0}` (0..63). The condition is evaluated on the state before t
 ```
 
 `count` 1..15 bits, 0 = 16. Shift directions and thresholds: MISC (see Per-SM configuration).
+In time order the bits of a `count`-bit value go from bit 0 up when shifting right, from bit
+`count - 1` down when shifting left (this order applies to the PAU queues).
 
 - **IN**: shifts `count` bits of the source into the ISR; `isr_count += count` (max 16).
+  IN PINS reads the PAU RX queue instead of the pins while the PAU receiver is on (see PAU).
   - Auto (autopush): then, if `isr_count >= push threshold`, pushes the ISR to the RX FIFO
     (ISR and count cleared); on a full RX FIFO it stalls until there is room, then pushes.
 - **OUT**: shifts `count` bits out of the OSR into the destination; `osr_count += count`
-  (max 16). OUT PC jumps to the low 6 bits. OUT PINS goes through the PAU (see PAU).
+  (max 16). OUT PC jumps to the low 6 bits. OUT PINS feeds the PAU TX queue instead of the
+  pins while the PAU transmitter is on.
   - Auto (autopull): if `osr_count >= pull threshold` when the OUT issues, it stalls until the
     TX FIFO has a word, loads it into the OSR (count cleared) and issues again on the next
     strobe. After the shift, if `osr_count >= pull threshold` and the TX FIFO has a word, the
     OSR is reloaded in the same strobe, so a fed stream runs without gaps.
 
-## IRQ / PUSH / PULL / WAIT `101`
+## ALU `10O`
 
 ```
- 1   0   1 | delay / side-set | Type (2) | arguments (6)
+ 1   0   O2 | delay / side-set | Dest (3) | O1  O0 | Src (3)
 ```
 
-| Type | Instruction | Arguments [5:0] |
-|---|---|---|
-| `00` | IRQ | Clear, Wait, Peer, Index (3) |
-| `01` | PUSH / PULL | Dir, Block, IfCond, `000` |
-| `10` | WAIT | Pol, Edge, T_EN, `0`, Slot (2) |
-| `11` | reserved (NOP) | |
+Dest and Src are operand codes, the operation is `{O2, O1, O0}`. `D` is the destination's
+value (0 for COND).
+
+| Op | Operation | Result | Pair |
+|---|---|---|---|
+| `000` | MOV | Src | copy: straight / bit-reversed |
+| `001` | REV | Src bit-reversed (16 bits) | |
+| `010` | AND | D & Src | |
+| `011` | OR | D \| Src | |
+| `100` | XOR | D ^ Src | `xnor d, null` = NOT d |
+| `101` | XNOR | ~(D ^ Src) | |
+| `110` | ADD | D + Src (16 bits, no carry) | |
+| `111` | SUB | D - Src (16 bits, no borrow) | |
+
+## Control `110`
+
+```
+ 1   1   0 | delay / side-set | Type (2) | arguments (6)
+```
+
+| Type | Instruction | Arguments [5:0] | Pair |
+|---|---|---|---|
+| `00` | IRQ | Clear, Wait, Peer, Index (3) | flags / FIFOs |
+| `01` | PUSH / PULL | Dir, Block, IfCond, `000` | |
+| `10` | WAIT | Pol, Edge, T_EN, `0`, Slot (2) | wait / PAU |
+| `11` | PAU action | Action (2), `0000` | |
 
 **IRQ**: `Clear` = 1 clears the flag, 0 sets it; `Wait` = 1 then stalls until the flag is
-cleared; `Peer` = 1 selects the peer flag bank. Setting a flag while the Manchester TX queue is
-not empty first stalls until it drains (PAU_BUSY).
+cleared; `Peer` = 1 selects the peer flag bank.
 
 **PUSH / PULL**: `Dir` = 0 PUSH (ISR to RX FIFO, ISR and count cleared), 1 PULL (TX FIFO to
 OSR, count cleared). `Block` = 1 stalls on a full RX / empty TX FIFO. Non-blocking: PUSH on a
@@ -119,20 +142,7 @@ full FIFO drops the word (ISR still cleared); PULL on an empty FIFO copies X int
 since the previous strobe. With `T_EN` the stall also ends after TIMEOUT_VAL strobes, setting
 the timeout flag (cleared when a timed WAIT issues).
 
-## ALU `110`
-
-```
- 1   1   0 | delay / side-set | Dest (3) | Op (2) | Src (3)
-```
-
-Dest and Src are operand codes. `D` is the destination's value (0 for COND).
-
-| Op | Operation | Result | Pair |
-|---|---|---|---|
-| `00` | MOV | Src | one operand: straight / reversed |
-| `01` | REV | Src bit-reversed (16 bits) | |
-| `10` | XOR | D ^ Src | two operands |
-| `11` | ADD | D + Src (16 bits, no carry) | |
+**PAU action** (see PAU): `00` CRC reset, `01` CRC append, `10` TX abort, `11` reserved.
 
 ## SET `111`
 
@@ -148,8 +158,8 @@ Dest and Src are operand codes. `D` is the destination's value (0 for COND).
 | `011` | Y | Y = Value | |
 | `100` | CLKDIV | integer divider = Value (0, 1 = 1x) | timing |
 | `101` | TIMEOUT_VAL | WAIT timeout = Value strobes; clears the timeout flag | |
-| `110` | PAU_BAUD | PAU half-period, in strobes | PAU |
-| `111` | PAU_CFG | PAU engines (see PAU) | |
+| `110` | PAU_BAUD | PAU half-bit period = Value strobes (0 = 32) | PAU |
+| `111` | PAU_CTL | PAU control: [0] TX, [1] RX, [2] stuffing, [3] CRC, [4] 0 | |
 
 ## Conditions
 
@@ -170,20 +180,22 @@ The condition is the selected signal, inverted when `Inv` = 1.
 | `011` | peer IRQ flag | 0..7 | |
 | `100` | bit of X | 0..15 | registers |
 | `101` | bit of Y | 0..15 | |
-| `110` | SM status | see below | status |
-| `111` | PAU status | defined with PAU v2; reads 0 | |
+| `110` | SM status | below | status |
+| `111` | PAU status | below | |
 
-| Index | SM status | Pair |
-|---|---|---|
-| 0 | X == 0 | X / Y |
-| 1 | Y == 0 | |
-| 2 | X == Y | |
-| 3 | timeout flag | |
-| 4 | OSR empty (`osr_count >= pull threshold`) | shift registers |
-| 5 | ISR full (`isr_count >= push threshold`) | |
-| 6 | TX FIFO empty | FIFOs |
-| 7 | RX FIFO full | |
-| 8..15 | 0 (reserved) | |
+| Index | SM status | PAU status | Pair |
+|---|---|---|---|
+| 0 | X == 0 | TX idle: queue empty, last bit sent, pins released if TX is off | X / Y; TX / RX |
+| 1 | Y == 0 | RX idle: no input edge for 2 bit times | |
+| 2 | X == Y | TX queue has room for 16 bits | |
+| 3 | timeout flag | RX queue not empty | |
+| 4 | OSR empty (`osr_count >= pull threshold`) | CRC == CRC_RES | shift registers; CRC |
+| 5 | ISR full (`isr_count >= push threshold`) | CRC == 0 | |
+| 6 | TX FIFO empty | stuff error (sticky) | FIFOs; RX errors |
+| 7 | RX FIFO full | RX overrun (sticky) | |
+| 8 | 0 | SE0: pins `in_base`, `in_base + 1` both low | line states |
+| 9 | 0 | SE1: both high | |
+| 10..15 | 0 | 0 | |
 
 **Edges.** Each strobe the SM keeps the four condition values; a WAIT edge compares them with
 the current ones. The first strobe after a slot is rewritten compares against the old
@@ -199,8 +211,8 @@ definition's value.
 
 - The host writes COND_CFG. CTRL.RESET copies COND_CFG into COND; a host write alone does not
   change COND.
-- The program writes COND with `ALU dest COND` (MOV / REV / XOR / ADD of the source with D = 0).
-  The new condition applies from the next instruction.
+- The program writes COND with `ALU dest COND` (result computed with D = 0). The new condition
+  applies from the next instruction.
 - Chip reset values (COND_CFG and COND), the conditions of ISA v1:
 
 | Slot | Reset value | Condition |
@@ -212,20 +224,92 @@ definition's value.
 
 ## PAU (Protocol Acceleration Unit)
 
-To be revised in PAU v2. Current engines, selected by PAU_CFG on OUT PINS:
+A serial transmitter and receiver between OUT / IN PINS and the pins, with its own bit timing,
+line coding, bit stuffing and CRC. The program feeds and drains bits; the PAU keeps the line
+timing exact.
 
-| PAU_CFG bit | Engine |
+```
+ OUT PINS -> TX queue (32 bits) -> stuffing -> line encoder -> pin out_base (+1)
+ IN PINS  <- RX queue (32 bits) <- destuffing <- decoder, clock recovery <- pin in_base (+1)
+                 CRC: data bits, before stuffing / after destuffing
+```
+
+### Configuration
+
+Protocol parameters, written by the host (MODE also gives the reset value of PAU_BAUD):
+
+| Register | Field | Meaning |
+|---|---|---|
+| PAU_MODE | [1:0] ENC | line code: `00` NRZ, `01` NRZI, `10` Manchester, `11` biphase mark |
+| | [2] INV | invert the line (TX pin and RX input) |
+| | [3] DIFF | TX also drives `out_base + 1` with the complement |
+| | [7:4] STUFF_LEN | run length before a stuffed bit, 1..15 (0 = 16) |
+| | [9:8] STUFF_MODE | `00` after LEN 1s insert 0, `01` after LEN 0s insert 1, `10` after LEN equal bits insert the complement, `11` reserved |
+| | [14:10] BAUD | PAU_BAUD after CTRL.RESET |
+| CRC_CFG | [4:0] | CRC width - 1 (1..32 bits) |
+| | [5] | initial value all ones (0: all zeros) |
+| | [6] | CRC append sends the complement |
+| CRC_POLY | 32 bits | polynomial, without the x^width term (two 16-bit registers) |
+| CRC_RES | 32 bits | value of a correct received frame, for the CRC == CRC_RES status |
+
+The program controls the PAU with SET PAU_BAUD, SET PAU_CTL and the PAU actions:
+
+- **PAU_BAUD** = H: a half-bit lasts H strobes, a bit 2H. A new value applies from the next
+  half-bit.
+- **PAU_CTL**:
+  - [0] TX on: OUT PINS feeds the TX queue and the PAU drives pin `out_base` (and
+    `out_base + 1` with DIFF) instead of `gpio_out`. Turning it on starts the encoder from the
+    pin's current level. Turning it off drains: the queued bits are still sent and the pins
+    return to `gpio_out` at the end of the last one (turning it on again before that continues
+    the stream).
+  - [1] RX on: turning it on clears the RX queue, the decoder and the sticky errors, and arms
+    the decoder for the first input edge.
+  - [2] stuffing: TX bits queued while it is on are stuffed (a stuffed bit owed after the last
+    of them is still sent); RX removes stuffed bits while it is on.
+  - [3] CRC: feed the CRC with the data bits of TX (when TX is on) or else of RX.
+- **CRC reset**: CRC = initial value. **CRC append**: queues the CRC (width bits, MSB first,
+  complemented if configured) to TX; while the queue has no room it issues again every strobe.
+  Appended bits do not feed the CRC and are stuffed like data.
+- **TX abort**: discards the TX queue and the bit in progress; the pins return to `gpio_out`
+  now and TX is off.
+
+### Transmitter
+
+OUT PINS with TX on appends its `count` bits to the TX queue in time order; while the queue has
+no room for them it does nothing and issues again every strobe. With CRC on, the bits update the CRC as they are queued.
+Every bit time the transmitter takes the next queued bit, or a stuffed bit, and drives it:
+
+| ENC | Line during a bit b (before INV) |
 |---|---|
-| 0 | NRZI encode on pins `out_base`, `out_base + 1` (J = 01, K = 10) |
-| 1 | USB bit-stuffing (with bit 0): a toggle after six consecutive 1s |
-| 2 | reserved (parity) |
-| 3 | Manchester TX on pin `out_base`: each bit is PAU_BAUD strobes of b then of ~b |
-| 4 | reserved (Manchester RX) |
+| NRZ | b for the whole bit |
+| NRZI | toggles at the start of the bit when b = 0, holds when b = 1 |
+| Manchester | ~b for the first half, b for the second (IEEE 802.3: 1 = rising edge) |
+| Biphase mark | toggles at the start of every bit, and in the middle when b = 1 |
 
-Manchester TX has priority over NRZI. OUT PINS stalls (PAU_TX) while more than one symbol is
-queued. SET PINS resets the NRZI state on J / K and flushes the Manchester queue, as does
-SET PAU_CFG without bit 3. Known v1 defect: the stuffed toggle takes the time slot of the next
-data bit instead of an extra bit time.
+With an empty queue the line holds its level; the next bit starts on the next half-bit.
+
+Stuffing counts the stuffed-while-queued data bits sent (and stuffed bits, in mode `10`); after
+STUFF_LEN qualifying bits the transmitter sends one stuffed bit, in its own bit time, and
+restarts the count. A bit queued with stuffing off restarts the count. USB: NRZI, mode `00`, LEN 6. CAN: NRZ, mode `10`, LEN 5. HDLC: NRZI, mode `00`, LEN 5.
+
+### Receiver
+
+With RX on the receiver samples pin `in_base` (synchronized, INV applied) every strobe. Times
+below are in strobes since the reference edge; H = PAU_BAUD.
+
+| ENC | Bit recovery |
+|---|---|
+| NRZ, NRZI | every input edge restarts the bit timer; the line is sampled H after it and then every 2H. NRZ bit = sample; NRZI bit = 1 when the sample equals the previous one (the first is compared with the level at RX on). |
+| Manchester | the first edge after RX on is a mid-bit edge. Each mid-bit edge gives a bit: rising = 1. Edges before 1.5H are bit boundaries and ignored; the next mid-bit edge must come by 2.5H, else the decoder re-arms for a new first edge. |
+| Biphase mark | the first edge after RX on is a bit boundary. An edge between 0.5H and 1.5H is a mid-bit edge (bit = 1); the next boundary edge, between 1.5H and 2.5H, ends the bit (bit = 0 without a mid-bit edge). No boundary by 2.5H also ends it (the last bit of a frame) and re-arms the decoder. |
+
+Destuffing (stuffing on) drops the bit that follows STUFF_LEN qualifying bits; when that bit is
+not the expected stuffed value the stuff error flag is set and the bit is kept. NRZ and NRZI
+keep sampling an idle line: the program frames the data, e.g. it checks the CRC status right
+after taking the last bit of the frame. Bits then feed
+the CRC (CRC on, TX off) and enter the RX queue; a bit arriving at a full queue is dropped and
+sets RX overrun. IN PINS with RX on takes `count` bits from the queue (oldest first in time order); while fewer
+are queued it does nothing and issues again every strobe.
 
 ## Per-SM configuration (host)
 
@@ -234,38 +318,38 @@ Independent of the instruction stream, written over SPI (docs/info.md):
 - wrap_bottom / wrap_top (6 bits each; after wrap_top the PC continues at wrap_bottom);
 - side-set: count, opt, pindirs, base; in_base, out_base, set_base, set_count;
 - MISC: ISR / OSR shift direction, push threshold and pull threshold (4 bits each, 0 = 16);
-- open-drain mask; CLKDIV integer and fraction; COND_CFG.
+- open-drain mask; CLKDIV integer and fraction; COND_CFG; PAU_MODE, CRC_CFG, CRC_POLY,
+  CRC_RES.
 
 ## Constraints
 
-- **PAU_BAUD during Manchester TX is undefined.** Writing `PAU_BAUD` while the Manchester TX
-  engine (`PAU_CFG[3]`) still has samples queued for the pin is an illegal condition. The timing
-  of the remaining queued half-periods is undefined: `emu.py` keeps the samples already expanded
-  at the old baud, `src/pau.v` re-times them with the new value. Firmware must let the queue
-  drain first (e.g. an `IRQ` set, which stalls until the queue is empty) before changing
-  `PAU_BAUD`.
 - **IMEM writes require `CTRL.EN = 0`.** The host must clear `CTRL.EN` before rewriting any IMEM
   word and may set it again only after the last write. The hardware fetches the next instruction
   one clock ahead (synchronous IMEM read), so a word rewritten while the state machine runs can
   execute once with its old contents, whereas `emu.py` always reads the current memory.
   Behaviour of IMEM writes with `CTRL.EN = 1` is undefined.
+- **PAU receiver timing needs H >= 2** for Manchester and biphase mark (edge windows of H / 2).
 
 ## Changes from ISA v1
 
 - 64-word IMEM, 6-bit PC, wrap and OUT PC; JMP on opcodes `000` / `001`.
-- WAIT `001` -> `101` Type `10`, on a programmable condition (v1: GPIO pin, `in_base` pin, IRQ,
-  peer IRQ, all available as condition sources); PUSH / PULL `100` -> `101` Type `01`;
-  IRQ `110` -> `101` Type `00` (arguments moved down by two bits); ALU `101` -> `110`;
-  opcode `100` reserved.
+- ALU on opcodes `100` / `101` with 8 operations (v1: MOV, XOR, ADD, REV on `101`).
+- Control opcode `110`: IRQ (v1 `110`, arguments moved down by two bits), PUSH / PULL (v1 `100`),
+  WAIT (v1 `001`, now on a programmable condition: GPIO pin, `in_base` pin, IRQ and peer IRQ are
+  condition sources), PAU actions.
 - Operand codes: PINDIRS `110` -> `001`, X `001` -> `010`, Y `010` -> `011`, NULL `011` -> `110`,
   OUT PC and ALU COND on `111`; ALU PINS / PINDIRS as source and destination; ALU source
   STATUS (always 0 in v1) removed.
 - IN / OUT bit 4: autopush / autopull; MISC push / pull thresholds (v1: fixed 16), also used by
   IfCond and the OSR empty / ISR full conditions.
-- ALU operations: REV `11` -> `01`, XOR `01` -> `10`, ADD `10` -> `11`.
 - SET: PINDIRS `110` -> `001`, X / Y as operands, CLKDIV `011` -> `100`, TIMEOUT_VAL `100` -> `101`,
-  PAU_BAUD `101` -> `110`.
+  PAU_BAUD `101` -> `110` (now a half-bit period), PAU_CFG -> PAU_CTL.
 - JMP conditions: `!x`, `!y`, `timeout`, `pin`, `!osre` become programmable (COND0..3, reset
   values as v1 except `timeout`); `never` added; Y-- `100` -> `011`. The MISC `jmp_pin` field is
   replaced by COND_CFG slot 2.
+- PAU v2: own bit timing, TX and RX, NRZ / NRZI / Manchester / biphase mark, programmable
+  stuffing and CRC (up to 32 bits; parity is a 1-bit CRC with polynomial 1). v1 had TX-only
+  NRZI with a stuffing toggle that took a data bit's time slot (a defect) and a Manchester TX
+  queue; IRQ no longer waits for the PAU (PAU_BUSY): WAIT on PAU status TX idle instead.
 - Delay always scaled by CLKDIV (v1: not after a WAIT / PUSH / PULL stall).
+- After CTRL.RESET the OSR is empty (`osr_count` = 16; v1: 0, a full OSR of zeros).
