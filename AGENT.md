@@ -47,7 +47,7 @@
 * `src/`: synthesizable Verilog-2001 source files (`alu.v`, `shifter.v`, `imem.v`, `openpio_core.v`, etc.).
 * `sim/model/`: authoritative golden reference model (`emu.py`), reference assembler (`asm.py`), and frozen specification (`ISA.md`).
 * `test/`: cocotb testbenches, test runners, and lockstep co-simulation wrappers.
-* `agents/`: verified reference protocol firmware programs (`*.asm`), test harnesses, and validation reports.
+* `programs/`: protocol programs (`*.asm`), each with a test judged by the reference devices of `test/shared/`; `programs/README.md` is generated from the results by `programs/report.py`.
 * `info.yaml`: Tiny Tapeout configuration, pin multiplexing, and top-level tile declarations.
 * `prompts/`: architectural prompts, multi-agent orchestrator templates, and specs.
 
@@ -57,6 +57,6 @@ Before considering any task or module complete, you must:
 
 1. Run standard linting and syntax checking via Yosys (`hierarchy -check`, `check -assert`). Ensure 0 synthesis warnings regarding inferred latches or multi-driven nets.
 2. Verify module output against `sim/model/emu.py` with randomized input vectors.
-3. When modifying core datapath or execution logic, re-run all 14 reference protocol test suites (`agents/*/test_*.py`) to guarantee zero regressions.
+3. When modifying the model, the ISA or execution logic, re-run `test/model/*.py` and `programs/report.py` (all protocol tests) to guarantee zero regressions. A program is judged only by the pins and the data it exchanges with the host, never by the emulator's internal state.
 4. Ensure IMEM dual-port memory semantics remain respected: 1-cycle synchronous read latency with zero-cycle combinatorial next-PC feedforward.
 5. Create a descriptive, scoped git commit once verification passes.

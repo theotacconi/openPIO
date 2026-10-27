@@ -8,7 +8,7 @@ on:
       - 'src/**'
       - 'test/**'
       - 'sim/model/**'
-      - 'agents/**'
+      - 'programs/**'
       - '.github/workflows/test.yaml'
   workflow_dispatch:
 

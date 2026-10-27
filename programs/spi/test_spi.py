@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """SPI master (one program, 4 modes) judged by the reference SPI slave: random words both ways,
-SCK idle level, MOSI setup and hold around every sampling edge, pins really driven."""
+CS_N around each word, SCK idle level, MOSI setup and hold around every sampling edge."""
 import random
 import sys
 import unittest

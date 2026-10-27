@@ -8,7 +8,6 @@ on:
       - 'sim/model/**'
       - 'test/model/**'
       - 'test/shared/**'
-      - 'agents/**'
       - 'programs/**'
       - '.github/workflows/model.yaml'
   workflow_dispatch:
@@ -32,5 +31,7 @@ jobs:
           python3 test/model/test_chip.py
           (cd test/shared && python3 test_devices.py)
 
-      - name: Protocol programs
-        run: for t in programs/*/test_*.py agents/*/test_*.py; do python3 "$t" || exit 1; done
+      - name: Protocol programs and their table
+        run: |
+          python3 programs/report.py
+          git diff --exit-code programs/README.md   # the committed table must match the tests

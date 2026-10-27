@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""UART programs judged on the pins by the reference UART devices (test/shared/devices.py):
-random bytes, back to back, at integer and fractional clock dividers."""
+"""UART transmitter and receiver judged by the reference UART devices: random bytes back to
+back; TX at integer and fractional dividers (bit edges on time), RX with a transmitter 3 % fast
+or slow and with framing errors."""
 import random
 import sys
 import unittest
