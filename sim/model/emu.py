@@ -1,6 +1,6 @@
 """emu.py - Cycle-accurate emulator of one openPIO state machine, ISA v2 (ISA.md).
 
-step() is one clock. On a strobe (see CLKDIV), in order: the PAU advances (TX line, RX
+step() is one clock. On a strobe (every Nth clock, CLKDIV), in order: the PAU advances (TX line, RX
 sampling), then the SM delays, re-evaluates a stall, or executes the instruction at PC; at the
 end the condition values are kept for WAIT edges. Traces are concise fixed-width rows.
 """
@@ -233,14 +233,6 @@ class StateMachine:
         self.bus.od_mask = val & 0xFF
 
     @property
-    def clkdiv(self) -> int:
-        return self.clkdiv_int
-
-    @clkdiv.setter
-    def clkdiv(self, val: int) -> None:
-        self.clkdiv_int = val if val > 0 else 1
-
-    @property
     def clkdiv_frac(self) -> int:
         return self._clkdiv_frac
 
@@ -316,6 +308,7 @@ class StateMachine:
         self.timeout_flag = False
         self.cond = list(self.cond_cfg)
         self.clkdiv_int, self._clkdiv_frac = self.clkdiv_cfg_int, self.clkdiv_cfg_frac
+        self.dlymul = 1
         self.clkdiv_counter = self.clkdiv_accum = self._current_clkdiv_period = 0
         self.cycle_count = 0
         self.history.clear()
@@ -700,7 +693,7 @@ class StateMachine:
         opcode, args = word >> 13, word & 0xFF
         delay, side_val = self._decode_delay_sideset((word >> 8) & 0x1F)
         self._apply_sideset(side_val)
-        delay *= self.clkdiv_int
+        delay *= self.dlymul
 
         next_pc = self.wrap_bottom if self.pc == self.wrap_top else (self.pc + 1) % IMEM_WORDS
 
@@ -875,7 +868,7 @@ class StateMachine:
             elif dest == 3:
                 self.y = val
             elif dest == 4:
-                self.clkdiv = val
+                self.dlymul = val or 1
             elif dest == 5:
                 self.timeout_val = self.timeout_counter = val
                 self.timeout_flag = False

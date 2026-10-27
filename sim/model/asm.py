@@ -54,9 +54,9 @@ del ALU_SRC["cond"]
 
 ALU_OPS = ["mov", "rev", "and", "or", "xor", "xnor", "add", "sub"]
 
-SET_DEST = {"pins": 0, "pindirs": 1, "x": 2, "y": 3, "clkdiv": 4, "prescaler": 4,
+SET_DEST = {"pins": 0, "pindirs": 1, "x": 2, "y": 3, "dlymul": 4,
             "timeout_val": 5, "timeout": 5, "pau_baud": 6, "baud": 6, "pau_ctl": 7}
-REV_SET_DEST = ["pins", "pindirs", "x", "y", "clkdiv", "timeout_val", "pau_baud", "pau_ctl"]
+REV_SET_DEST = ["pins", "pindirs", "x", "y", "dlymul", "timeout_val", "pau_baud", "pau_ctl"]
 PAU_CTL_FLAGS = {"tx": 1, "rx": 2, "stuff": 4, "crc": 8}
 
 PAU_ACTIONS = {"crc_reset": 0, "crc_append": 1, "tx_abort": 2}

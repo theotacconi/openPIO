@@ -1,7 +1,7 @@
 # openPIO ISA v2
 
 Each state machine (SM) executes 16-bit instructions from its own 64-word instruction memory,
-one instruction per strobe (see CLKDIV). The chip has an even number of SMs sharing the pins
+one instruction per strobe: CLKDIV (host, HOST.md) makes every Nth clock a strobe. The chip has an even number of SMs sharing the pins
 (see Multiple state machines); the host interface is in HOST.md. Encoding rule: codes of similar
 or opposite operations differ only in their least significant bit.
 
@@ -34,7 +34,7 @@ n (+1 if opt) bits are side-set and the rest is the delay:
   `side_set_pindirs`) when the instruction issues, before it executes. With opt, the field's
   MSB enables it.
 - **Delay**: after the instruction completes (after its stall, if it stalls), the SM idles
-  `delay x CLKDIV` strobes.
+  `delay x DLYMUL` strobes (DLYMUL: SET `100`, 1 after reset).
 
 ## Operand codes
 
@@ -160,7 +160,7 @@ the timeout flag (cleared when a timed WAIT issues).
 | `001` | PINDIRS | pindirs `set_base`.. = Value | |
 | `010` | X | X = Value (zero-extended) | X / Y |
 | `011` | Y | Y = Value | |
-| `100` | CLKDIV | integer divider = Value (0, 1 = 1x) | timing |
+| `100` | DLYMUL | delay multiplier = Value (0 = 1); does not change the strobe rate | timing |
 | `101` | TIMEOUT_VAL | WAIT timeout = Value strobes; clears the timeout flag | |
 | `110` | PAU_BAUD | PAU half-bit period = Value strobes (0 = 32) | PAU |
 | `111` | PAU_CTL | PAU control: [0] TX, [1] RX, [2] stuffing, [3] CRC, [4] 0 | |
@@ -358,7 +358,8 @@ the shift counts.
   STATUS (always 0 in v1) removed.
 - IN / OUT bit 4: autopush / autopull; MISC push / pull thresholds (v1: fixed 16), also used by
   IfCond and the OSR empty / ISR full conditions.
-- SET: PINDIRS `110` -> `001`, X / Y as operands, CLKDIV `011` -> `100`, TIMEOUT_VAL `100` -> `101`,
+- SET: PINDIRS `110` -> `001`, X / Y as operands, DLYMUL on `100` (v1 SET CLKDIV `011` changed the
+  strobe divider and scaled delays at once), TIMEOUT_VAL `100` -> `101`,
   PAU_BAUD `101` -> `110` (now a half-bit period), PAU_CFG -> PAU_CTL.
 - JMP conditions: `!x`, `!y`, `timeout`, `pin`, `!osre` become programmable (COND0..3, reset
   values as v1 except `timeout`); `never` added; Y-- `100` -> `011`. The MISC `jmp_pin` field is
@@ -367,7 +368,8 @@ the shift counts.
   stuffing and CRC (up to 32 bits; parity is a 1-bit CRC with polynomial 1). v1 had TX-only
   NRZI with a stuffing toggle that took a data bit's time slot (a defect) and a Manchester TX
   queue; IRQ no longer waits for the PAU (PAU_BUSY): WAIT on PAU status TX idle instead.
-- Delay always scaled by CLKDIV (v1: not after a WAIT / PUSH / PULL stall).
+- Delays count strobes times DLYMUL; CLKDIV only divides the strobe rate (v1: delays were scaled
+  by CLKDIV too, except after a WAIT / PUSH / PULL stall).
 - After CTRL.RESET the OSR is empty (`osr_count` = 16; v1: 0, a full OSR of zeros).
 - STATUS as IN / ALU source `111`; PUSH / PULL `Peer`; several SMs with shared pins, PIN_MASK
   and chip-level open drain (v1: one SM, open drain rewrote its pindirs).

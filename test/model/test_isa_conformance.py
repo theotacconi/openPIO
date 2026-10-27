@@ -280,17 +280,22 @@ class Set(unittest.TestCase):
         sm = run(sm_of("set pins, 31\nset pindirs, 5" + HALT, set_base=4, set_count=3), 2)
         self.assertEqual((sm.gpio_out, sm.pindirs), (0x70, 0x50))
 
-    def test_clkdiv_divides_strobes_and_scales_delays(self):
-        # ISA.md: SET CLKDIV sets the integer divider (a strobe every 3 clocks) and a delay
-        # lasts delay x CLKDIV strobes: [2] = 6 strobes = 18 clocks
-        sm = sm_of("set clkdiv, 3\nset x, 1 [2]\nset x, 2" + HALT)
-        clocks = 0
-        while sm.x != 1:
-            sm.step(); clocks += 1
-        start = clocks
-        while sm.x != 2:
-            sm.step(); clocks += 1
-        self.assertEqual(clocks - start, 7 * 3, "6 delay strobes, then the next instruction")
+    def test_dlymul_scales_delays_only(self):
+        sm = sm_of("set dlymul, 3\nset x, 1 [2]\nset x, 2" + HALT)
+        run(sm, 2)
+        self.assertEqual(sm.x, 1)
+        run(sm, 6)
+        self.assertEqual(sm.x, 1, "2 x 3 delay strobes")
+        self.assertEqual(run(sm, 1).x, 2)
+
+    def test_clkdiv_does_not_scale_delays(self):
+        sm = StateMachine(assemble("set x, 1 [2]\nset x, 2" + HALT), clkdiv_int=3)
+        clocks = []
+        for c in range(1, 20):
+            sm.step()
+            if sm.x and len(clocks) < sm.x:
+                clocks.append(c)
+        self.assertEqual(clocks, [3, 12], "a strobe every 3 clocks; [2] = 2 strobes")
 
     def test_pau_baud_zero_is_32(self):
         sm = run(sm_of("set pau_baud, 0" + HALT), 1)
