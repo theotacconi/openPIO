@@ -8,7 +8,7 @@ import random
 import unittest
 
 from bench import Bench, Device
-from devices import CanBus, CanNode, I2cTarget, SpiSlave, UartRx, UartTx, can_crc15
+from devices import WiredAndBus, CanNode, I2cTarget, SpiSlave, UartRx, UartTx, can_crc15
 
 
 class Script(Device):
@@ -163,7 +163,7 @@ class Can(unittest.TestCase):
         b = CanNode(8, send=[(0x122, [0xAA])])            # lower ID: wins arbitration
         c = CanNode(8)
         bench = Bench()
-        bench.add(CanBus([], [], [a, b, c]))
+        bench.add(WiredAndBus([], [], [a, b, c]))
         bench.run(2500)
         self.assertEqual([n.errors for n in (a, b, c)], [[], [], []])
         self.assertEqual(c.frames, [{"id": 0x122, "data": [0xAA], "crc_ok": True},

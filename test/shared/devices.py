@@ -471,7 +471,7 @@ def can_wire(ident: int, data: list[int]) -> list[int]:
 
 
 class CanNode:
-    """Reference CAN node (not a pin device: CanBus clocks it with the bus level).
+    """Reference CAN node (not a pin device: WiredAndBus clocks it with the bus level).
 
     Receives every frame (unstuffing up to the CRC, which it checks) into `frames` as dicts id,
     data, crc_ok, and pulls the ACK slot dominant for good frames of others. Sends its `send`
@@ -569,9 +569,10 @@ class CanNode:
             self._t0, self._idle = None, 0
 
 
-class CanBus(Device):
-    """Wired-AND CAN bus (dominant 0): the chip's TX pins and the reference nodes drive it; the
-    bus level goes to the chip's RX pins one clock later, as through a transceiver."""
+class WiredAndBus(Device):
+    """Wired-AND bus (dominant 0: CAN, LIN): the chip's TX pins and the reference nodes (objects
+    with step(t, bus), tx and errors) drive it; the bus level goes to the chip's RX pins one clock
+    later, as through a transceiver."""
 
     def __init__(self, tx_pins: list[int], rx_pins: list[int], nodes: list[CanNode]) -> None:
         super().__init__()
@@ -826,3 +827,170 @@ class BmcRx(Device):
                 self._bits.append(int(lv != self._first))
                 self._last = lv
         self._prev = lv
+
+
+# ---------------------------------------------------------------------------------- LIN
+
+def lin_pid(ident: int) -> int:
+    """Protected identifier: 6-bit ID with parity P0 = ID0^ID1^ID2^ID4, P1 = !(ID1^ID3^ID4^ID5)."""
+    b = [ident >> i & 1 for i in range(6)]
+    return ident | (b[0] ^ b[1] ^ b[2] ^ b[4]) << 6 | (1 - (b[1] ^ b[3] ^ b[4] ^ b[5])) << 7
+
+
+def lin_checksum(pid: int, data: list[int]) -> int:
+    """Enhanced checksum (LIN 2.x): inverted 8-bit sum with carry of PID and data."""
+    s = pid
+    for d in data:
+        s += d
+        s = (s & 0xFF) + (s >> 8)
+    return ~s & 0xFF
+
+
+class LinSlave:
+    """Reference LIN slave (a node of WiredAndBus). Detects a break (11 dominant bits or more;
+    the master must send 13), then decodes UART bytes in the middle of their bits: sync (0x55),
+    protected ID (parity checked). For an ID in `publish` it sends the data and checksum one bit
+    after the ID; for an ID in `subscribe` (data length) it receives the master's data and checks
+    the checksum. `frames` lists (ID, data, checksum ok)."""
+
+    def __init__(self, bit: int, publish: dict[int, list[int]] = None,
+                 subscribe: dict[int, int] = None) -> None:
+        self.bit = bit
+        self.publish, self.subscribe = publish or {}, subscribe or {}
+        self.tx = 1
+        self.frames: list[tuple[int, list[int], bool]] = []
+        self.errors: list[str] = []
+        self._low = 0                     # dominant clocks in a row
+        self._prev = 1
+        self._state = "idle"              # idle -> bytes after a break
+        self._t0: int | None = None       # start bit of the byte being received
+        self._bytes: list[int] = []
+        self._send: list[tuple[int, int]] = []   # (clock, level)
+
+    def step(self, t: int, bus: int) -> None:
+        while self._send and self._send[0][0] <= t + 1:
+            self.tx = self._send.pop(0)[1]
+        if not bus:
+            self._low += 1
+        else:
+            if self._low >= 11 * self.bit:    # a break just ended
+                if self._low < 13 * self.bit:
+                    self.errors.append(f"t={t}: break of {self._low} clocks, under 13 bits")
+                self._state, self._bytes, self._t0 = "bytes", [], None
+            self._low = 0
+        if self._state == "bytes":
+            if self._t0 is None:
+                if self._prev == 1 and bus == 0:
+                    self._t0, self._samples = t, []
+            elif (t - self._t0) % self.bit == self.bit // 2:
+                self._samples.append(bus)
+                if len(self._samples) == 10:
+                    self._byte(t)
+                    self._t0 = None
+        self._prev = bus
+
+    def _byte(self, t: int) -> None:
+        s = self._samples
+        if s[0] != 0 or s[9] != 1:
+            self.errors.append(f"t={t}: framing")
+        self._bytes.append(sum(b << i for i, b in enumerate(s[1:9])))
+        b = self._bytes
+        if len(b) == 1 and b[0] != 0x55:
+            self.errors.append(f"t={t}: sync {b[0]:#x}")
+        if len(b) == 2:
+            ident = b[1] & 0x3F
+            if lin_pid(ident) != b[1]:
+                self.errors.append(f"t={t}: PID parity {b[1]:#x}")
+            if ident in self.publish:     # respond one bit after the PID's stop bit
+                data = self.publish[ident]
+                start = self._t0 + 10 * self.bit + self.bit
+                for byte in data + [lin_checksum(b[1], data)]:
+                    for lv in [0] + [byte >> i & 1 for i in range(8)] + [1]:
+                        self._send.append((start, lv))
+                        start += self.bit
+                self._expect = len(data) + 1
+            else:
+                self._expect = self.subscribe.get(ident, 0) + 1
+        if len(b) > 2 and len(b) == 2 + self._expect:
+            data, chk = b[2:-1], b[-1]
+            self.frames.append((b[1] & 0x3F, data, chk == lin_checksum(b[1], data)))
+            self._state = "idle"
+
+
+# ---------------------------------------------------------------------------------- PS/2
+
+def ps2_bits(byte: int) -> list[int]:
+    """Start, 8 data bits LSB first, odd parity, stop."""
+    data = [byte >> i & 1 for i in range(8)]
+    return [0] + data + [1 - sum(data) % 2, 1]
+
+
+class Ps2Device(Device):
+    """PS/2 keyboard (open drain on CLK and DATA, times in clocks of 1 us; clock period 80).
+
+    Sends the `keys` bytes: DATA set with CLK high, CLK low from 20 to 60 in each bit, so the host
+    samples on the falling edge. Takes host commands: after the host held CLK low 100 us or more
+    and releases it with DATA low, it clocks 11 pulses, samples the data, parity and stop bits on
+    the rising edges, pulls DATA low in the 11th (ACK), checks odd parity and the stop bit, and
+    answers 0xFA. `received` lists the command bytes. bad_parity: indices of keys sent with a
+    wrong parity bit."""
+
+    def __init__(self, clk: int, data: int, keys: list[int] = (), start: int = 50,
+                 bad_parity: set[int] = frozenset()) -> None:
+        super().__init__()
+        self.clk, self.data = clk, data
+        self.received: list[int] = []
+        self._out: list[tuple[int, dict]] = []   # (clock, drive)
+        self._t = start
+        for i, k in enumerate(keys):
+            self._frame(k, flip=i in bad_parity)
+        self._low = 0                            # clocks the host holds CLK low
+        self._prev = (1, 1)
+        self._rx: list[int] | None = None        # host bits being received
+        self._clocking = False                   # we clock the host's bits
+
+    def _frame(self, byte: int, gap: int = 200, flip: bool = False) -> None:
+        t = max(self._t, self._out[-1][0] + gap if self._out else self._t)
+        bits = ps2_bits(byte)
+        bits[9] ^= flip
+        for b in bits:
+            dat = {} if b else {self.data: 0}
+            self._out += [(t, dict(dat)), (t + 20, {self.clk: 0, **dat}), (t + 60, dict(dat))]
+            t += 80
+        self._out.append((t, {}))
+        self._t = t
+
+    def tick(self, t: int, levels: int) -> None:
+        clk, dat = _bit(levels, self.clk), _bit(levels, self.data)
+        driving_clk = self.clk in self.drive
+        rising = clk and not self._prev[0]
+        if self._rx is not None and rising and self._clocking:
+            self._rx.append(dat)                   # our rising edge: sample the host's bit
+            if len(self._rx) == 10:
+                data, par, stop = self._rx[:8], self._rx[8], self._rx[9]
+                if (sum(data) + par) % 2 != 1:
+                    self.error(t, "command parity")
+                if stop != 1:
+                    self.error(t, "command stop bit")
+                self.received.append(sum(b << i for i, b in enumerate(data)))
+                self._rx, self._clocking = None, False
+                self._t = t + 300
+                self._frame(0xFA)                  # acknowledge the command
+        if not clk and not driving_clk:
+            self._low += 1
+        elif clk and self._low >= 100 and not dat and self._rx is None:   # request to send
+            self._rx = []
+            self._out = [o for o in self._out if o[0] <= t]                  # stop sending
+            start = t + 15
+            for k in range(11):                    # 10 bits + ACK pulse
+                ack = {self.data: 0} if k == 10 else {}
+                self._out += [(start + 80 * k, {self.clk: 0, **ack}), (start + 80 * k + 40, dict(ack))]
+            self._out.append((start + 880, {}))
+            self._low = 0
+        elif clk:
+            self._low = 0
+        if driving_clk and self._rx is not None:
+            self._clocking = True                  # from our first clock pulse on
+        while self._out and self._out[0][0] <= t + 1:
+            self.drive = self._out.pop(0)[1]
+        self._prev = (clk, dat)

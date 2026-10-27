@@ -9,7 +9,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[1] / "test" / "shared"))
 from bench import Bench                                  # noqa: E402
-from devices import CanBus, CanNode, can_bits            # noqa: E402
+from devices import WiredAndBus, CanNode, can_bits            # noqa: E402
 
 TX, RX, BIT = 0, 1, 8
 
@@ -25,7 +25,7 @@ def tx_bench(nodes, frames):
     bench = Bench(pullups=1 << RX | 1 << TX)               # TXD pulled up, as on a transceiver
     bench.load(0, (HERE / "can_tx.asm").read_text(), out_base=TX, set_base=TX, set_count=1,
                in_base=RX, shift_out_right=False)
-    bus = bench.add(CanBus([TX], [RX], nodes))
+    bus = bench.add(WiredAndBus([TX], [RX], nodes))
     for f in frames:
         bench.send(0, frame_words(*f))
     bench.start(1)
@@ -79,7 +79,7 @@ class CanRx(unittest.TestCase):
         bench = Bench(pullups=1 << RX | 1 << TX)
         bench.load(0, (HERE / "can_rx.asm").read_text(), set_base=TX, set_count=1, in_base=RX,
                    shift_in_right=False)
-        bench.add(CanBus([TX], [RX], [sender]))
+        bench.add(WiredAndBus([TX], [RX], [sender]))
         bench.start(1)
         irqs = []
         for _ in frames:

@@ -577,6 +577,8 @@ def assemble(source_code: str) -> Program:
                 val = 0
                 for part in val_str.split("|"):
                     val |= PAU_CTL_FLAGS[part] if part in PAU_CTL_FLAGS else _parse_int(part, line_num, clean)
+            elif val_str in labels:                     # an address, e.g. a return point for OUT PC
+                val = labels[val_str]
             else:
                 val = _parse_int(val_str, line_num, clean)
             if not 0 <= val <= 31:
