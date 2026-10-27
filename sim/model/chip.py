@@ -17,7 +17,7 @@ from emu import PinBus, StateMachine, pad_outputs
 # Registers of an SM (HOST.md)
 STATUS, WRAP, SIDESET, PINBASE, PIN_MASK, MISC, CLKDIV, COND_CFG = range(8)
 COND_CFG01, COND_CFG23, PAU_MODE, CRC_CFG, CRC_POLY_LO, CRC_POLY_HI, CRC_RES_LO, CRC_RES_HI = range(8, 16)
-IRQ, PC, X, Y, ISR, OSR, COUNTS, COND01, COND23, CRC_LO, CRC_HI, SM_STATUS, FIFO_LEVEL = range(16, 29)
+IRQ, PC, X, Y, ISR, OSR, COUNTS, COND01, COND23, CRC_LO, CRC_HI, SM_STATUS, FIFO_LEVEL, IRQ_MASK = range(16, 30)
 # Chip registers
 CTRL, GPIO, PINS, PINS_IN, IRQ_SUM, ID = range(0x20, 0x26)
 
@@ -43,6 +43,7 @@ class Chip:
         for sm in self.sms:
             sm.peer = self.sms[sm.index ^ 1]
             sm.peer_irq_flags = sm.peer.irq_flags
+        self.irq_mask = [0xFF] * n_sm
         self.en = 0
         self.in_sel = 0
         self.uio_in = 0
@@ -77,7 +78,10 @@ class Chip:
 
     @property
     def host_irq(self) -> int:
-        return int(any(any(sm.irq_flags) for sm in self.sms))
+        return int(any(self._irq_pending(sm) for sm in self.sms))
+
+    def _irq_pending(self, sm: StateMachine) -> bool:
+        return any(f and self.irq_mask[sm.index] >> i & 1 for i, f in enumerate(sm.irq_flags))
 
     @property
     def uo_out(self) -> int:
@@ -143,6 +147,7 @@ class Chip:
             CRC_HI: lambda: sm.crc >> 16,
             SM_STATUS: lambda: sm.status_word(),
             FIFO_LEVEL: lambda: sm.rx_level << 8 | sm.tx_level,
+            IRQ_MASK: lambda: self.irq_mask[n],
         }
         return regs[addr]() & 0xFFFF if addr in regs else 0
 
@@ -181,10 +186,14 @@ class Chip:
             sm.crc_res = sm.crc_res & 0xFFFF0000 | val
         elif addr == CRC_RES_HI:
             sm.crc_res = sm.crc_res & 0xFFFF | val << 16
-        elif addr == IRQ:
+        elif addr == IRQ:                           # clear, then set
             for i in range(8):
                 if val >> i & 1:
                     sm.irq_flags[i] = False
+                if val >> (8 + i) & 1:
+                    sm.irq_flags[i] = True
+        elif addr == IRQ_MASK:
+            self.irq_mask[n] = val & 0xFF
         elif stopped and addr == PC:
             sm.pc = val % IMEM_WORDS
         elif stopped and addr == X:
@@ -209,7 +218,7 @@ class Chip:
         if addr == PINS_IN:
             return self.gpio_in
         if addr == IRQ_SUM:
-            return sum(int(any(sm.irq_flags)) << sm.index for sm in self.sms)
+            return sum(int(self._irq_pending(sm)) << sm.index for sm in self.sms)
         if addr == ID:
             return ISA_VERSION << 12 | len(self.sms) << 8 | 0x50
         return 0

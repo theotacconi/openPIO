@@ -9,7 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "sim" / "model"))
 from asm import assemble                                             # noqa: E402
-from chip import (Chip, header, CTRL, GPIO, ID, IRQ, PC, PINS, STATUS, WRAP, X, FIFO_LEVEL,  # noqa: E402
+from chip import (Chip, header, CTRL, GPIO, ID, IRQ, IRQ_MASK, PC, PINS, STATUS, WRAP, X, FIFO_LEVEL,  # noqa: E402
                   COND_CFG01, COND_CFG23, PINBASE, PIN_MASK, MISC, CLKDIV, SM_STATUS,
                   OP_IMEM_RD, OP_IMEM_WR, OP_REG_RD, OP_REG_WR, OP_RX_POP, OP_TX_PUSH)
 
@@ -48,6 +48,18 @@ class Host(unittest.TestCase):
             if chip.sms[0].rx_level:
                 out.append(chip.rx_pop(0))
         self.assertEqual(out, list(range(132)), "order kept across front and SRAM")
+
+    def test_host_sets_a_flag_and_masks_the_irq_pin(self):
+        chip = Chip(2)
+        chip.load(0, assemble("wait 1 irq 0\nirq clear 0\nirq 3\nend: jmp end"))
+        chip.reg_write(0, IRQ_MASK, 1 << 3)               # only flag 3 reaches HOST_IRQ
+        chip.reg_write(0, CTRL, 1)
+        chip.step(5)
+        self.assertEqual(chip.reg_read(0, PC), 0, "waiting for the host")
+        chip.reg_write(0, IRQ, 1 << 8)                    # host sets flag 0
+        self.assertEqual(chip.host_irq, 0, "flag 0 is masked off the pin")
+        chip.step(5)
+        self.assertEqual((chip.reg_read(0, IRQ), chip.host_irq), (1 << 3, 1))
 
     def test_registers_written_only_while_stopped(self):
         chip = Chip(2)

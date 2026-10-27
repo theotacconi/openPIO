@@ -52,7 +52,7 @@ the header. Chip registers (`Addr` >= 0x20) ignore `SM`.
 | 0x0D | CRC_POLY_HI | RW | CRC_POLY [31:16] |
 | 0x0E | CRC_RES_LO | RW | CRC_RES [15:0] |
 | 0x0F | CRC_RES_HI | RW | CRC_RES [31:16] |
-| 0x10 | IRQ | RW | read: flags [7:0]; write: flags whose bit is 1 are cleared |
+| 0x10 | IRQ | RW | read: flags [7:0]; write: [7:0] clear the flags whose bit is 1, then [15:8] set them (the host can start a program waiting on a flag) |
 | 0x11 | PC | RW* | [5:0] |
 | 0x12 | X | RW* | |
 | 0x13 | Y | RW* | |
@@ -65,6 +65,7 @@ the header. Chip registers (`Addr` >= 0x20) ignore `SM`.
 | 0x1A | CRC_HI | R | CRC [31:16] |
 | 0x1B | SM_STATUS | R | the STATUS operand (ISA.md): SM status [7:0], PAU status [15:8] |
 | 0x1C | FIFO_LEVEL | R | words in the TX FIFO [7:0], in the RX FIFO [15:8] (0..132; ISA.md, FIFOs) |
+| 0x1D | IRQ_MASK | RW | [7:0] flags that reach HOST_IRQ (0xFF) |
 
 RW*: written only while the SM is stopped (CTRL EN = 0); writes while it runs are ignored.
 
@@ -76,7 +77,7 @@ RW*: written only while the SM is stopped (CTRL EN = 0); writes while it runs ar
 | 0x21 | GPIO | RW | [7:0] open-drain mask (0), [15:11] `ui_in[7:3]` replaces `gpio_in[7:3]` (0) |
 | 0x22 | PINS | R | [7:0] pin values driven, [15:8] pin output enables |
 | 0x23 | PINS_IN | R | [7:0] `gpio_in` |
-| 0x24 | IRQ_SUM | R | bit i: SM i has a flag set |
+| 0x24 | IRQ_SUM | R | bit i: SM i has a flag set in its IRQ_MASK |
 | 0x25 | ID | R | [15:12] ISA version (2), [11:8] number of SMs, [7:0] 0x50 ('P') |
 
 - **RESET** (bit i): SM i as CTRL.RESET in ISA.md: registers, FIFOs, PAU, PC = 0, COND =
@@ -91,7 +92,8 @@ RW*: written only while the SM is stopped (CTRL EN = 0); writes while it runs ar
   PAU TX and by open drain (ISA.md, Multiple state machines). `gpio_in` = `uio_in`, except bits
   [7:3] taken from `ui_in[7:3]` where GPIO selects them. All inputs pass a 2-flip-flop
   synchronizer.
-- `uo_out[1]` HOST_IRQ: high while any SM has an IRQ flag set.
+- `uo_out[1]` HOST_IRQ: high while any SM has a flag set in its IRQ_MASK (flags SMs use only
+  between themselves stay off it).
 - `uo_out[7:2]`: pin values [7:2] as push-pull outputs.
 
 ## Host data rate
