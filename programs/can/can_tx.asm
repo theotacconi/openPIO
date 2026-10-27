@@ -20,7 +20,6 @@ bit:
     out pins, 1 auto        ; SOF .. data
 next:
     jmp x--, bit
-    set pau_ctl, tx|stuff|monitor
     pau crc_append          ; CRC15, stuffed and monitored
     set pau_ctl, tx|monitor
     mov osr, null

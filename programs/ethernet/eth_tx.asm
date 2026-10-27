@@ -31,8 +31,7 @@ word:
     out pins, 16
 next:
     jmp x--, word
-    set pau_ctl, tx         ; the FCS bits do not feed the CRC
-    pau crc_append          ; FCS
+    pau crc_append          ; FCS (appended bits never feed the CRC)
     set pins, 1             ; TP_IDL: TD+ high, waiting under the PAU
     set pau_ctl, 0          ; drain
     wait 1 pau tx_idle [7]  ; TP_IDL for 2 bit times

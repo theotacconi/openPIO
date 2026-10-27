@@ -477,7 +477,8 @@ class CanNode:
     data, crc_ok, and pulls the ACK slot dominant for good frames of others. Sends its `send`
     frames (id, data) after 11 idle bits, or joins another node's SOF (hard sync) with a frame
     pending, and stops at a lost arbitration; `sent` gets (id, acked). Bits are sampled in their
-    middle, counted from the SOF edge. idle: recessive clocks already seen at start."""
+    middle, counted from the SOF edge; every bus edge of a frame must fall on a bit boundary.
+    idle: recessive clocks already seen at start."""
 
     def __init__(self, bit: int, send: list[tuple[int, list[int]]] = (), ack: bool = True,
                  idle: int | None = None) -> None:
@@ -500,6 +501,9 @@ class CanNode:
                 self.tx = 0
             return
         k, phase = divmod(t - self._t0, self.bit)
+        if bus != self._bus and phase:
+            self.errors.append(f"t={t}: edge {phase} clocks into bit {k}")
+        self._bus = bus
         if phase == self.bit - 1:          # drive bit k + 1 from the next clock
             nxt = k + 1
             if self._wire is not None and nxt < len(self._wire):
@@ -509,8 +513,16 @@ class CanNode:
         if phase == self.bit // 2:
             self._sample(t, k, bus)
 
+    def _crc_end(self, k: int) -> None:
+        """Bit k ends the stuffed region: the CRC delimiter is bit k + 1."""
+        self._end = k + 1
+        crc = sum(b << (14 - i) for i, b in enumerate(self._bits[-15:]))
+        self._crc_ok = can_crc15(self._bits[:-15]) == crc
+        if self._wire is None and self._crc_ok and self.ack:
+            self._ack_bit = k + 2
+
     def _start(self, t0: int, wire: list[int] | None) -> None:
-        self._t0, self._wire = t0, wire
+        self._t0, self._wire, self._bus = t0, wire, 0
         self._bits: list[int] = []         # unstuffed SOF .. CRC
         self._run, self._last = 0, None
         self._total = 0                    # unstuffed bits up to the end of the CRC
@@ -525,10 +537,12 @@ class CanNode:
             elif k != (self._end or -2) + 1:   # the ACK slot is the receivers' to pull
                 self.errors.append(f"t={t}: bit error")
         if self._end is None:              # stuffed region: SOF .. CRC
-            if self._run == 5:             # a stuffed bit
+            if self._run == 5:             # a stuffed bit (also after the last CRC bit)
                 if bus == self._last:
                     self.errors.append(f"t={t}: stuff error")
                 self._run, self._last = 1, bus
+                if len(self._bits) == self._total:
+                    self._crc_end(k)
                 return
             self._run = self._run + 1 if bus == self._last else 1
             self._last = bus
@@ -536,12 +550,10 @@ class CanNode:
             if len(self._bits) == 19:
                 dlc = sum(b << (3 - i) for i, b in enumerate(self._bits[15:19]))
                 self._total = 19 + 8 * min(dlc, 8) + 15
-            if len(self._bits) == self._total:
-                self._end = k + 1
-                crc = sum(b << (14 - i) for i, b in enumerate(self._bits[-15:]))
-                self._crc_ok = can_crc15(self._bits[:-15]) == crc
-                if self._wire is None and self._crc_ok and self.ack:
-                    self._ack_bit = k + 2
+            if len(self._bits) == self._total and self._run < 5:
+                self._crc_end(k)
+            return
+        if k < self._end:
             return
         n = k - self._end                  # 0 CRC delimiter, 1 ACK slot, 2 ACK delimiter, 3.. EOF
         if n == 0 and not bus:
@@ -574,3 +586,243 @@ class CanBus(Device):
             n.step(t, bus)
         self.drive = {p: bus for p in self.rx_pins}
         self.errors = [e for n in self.nodes for e in n.errors]
+
+
+# ---------------------------------------------------------------------------------- 1-Wire
+
+def crc8_maxim(data: list[int]) -> int:
+    crc = 0
+    for byte in data:
+        for i in range(8):
+            fb = (crc ^ byte >> i) & 1
+            crc >>= 1
+            if fb:
+                crc ^= 0x8C
+    return crc
+
+
+class OneWireDevice(Device):
+    """1-Wire slave at standard speed (open drain), times in clocks of 1 us.
+
+    Answers a reset (low >= 480) with a presence pulse (low 100 from 20 after the release).
+    Every other low pulse starts a slot: the bit written is the level at 30 us. After a written
+    byte found in `replies`, the device sends those bytes, LSB first, by holding the line low
+    until 30 us in the slots of a 0. Checks: slot low times 1..15 (1, read) or 60..120 (0), slots
+    of 60 us or more, at least 1 us of recovery. `written` lists the bytes received."""
+
+    def __init__(self, pin: int, replies: dict[int, list[int]] = None, present: bool = True) -> None:
+        super().__init__()
+        self.pin, self.replies, self.present = pin, replies or {}, present
+        self.written: list[int] = []
+        self.resets = 0
+        self._prev = 1
+        self._fall = self._rise = None
+        self._bits: list[int] = []
+        self._send: list[int] = []
+        self._release_at: int | None = None
+        self._presence: tuple[int, int] | None = None
+        self._own = False
+
+    def tick(self, t: int, levels: int) -> None:
+        lv = _bit(levels, self.pin)
+        if self._presence and t == self._presence[0]:
+            self.drive, self._fall = {self.pin: 0}, None          # our own low: not measured
+        if self._presence and t == self._presence[1]:
+            self.drive, self._presence = {}, None
+        if self._release_at == t:
+            self.drive, self._release_at = {}, None
+        if self._prev == 1 and lv == 0 and not self.drive:          # master starts a slot / reset
+            if self._fall is not None and t - self._fall < 60:
+                self.error(t, f"slot of {t - self._fall} us")
+            if self._rise is not None and t - self._rise < 1:
+                self.error(t, "no recovery")
+            self._fall = t
+            if self._send:                                           # read slot: send a 0?
+                bit = self._send[0]
+                if not bit:                                          # hold 15 us: the shortest allowed
+                    self.drive, self._release_at = {self.pin: 0}, t + 15
+                    self._own = True
+        if self._prev == 0 and lv == 1 and self._fall is not None and self._presence is None:
+            low = t - self._fall
+            self._rise = t
+            if self._own:                                        # we held a read 0
+                self._own = False
+            elif low >= 480:
+                self.resets += 1
+                self._bits, self._send = [], []
+                if self.present:
+                    self._presence = (t + 20, t + 120)
+            elif not (1 <= low <= 15 or 60 <= low <= 120):
+                self.error(t, f"slot low for {low} us")
+        if self._fall is not None and t == self._fall + 30 and self._presence is None:
+            if self._send:                                           # a slot we sent in
+                self._send.pop(0)
+                self._prev = lv
+                return
+            self._bits.append(lv)
+            if len(self._bits) == 8:
+                value = sum(b << i for i, b in enumerate(self._bits))
+                self._bits = []
+                self.written.append(value)
+                for byte in self.replies.get(value, []):
+                    self._send += [byte >> i & 1 for i in range(8)]
+        self._prev = lv
+
+
+# ---------------------------------------------------------------------------------- JTAG
+
+TAP_NEXT = {  # state: (next with TMS 0, next with TMS 1), IEEE 1149.1
+    "TLR": ("RTI", "TLR"), "RTI": ("RTI", "SELDR"),
+    "SELDR": ("CAPDR", "SELIR"), "CAPDR": ("SHDR", "EX1DR"), "SHDR": ("SHDR", "EX1DR"),
+    "EX1DR": ("PAUDR", "UPDDR"), "PAUDR": ("PAUDR", "EX2DR"), "EX2DR": ("SHDR", "UPDDR"),
+    "UPDDR": ("RTI", "SELDR"),
+    "SELIR": ("CAPIR", "TLR"), "CAPIR": ("SHIR", "EX1IR"), "SHIR": ("SHIR", "EX1IR"),
+    "EX1IR": ("PAUIR", "UPDIR"), "PAUIR": ("PAUIR", "EX2IR"), "EX2IR": ("SHIR", "UPDIR"),
+    "UPDIR": ("RTI", "SELDR"),
+}
+
+
+class JtagTap(Device):
+    """IEEE 1149.1 TAP with a 4-bit IR: IDCODE (0b0001, selected by Test-Logic-Reset), USER
+    (0b1010, a 16-bit read / write register), BYPASS (0b1111). Registers shift LSB first; TMS and
+    TDI are sampled on the TCK rising edge, TDO changes on the falling edge. Checks TMS / TDI
+    stable on the clock before and after each rising edge."""
+
+    IR_IDCODE, IR_USER, IR_BYPASS = 0b0001, 0b1010, 0b1111
+
+    def __init__(self, tck: int, tms: int, tdi: int, tdo: int, idcode: int) -> None:
+        super().__init__()
+        self.tck, self.tms, self.tdi, self.tdo, self.idcode = tck, tms, tdi, tdo, idcode
+        self.state, self.ir, self.user = "TLR", self.IR_IDCODE, 0
+        self._sr, self._len = 0, 1
+        self._prev: tuple[int, int, int] | None = None
+        self._check: tuple[int, int] | None = None
+
+    def _dr(self) -> tuple[int, int]:
+        return {self.IR_IDCODE: (self.idcode, 32), self.IR_USER: (self.user, 16)}.get(self.ir, (0, 1))
+
+    def tick(self, t: int, levels: int) -> None:
+        tck, tms, tdi = _bit(levels, self.tck), _bit(levels, self.tms), _bit(levels, self.tdi)
+        if self._check is not None and self._check != (tms, tdi):
+            self.error(t, "TMS / TDI changed on the clock after a rising edge")
+        self._check = None
+        if self._prev and not self._prev[0] and tck:            # rising edge
+            if self._prev[1:] != (tms, tdi):
+                self.error(t, "TMS / TDI changed on a rising edge")
+            self._check = (tms, tdi)
+            s = self.state
+            if s == "CAPDR":
+                self._sr, self._len = self._dr()
+            elif s == "CAPIR":
+                self._sr, self._len = 0b0001, 4                  # IR capture value ..01
+            elif s in ("SHDR", "SHIR"):
+                self._sr = self._sr >> 1 | tdi << (self._len - 1)
+            self.state = TAP_NEXT[s][tms]
+            if self.state == "TLR":
+                self.ir = self.IR_IDCODE
+            if self.state == "UPDIR":
+                self.ir = self._sr & 0xF
+            if self.state == "UPDDR" and self.ir == self.IR_USER:
+                self.user = self._sr & 0xFFFF
+        if self._prev and self._prev[0] and not tck:             # falling edge
+            self.drive = {self.tdo: self._sr & 1} if self.state in ("SHDR", "SHIR") else {}
+        self._prev = (tck, tms, tdi)
+
+
+# ---------------------------------------------------------------------------------- SWD
+
+class SwdTarget(Device):
+    """ARM SWD target (ADIv5): request sampled on SWCLK rising edges (start, APnDP, RnW, A[2:3],
+    parity, stop, park), turnaround, ACK OK, then 32 data bits + even parity: sent for reads (the
+    target changes SWDIO one clock after a rising edge), sampled on rising edges for writes, then
+    turnaround. Zeros between requests are idle cycles. `regs` maps (APnDP, A[3:2]) to values;
+    `log` lists (read / write, APnDP, addr, value). Checks request parity, start / stop / park,
+    write parity."""
+
+    def __init__(self, clk: int, dio: int, regs: dict | None = None) -> None:
+        super().__init__()
+        self.clk, self.dio = clk, dio
+        self.regs = dict(regs or {})
+        self.log: list[tuple] = []
+        self._prev_clk = 0
+        self._r = 0                       # rising edges in the current transaction (0: idle)
+        self._req: list[int] = []
+        self._data: list[int] = []
+        self._out: list[int] = []
+
+    def tick(self, t: int, levels: int) -> None:
+        clk, dio = _bit(levels, self.clk), _bit(levels, self.dio)
+        rising = clk and not self._prev_clk
+        self._prev_clk = clk
+        if not rising:
+            return
+        if self._r == 0 and not dio:
+            return                        # idle cycle
+        self._r += 1
+        r = self._r
+        if r <= 8:
+            self._req.append(dio)
+            if r == 8:
+                q = self._req
+                if (q[0], q[6], q[7]) != (1, 0, 1) or sum(q[1:5]) % 2 != q[5]:
+                    self.error(t, f"bad request {q}")
+                self._ap, self._rnw, self._addr = q[1], q[2], q[3] << 2 | q[4] << 3
+        elif r <= 11:                     # turnaround, then ACK OK = 1, 0, 0 (LSB first)
+            self.drive = {self.dio: [1, 0, 0][r - 9]}
+        elif self._rnw:                   # read: data after 12..43, parity after 44, release at 45
+            if r == 12:
+                v = self.regs.get((self._ap, self._addr), 0)
+                self._out = [v >> i & 1 for i in range(32)] + [bin(v).count("1") % 2]
+                self.log.append(("r", self._ap, self._addr, v))
+            if r <= 44:
+                self.drive = {self.dio: self._out[r - 12]}
+            else:
+                self._end()
+        else:                             # write: release at 12, turnaround 13, data 14..45, parity 46
+            self.drive = {}
+            if 14 <= r <= 46:
+                self._data.append(dio)
+            if r == 46:
+                v = sum(b << i for i, b in enumerate(self._data[:32]))
+                if bin(v).count("1") % 2 != self._data[32]:
+                    self.error(t, "write parity")
+                self.regs[(self._ap, self._addr)] = v
+                self.log.append(("w", self._ap, self._addr, v))
+                self._end()
+
+    def _end(self) -> None:
+        self.drive, self._r, self._req, self._data = {}, 0, [], []
+
+
+class BmcRx(Device):
+    """Biphase mark receiver: a transition at every bit boundary, one more in the middle of a 1.
+    The first edge on an idle line starts a frame; bit k spans t0 + k * bit; its halves are
+    sampled at a quarter and three quarters; no transition at a boundary ends the frame."""
+
+    def __init__(self, pin: int, bit: int) -> None:
+        super().__init__()
+        self.pin, self.bit = pin, bit
+        self.frames: list[list[int]] = []
+        self._prev = 0
+        self._t0: int | None = None
+
+    def tick(self, t: int, levels: int) -> None:
+        lv = _bit(levels, self.pin)
+        if self._t0 is None:
+            if lv != self._prev:
+                self._t0, self._bits, self._last = t, [], self._prev
+        else:
+            rel = t - self._t0
+            if lv != self._prev and rel % (self.bit // 2):
+                self.error(t, "edge off the half-bit grid")
+            phase = rel % self.bit
+            if phase == self.bit // 4:
+                if lv == self._last:              # no boundary transition: end of frame
+                    self.frames.append(self._bits)
+                    self._t0 = None
+                else:
+                    self._first = lv
+            elif phase == 3 * self.bit // 4:
+                self._bits.append(int(lv != self._first))
+                self._last = lv
+        self._prev = lv
