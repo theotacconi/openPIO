@@ -27,7 +27,7 @@ PAU, timing) and `sim/model/HOST.md` (SPI, registers).
 | `ui_in[0]` / `[1]` / `[2]` | SPI SCLK / MOSI / CS_N (from the host) |
 | `ui_in[7:3]` | extra inputs: replace pins 7..3 as inputs where GPIO[15:11] selects them |
 | `uo_out[0]` | SPI MISO |
-| `uo_out[1]` | HOST_IRQ: high while any SM has a flag set that its IRQ_MASK lets through |
+| `uo_out[1]` | HOST_IRQ: high while any SM requests it (IRQ_MASK: flags, RX data, TX room) |
 | `uo_out[7:2]` | copy of the output values of pins 7..2 |
 | `uio[7:0]` | pins 0..7: the SMs' I/O |
 
@@ -41,8 +41,8 @@ PAU, timing) and `sim/model/HOST.md` (SPI, registers).
    - GPIO |= the program's open-drain pins
    - CTRL RESET bit, then REG_WR burst from 0x11 (PC, X, Y)
 3. Start: CTRL = mask of SMs to run (they start on the same clock).
-4. Run: TX_PUSH words in, RX_POP words out. HOST_IRQ or IRQ_SUM says which SM has a flag
-   set; read and clear it in its IRQ register.
+4. Run: TX_PUSH words in, RX_POP words out. HOST_IRQ goes high on a flag, on RX data or on TX
+   room, as IRQ_MASK selects; IRQ_SUM says which SM. Clear a flag in its IRQ register.
 
 ## 4. SPI
 
@@ -92,7 +92,7 @@ Per SM (`SM` field). R = read only, W = write only, RW* = written only while the
 | 19, 1A | CRC_LO, HI | R | current CRC |
 | 1B | SM_STATUS | R | the STATUS operand: SM status [7:0], PAU status [15:8] (§7) |
 | 1C | FIFO_LEVEL | R | [7:0] TX words, [15:8] RX words (0..132) |
-| 1D | IRQ_MASK | RW | flags that reach HOST_IRQ (0xFF) |
+| 1D | IRQ_MASK | RW | to HOST_IRQ: [7:0] flags (0xFF), [8] RX FIFO not empty (0), [9] TX FIFO <= 64 words (0) |
 
 Chip (any `SM`):
 
@@ -102,7 +102,7 @@ Chip (any `SM`):
 | 21 | GPIO | RW | [7:0] open-drain pins, [15:11] `ui_in[7:3]` replaces pins 7..3 as inputs |
 | 22 | PINS | R | [7:0] output values, [15:8] output enables |
 | 23 | PINS_IN | R | the pins as the SMs see them |
-| 24 | IRQ_SUM | R | bit i: SM i has a flag set in its IRQ_MASK |
+| 24 | IRQ_SUM | R | bit i: SM i requests HOST_IRQ |
 | 25 | ID | R | 0x2250: ISA 2, 2 SMs, 'P' |
 
 - **A CTRL write sets EN for all SMs**: to reset or step one SM, write the others' EN bits too.

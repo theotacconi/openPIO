@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "sim" / "model"))
 from asm import assemble                                             # noqa: E402
 from chip import (Chip, header, CTRL, GPIO, ID, IRQ, IRQ_MASK, PC, PINS, STATUS, WRAP, X, FIFO_LEVEL,  # noqa: E402
-                  COND_CFG01, COND_CFG23, CRC_LO, PINBASE, PIN_MASK, MISC, CLKDIV, SM_STATUS,
+                  COND_CFG01, COND_CFG23, CRC_LO, IRQ_SUM, PINBASE, PIN_MASK, MISC, CLKDIV, SM_STATUS,
                   OP_IMEM_RD, OP_IMEM_WR, OP_REG_RD, OP_REG_WR, OP_RX_POP, OP_TX_PUSH)
 from host import Host                                                # noqa: E402
 
@@ -111,6 +111,20 @@ class HostInterface(unittest.TestCase):
         chip.uio_in = 1 << 6
         chip.step(8)
         self.assertEqual(chip.sms[0].irq_flags[:2], [False, True], "pin 6 high: jumped")
+
+    def test_fifo_requests_on_the_irq_pin(self):
+        chip = Chip(2)
+        load(chip, 0, assemble("end: jmp end"))
+        chip.reg_write(0, IRQ_MASK, 1 << 9)             # TX room only
+        self.assertEqual(chip.host_irq, 1, "TX FIFO empty: room")
+        chip.spi(header(OP_TX_PUSH, 0), list(range(65)))
+        self.assertEqual(chip.host_irq, 0, "65 words: full enough")
+        chip.reg_write(0, IRQ_MASK, 1 << 8)             # RX data only
+        self.assertEqual(chip.host_irq, 0)
+        chip.sms[0].rx_fifo.append(7)
+        self.assertEqual((chip.host_irq, chip.reg_read(0, IRQ_SUM)), (1, 1))
+        chip.rx_pop(0)
+        self.assertEqual(chip.host_irq, 0, "drained: ends by itself")
 
     def test_reset_clears_flags_and_loads_the_crc_init(self):
         chip = Chip(2)

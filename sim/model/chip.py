@@ -88,7 +88,10 @@ class Chip:
         return int(any(self._irq_pending(sm) for sm in self.sms))
 
     def _irq_pending(self, sm: StateMachine) -> bool:
-        return any(f and self.irq_mask[sm.index] >> i & 1 for i, f in enumerate(sm.irq_flags))
+        """A flag in IRQ_MASK [7:0], RX FIFO not empty with [8], TX FIFO <= 64 words with [9]."""
+        m = self.irq_mask[sm.index]
+        return (any(f and m >> i & 1 for i, f in enumerate(sm.irq_flags))
+                or bool(m >> 8 & 1 and sm.rx_level) or bool(m >> 9 & 1 and sm.tx_level <= 64))
 
     @property
     def uo_out(self) -> int:
@@ -183,7 +186,7 @@ class Chip:
                 if val >> (8 + i) & 1:
                     sm.irq_flags[i] = True
         elif addr == IRQ_MASK:
-            self.irq_mask[n] = val & 0xFF
+            self.irq_mask[n] = val & 0x3FF
         elif stopped and addr == PC:
             sm.pc = val % IMEM_WORDS
         elif stopped and addr == X:

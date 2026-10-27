@@ -65,7 +65,7 @@ the header. Chip registers (`Addr` >= 0x20) ignore `SM`.
 | 0x1A | CRC_HI | R | CRC [31:16] |
 | 0x1B | SM_STATUS | R | the STATUS operand (ISA.md): SM status [7:0], PAU status [15:8] |
 | 0x1C | FIFO_LEVEL | R | words in the TX FIFO [7:0], in the RX FIFO [15:8] (0..132; ISA.md, FIFOs) |
-| 0x1D | IRQ_MASK | RW | [7:0] flags that reach HOST_IRQ (0xFF) |
+| 0x1D | IRQ_MASK | RW | what reaches HOST_IRQ: [7:0] these flags when set (0xFF), [8] RX FIFO not empty (0), [9] TX FIFO at most 64 words (0) |
 
 RW*: written only while the SM is stopped (CTRL EN = 0); writes while it runs are ignored.
 
@@ -77,7 +77,7 @@ RW*: written only while the SM is stopped (CTRL EN = 0); writes while it runs ar
 | 0x21 | GPIO | RW | [7:0] open-drain mask (0), [15:11] `ui_in[7:3]` replaces `gpio_in[7:3]` (0) |
 | 0x22 | PINS | R | [7:0] pin values driven, [15:8] pin output enables |
 | 0x23 | PINS_IN | R | [7:0] `gpio_in` |
-| 0x24 | IRQ_SUM | R | bit i: SM i has a flag set in its IRQ_MASK |
+| 0x24 | IRQ_SUM | R | bit i: SM i requests HOST_IRQ (its IRQ_MASK) |
 | 0x25 | ID | R | [15:12] ISA version (2), [11:8] number of SMs, [7:0] 0x50 ('P') |
 
 - **RESET** (bit i): SM i as CTRL.RESET in ISA.md: registers, IRQ flags, FIFOs, PAU, PC = 0,
@@ -93,8 +93,9 @@ RW*: written only while the SM is stopped (CTRL EN = 0); writes while it runs ar
   PAU TX and by open drain (ISA.md, Multiple state machines). `gpio_in` = `uio_in`, except bits
   [7:3] taken from `ui_in[7:3]` where GPIO selects them. All inputs pass a 2-flip-flop
   synchronizer.
-- `uo_out[1]` HOST_IRQ: high while any SM has a flag set in its IRQ_MASK (flags SMs use only
-  between themselves stay off it).
+- `uo_out[1]` HOST_IRQ: high while any SM requests it through its IRQ_MASK: a flag set (flags
+  SMs use only between themselves stay off it), RX FIFO not empty, TX FIFO at most 64 words.
+  The FIFO requests end by themselves once the host has drained or refilled the FIFO.
 - `uo_out[7:2]`: pin values [7:2] as push-pull outputs.
 
 ## Host data rate
