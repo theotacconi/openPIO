@@ -1,0 +1,101 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 600" width="1240" height="600" role="img" aria-labelledby="t d">
+<title id="t">ISR: the input path</title>
+<desc id="d">Each IN shifts n bits from a source (the pins, the PAU receiver, a register) into the ISR; a PUSH moves the ISR into the RX FIFO. A counter tells when the ISR is full so it can push by itself.</desc>
+<style>
+.bg { fill: #ffffff; }
+text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: #1f2933; }
+.h { font-size: 15px; font-weight: 700; }
+.d { font-size: 13px; fill: #3e4c59; }
+.small { font-size: 11.5px; fill: #7b8794; }
+.ld { font-size: 12.5px; fill: #1d5fbf; }
+.lc { font-size: 12.5px; fill: #52606d; }
+.term { font-size: 12.5px; font-weight: 700; fill: #1f2933; }
+.def { font-size: 12.5px; fill: #3e4c59; }
+.group { font-size: 12.5px; font-weight: 700; fill: #616e7c; }
+.chiptitle { font-size: 17px; font-weight: 700; }
+.smtitle { font-size: 15px; font-weight: 700; }
+.b { fill: #ffffff; stroke: #9aa5b1; stroke-width: 1.5; }
+.bar { fill: #f0f2f5; stroke: #9aa5b1; stroke-width: 1.5; }
+.chip { fill: #f7f8fa; stroke: #323f4b; stroke-width: 2.5; }
+.sm { fill: #ffffff; stroke: #616e7c; stroke-width: 1.8; }
+.core { fill: #f7f8fa; stroke: #cbd2d9; stroke-width: 1.2; stroke-dasharray: 5 4; }
+.q { fill: #e8f0fc; stroke: #1d5fbf; stroke-width: 1.5; }
+.pau { fill: #eef7f0; stroke: #2f8a4c; stroke-width: 1.5; }
+.sel { fill: #fff8e6; stroke: #b7791f; stroke-width: 1.5; }
+.legend { fill: #f7f8fa; stroke: #cbd2d9; stroke-width: 1.2; }
+.data { fill: none; stroke: #1d5fbf; stroke-width: 2.2; }
+.ctl { fill: none; stroke: #7b8794; stroke-width: 1.6; }
+.dash { fill: none; stroke: #1d5fbf; stroke-width: 1.8; stroke-dasharray: 6 5; }
+.ah-data, .ah-dash { fill: #1d5fbf; }
+.ah-ctl { fill: #7b8794; }
+.cell { fill: #ffffff; stroke: #b7791f; stroke-width: 1.3; }
+</style>
+<defs><marker id="data" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="ah-data"/></marker><marker id="datas" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M10,0 L0,5 L10,10 z" class="ah-data"/></marker><marker id="ctl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="ah-ctl"/></marker><marker id="ctls" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M10,0 L0,5 L10,10 z" class="ah-ctl"/></marker><marker id="dash" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="ah-dash"/></marker><marker id="dashs" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M10,0 L0,5 L10,10 z" class="ah-dash"/></marker></defs>
+<rect x="0" y="0" width="1240" height="600" rx="18" class="bg"/>
+<polygon points="330,40 360,54 360,266 330,280" class="sel"/>
+<text x="345.0" y="32" class="small" text-anchor="middle">IN source, n</text>
+<text x="320" y="56.0" class="d" text-anchor="end">pins, from in_base</text>
+<polyline points="322,52.0 329,52.0" class="ctl"/>
+<text x="320" y="86.85714285714286" class="d" text-anchor="end">PAU receiver (when RX is on)</text>
+<polyline points="322,82.85714285714286 329,82.85714285714286" class="ctl"/>
+<text x="320" y="117.71428571428572" class="d" text-anchor="end">X</text>
+<polyline points="322,113.71428571428572 329,113.71428571428572" class="ctl"/>
+<text x="320" y="148.57142857142856" class="d" text-anchor="end">Y</text>
+<polyline points="322,144.57142857142856 329,144.57142857142856" class="ctl"/>
+<text x="320" y="179.42857142857144" class="d" text-anchor="end">ISR</text>
+<polyline points="322,175.42857142857144 329,175.42857142857144" class="ctl"/>
+<text x="320" y="210.28571428571428" class="d" text-anchor="end">OSR</text>
+<polyline points="322,206.28571428571428 329,206.28571428571428" class="ctl"/>
+<text x="320" y="241.14285714285714" class="d" text-anchor="end">STATUS (16 status bits)</text>
+<polyline points="322,237.14285714285714 329,237.14285714285714" class="ctl"/>
+<text x="320" y="272.0" class="d" text-anchor="end">NULL: zeros</text>
+<polyline points="322,268.0 329,268.0" class="ctl"/>
+<polyline points="360,160.0 398,160.0" class="data" marker-end="url(#data)"/>
+<rect x="400" y="120" width="180" height="80" rx="8" class="b"/>
+<text x="490.0" y="148.0" class="h" text-anchor="middle">Shifter</text>
+<text x="490.0" y="165.0" class="d" text-anchor="middle">adds n bits (1 … 16)</text>
+<text x="490.0" y="182.0" class="d" text-anchor="middle">right / left as set</text>
+<polyline points="580,160 648,160" class="data" marker-end="url(#data)"/>
+<rect x="650" y="120" width="150" height="80" rx="8" class="q"/>
+<text x="725.0" y="148.0" class="h" text-anchor="middle">ISR</text>
+<text x="725.0" y="165.0" class="d" text-anchor="middle">Input Shift Register</text>
+<text x="725.0" y="182.0" class="d" text-anchor="middle">16 bits</text>
+<text x="650" y="230" class="small" text-anchor="start">also: mov isr, … (ALU) · out isr, n</text>
+<text x="650" y="246" class="small" text-anchor="start">a PUSH clears it</text>
+<line x1="800" y1="160" x2="860" y2="160" class="data"/><line x1="860" y1="60" x2="860" y2="260" class="data"/>
+<polyline points="860,70 888,70" class="data" marker-end="url(#data)"/>
+<text x="894" y="74" class="d" text-anchor="start">RX FIFO: PUSH, to the host</text>
+<polyline points="860,130 888,130" class="data" marker-end="url(#data)"/>
+<text x="894" y="134" class="d" text-anchor="start">the other machine&#x27;s TX FIFO (PUSH peer)</text>
+<polyline points="860,190 888,190" class="data" marker-end="url(#data)"/>
+<text x="894" y="194" class="d" text-anchor="start">ALU, OSR (as a source)</text>
+<polyline points="860,250 888,250" class="data" marker-end="url(#data)"/>
+<text x="894" y="254" class="d" text-anchor="start">PAU CRC (crc_feed n)</text>
+<rect x="400" y="300" width="170" height="70" rx="8" class="b"/>
+<text x="485.0" y="331.5" class="h" text-anchor="middle">Bits collected</text>
+<text x="485.0" y="348.5" class="d" text-anchor="middle">counter, 0 … 16</text>
+<text x="400" y="394" class="small" text-anchor="start">+n on each IN · 0 after a PUSH</text>
+<polyline points="570,335 638,335" class="ctl" marker-end="url(#ctl)"/>
+<rect x="640" y="300" width="200" height="70" rx="8" class="b"/>
+<text x="740.0" y="331.5" class="h" text-anchor="middle">≥ push threshold?</text>
+<text x="740.0" y="348.5" class="d" text-anchor="middle">threshold: 1 … 16 (host)</text>
+<polyline points="840,335 898,335" class="ctl" marker-end="url(#ctl)"/>
+<text x="906" y="331" class="d" text-anchor="start">ISR full: IN … auto pushes it to the</text>
+<text x="906" y="349" class="small" text-anchor="start">RX FIFO by itself (autopush); also a condition</text>
+<rect x="40" y="440" width="1160" height="142" rx="8" class="legend"/>
+<text x="56" y="464" class="group" text-anchor="start">Legend</text>
+<polyline points="130,460 164,460" class="data" marker-end="url(#data)"/>
+<text x="174" y="464" class="def" text-anchor="start">data</text>
+<polyline points="232.8,460 266.8,460" class="ctl" marker-end="url(#ctl)"/>
+<text x="276.8" y="464" class="def" text-anchor="start">control, settings</text>
+<polygon points="429.20000000000005,450 445.20000000000005,456 445.20000000000005,464 429.20000000000005,470" class="sel"/>
+<text x="453.20000000000005" y="464" class="def" text-anchor="start">selector: passes one input, chosen by the instruction</text>
+<text x="56.0" y="494" class="def"><tspan class="term">ISR</tspan>  Input Shift Register</text>
+<text x="56.0" y="515" class="def"><tspan class="term">FIFO</tspan>  First In, First Out queue</text>
+<text x="56.0" y="536" class="def"><tspan class="term">IN</tspan>  take n bits into the ISR</text>
+<text x="56.0" y="557" class="def"><tspan class="term">PUSH</tspan>  move the ISR into the RX FIFO</text>
+<text x="620.0" y="494" class="def"><tspan class="term">in_base</tspan>  first input pin of this machine</text>
+<text x="620.0" y="515" class="def"><tspan class="term">PAU / RX</tspan>  Protocol Acceleration Unit / receive</text>
+<text x="620.0" y="536" class="def"><tspan class="term">CRC</tspan>  Cyclic Redundancy Check (a checksum)</text>
+<text x="620.0" y="557" class="def"><tspan class="term">STATUS</tspan>  status bits, see the conditions page</text>
+</svg>

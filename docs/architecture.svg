@@ -1,0 +1,160 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1480 920" width="1480" height="920" role="img" aria-labelledby="t d">
+<title id="t">openPIO architecture</title>
+<desc id="d">A host microcontroller talks over SPI to the openPIO chip. Inside, a host interface feeds two identical state machines; each has a TX FIFO and OSR that shift data out to the pins, an ISR and RX FIFO that collect data in, a core that runs a 64-instruction program, and an optional PAU on the line. A pin-control block shares 8 pins with the circuit.</desc>
+<style>
+.bg { fill: #ffffff; }
+text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: #1f2933; }
+.h { font-size: 15px; font-weight: 700; }
+.d { font-size: 13px; fill: #3e4c59; }
+.small { font-size: 11.5px; fill: #7b8794; }
+.ld { font-size: 12.5px; fill: #1d5fbf; }
+.lc { font-size: 12.5px; fill: #52606d; }
+.term { font-size: 12.5px; font-weight: 700; fill: #1f2933; }
+.def { font-size: 12.5px; fill: #3e4c59; }
+.group { font-size: 12.5px; font-weight: 700; fill: #616e7c; }
+.chiptitle { font-size: 17px; font-weight: 700; }
+.smtitle { font-size: 15px; font-weight: 700; }
+.b { fill: #ffffff; stroke: #9aa5b1; stroke-width: 1.5; }
+.bar { fill: #f0f2f5; stroke: #9aa5b1; stroke-width: 1.5; }
+.chip { fill: #f7f8fa; stroke: #323f4b; stroke-width: 2.5; }
+.sm { fill: #ffffff; stroke: #616e7c; stroke-width: 1.8; }
+.core { fill: #f7f8fa; stroke: #cbd2d9; stroke-width: 1.2; stroke-dasharray: 5 4; }
+.q { fill: #e8f0fc; stroke: #1d5fbf; stroke-width: 1.5; }
+.pau { fill: #eef7f0; stroke: #2f8a4c; stroke-width: 1.5; }
+.sel { fill: #fff8e6; stroke: #b7791f; stroke-width: 1.5; }
+.legend { fill: #f7f8fa; stroke: #cbd2d9; stroke-width: 1.2; }
+.data { fill: none; stroke: #1d5fbf; stroke-width: 2.2; }
+.ctl { fill: none; stroke: #7b8794; stroke-width: 1.6; }
+.dash { fill: none; stroke: #1d5fbf; stroke-width: 1.8; stroke-dasharray: 6 5; }
+.ah-data, .ah-dash { fill: #1d5fbf; }
+.ah-ctl { fill: #7b8794; }
+.cell { fill: #ffffff; stroke: #b7791f; stroke-width: 1.3; }
+</style>
+<defs><marker id="data" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="ah-data"/></marker><marker id="datas" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M10,0 L0,5 L10,10 z" class="ah-data"/></marker><marker id="ctl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="ah-ctl"/></marker><marker id="ctls" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M10,0 L0,5 L10,10 z" class="ah-ctl"/></marker><marker id="dash" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="ah-dash"/></marker><marker id="dashs" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M10,0 L0,5 L10,10 z" class="ah-dash"/></marker></defs>
+<rect x="0" y="0" width="1480" height="920" rx="18" class="bg"/>
+<g transform="translate(20,-40)">
+<polyline points="560,90 610,90" class="data" marker-end="url(#data)"/>
+<text x="620" y="95" class="d" text-anchor="start">data</text>
+<polyline points="720,90 770,90" class="ctl" marker-end="url(#ctl)"/>
+<text x="780" y="95" class="d" text-anchor="start">control, settings</text>
+<rect x="20" y="330" width="200" height="250" rx="8" class="b"/>
+<text x="120.0" y="409.0" class="h" text-anchor="middle">Your microcontroller</text>
+<text x="120.0" y="426.0" class="d" text-anchor="middle">(the host)</text>
+<text x="120.0" y="443.0" class="d" text-anchor="middle"></text>
+<text x="120.0" y="460.0" class="d" text-anchor="middle">loads the programs</text>
+<text x="120.0" y="477.0" class="d" text-anchor="middle">sets the options</text>
+<text x="120.0" y="494.0" class="d" text-anchor="middle">sends and receives data</text>
+<text x="120.0" y="511.0" class="d" text-anchor="middle">is told when to act</text>
+<polyline points="220,425 318,425" class="ctl" marker-end="url(#ctl)" marker-start="url(#ctls)"/>
+<text x="262" y="412" class="lc" text-anchor="middle">SPI</text>
+<text x="262" y="446" class="small" text-anchor="middle">4 wires</text>
+<polyline points="318,500 222,500" class="ctl" marker-end="url(#ctl)"/>
+<text x="262" y="487" class="lc" text-anchor="middle">interrupt</text>
+<text x="262" y="521" class="small" text-anchor="middle">HOST_IRQ</text>
+<rect x="300" y="120" width="880" height="800" rx="14" class="chip"/>
+<text x="322" y="150" class="chiptitle" text-anchor="start">openPIO chip</text>
+<rect x="320" y="170" width="130" height="730" rx="8" class="bar"/>
+<text x="385.0" y="473.5" class="h" text-anchor="middle">Host interface</text>
+<text x="385.0" y="492.5" class="d" text-anchor="middle">SPI + registers</text>
+<text x="385.0" y="511.5" class="d" text-anchor="middle"></text>
+<text x="385.0" y="530.5" class="d" text-anchor="middle">write program</text>
+<text x="385.0" y="549.5" class="d" text-anchor="middle">set options</text>
+<text x="385.0" y="568.5" class="d" text-anchor="middle">start / stop / step</text>
+<text x="385.0" y="587.5" class="d" text-anchor="middle">move FIFO data</text>
+<text x="385.0" y="606.5" class="d" text-anchor="middle">read status</text>
+<rect x="1030" y="170" width="130" height="730" rx="8" class="bar"/>
+<text x="1095.0" y="473.5" class="h" text-anchor="middle">Pin control</text>
+<text x="1095.0" y="492.5" class="d" text-anchor="middle">8 pins, shared</text>
+<text x="1095.0" y="511.5" class="d" text-anchor="middle"></text>
+<text x="1095.0" y="530.5" class="d" text-anchor="middle">direction</text>
+<text x="1095.0" y="549.5" class="d" text-anchor="middle">(in or out)</text>
+<text x="1095.0" y="568.5" class="d" text-anchor="middle">open drain</text>
+<text x="1095.0" y="587.5" class="d" text-anchor="middle">input sync</text>
+<text x="1095.0" y="606.5" class="d" text-anchor="middle">(2 clocks)</text>
+<rect x="475" y="182" width="530" height="560" rx="12" class="sm"/>
+<text x="495" y="210" class="smtitle" text-anchor="start">State machine 0</text>
+<text x="985" y="210" class="small" text-anchor="end">runs one program, one instruction per step</text>
+<rect x="495" y="232" width="130" height="76" rx="8" class="q"/>
+<text x="560.0" y="257.0" class="h" text-anchor="middle">TX FIFO</text>
+<text x="560.0" y="275.0" class="d" text-anchor="middle">data to send</text>
+<text x="560.0" y="293.0" class="d" text-anchor="middle">133 words</text>
+<rect x="665" y="232" width="130" height="76" rx="8" class="q"/>
+<text x="730.0" y="257.0" class="h" text-anchor="middle">OSR</text>
+<text x="730.0" y="275.0" class="d" text-anchor="middle">shifts the bits</text>
+<text x="730.0" y="293.0" class="d" text-anchor="middle">out, one by one</text>
+<polyline points="452,270 493,270" class="data" marker-end="url(#data)"/>
+<polyline points="625,270 663,270" class="data" marker-end="url(#data)"/>
+<polyline points="795,270 1028,270" class="data" marker-end="url(#data)"/>
+<text x="910" y="260" class="ld" text-anchor="middle">OUT: bits to the pins</text>
+<rect x="495" y="634" width="130" height="76" rx="8" class="q"/>
+<text x="560.0" y="659.0" class="h" text-anchor="middle">RX FIFO</text>
+<text x="560.0" y="677.0" class="d" text-anchor="middle">data received</text>
+<text x="560.0" y="695.0" class="d" text-anchor="middle">133 words</text>
+<rect x="665" y="634" width="130" height="76" rx="8" class="q"/>
+<text x="730.0" y="659.0" class="h" text-anchor="middle">ISR</text>
+<text x="730.0" y="677.0" class="d" text-anchor="middle">collects the bits</text>
+<text x="730.0" y="695.0" class="d" text-anchor="middle">in, one by one</text>
+<polyline points="1028,682 797,682" class="data" marker-end="url(#data)"/>
+<text x="912" y="702" class="ld" text-anchor="middle">IN: bits from the pins</text>
+<polyline points="663,672 627,672" class="data" marker-end="url(#data)"/>
+<polyline points="493,672 452,672" class="data" marker-end="url(#data)"/>
+<rect x="835" y="360" width="150" height="206" rx="8" class="pau"/>
+<text x="910.0" y="420.5" class="h" text-anchor="middle">PAU</text>
+<text x="910.0" y="439.5" class="d" text-anchor="middle">optional helper</text>
+<text x="910.0" y="458.5" class="d" text-anchor="middle">on the line:</text>
+<text x="910.0" y="477.5" class="d" text-anchor="middle">encoding,</text>
+<text x="910.0" y="496.5" class="d" text-anchor="middle">bit stuffing,</text>
+<text x="910.0" y="515.5" class="d" text-anchor="middle">CRC check</text>
+<polyline points="870,270 870,358" class="data" marker-end="url(#data)"/>
+<text x="878" y="320" class="ld" text-anchor="start">or through</text>
+<text x="878" y="336" class="ld" text-anchor="start">the PAU</text>
+<polyline points="985,420 1028,420" class="data" marker-end="url(#data)"/>
+<polyline points="1028,505 987,505" class="data" marker-end="url(#data)"/>
+<polyline points="870,566 870,656 797,656" class="data" marker-end="url(#data)"/>
+<rect x="495" y="330" width="310" height="280" rx="10" class="core"/>
+<text x="510" y="352" class="group" text-anchor="start">Core: executes your program</text>
+<rect x="510" y="366" width="135" height="66" rx="8" class="b"/>
+<text x="577.5" y="394.5" class="h" text-anchor="middle">Program</text>
+<text x="577.5" y="413.5" class="d" text-anchor="middle">64 instructions</text>
+<rect x="660" y="366" width="130" height="66" rx="8" class="b"/>
+<text x="725.0" y="394.5" class="h" text-anchor="middle">Control</text>
+<text x="725.0" y="413.5" class="d" text-anchor="middle">decodes, steps</text>
+<rect x="510" y="446" width="135" height="66" rx="8" class="b"/>
+<text x="577.5" y="474.5" class="h" text-anchor="middle">Clock divider</text>
+<text x="577.5" y="493.5" class="d" text-anchor="middle">sets the step rate</text>
+<rect x="660" y="446" width="130" height="66" rx="8" class="b"/>
+<text x="725.0" y="474.5" class="h" text-anchor="middle">X, Y + ALU</text>
+<text x="725.0" y="493.5" class="d" text-anchor="middle">counters, math</text>
+<rect x="510" y="526" width="135" height="66" rx="8" class="b"/>
+<text x="577.5" y="554.5" class="h" text-anchor="middle">Conditions</text>
+<text x="577.5" y="573.5" class="d" text-anchor="middle">4 tests: pins, flags</text>
+<rect x="660" y="526" width="130" height="66" rx="8" class="b"/>
+<text x="725.0" y="554.5" class="h" text-anchor="middle">IRQ flags</text>
+<text x="725.0" y="573.5" class="d" text-anchor="middle">8 signals</text>
+<polyline points="645,399 658,399" class="ctl" marker-end="url(#ctl)"/>
+<polyline points="452,399 508,399" class="ctl" marker-end="url(#ctl)"/>
+<polyline points="730,330 730,310" class="ctl" marker-end="url(#ctl)"/>
+<text x="738" y="324" class="lc" text-anchor="start">out</text>
+<polyline points="730,610 730,632" class="ctl" marker-end="url(#ctl)"/>
+<text x="738" y="626" class="lc" text-anchor="start">in</text>
+<rect x="475" y="790" width="530" height="96" rx="12" class="sm"/>
+<text x="495" y="818" class="smtitle" text-anchor="start">State machine 1</text>
+<text x="495" y="842" class="d" text-anchor="start">Identical to state machine 0. The two run side by side, on the same 8 pins,</text>
+<text x="495" y="862" class="d" text-anchor="start">and can start on the same clock (4 state machines in a larger build).</text>
+<polyline points="740,744 740,788" class="data" marker-end="url(#data)" marker-start="url(#datas)"/>
+<text x="752" y="763" class="ld" text-anchor="start">peer link: pass data and</text>
+<text x="752" y="779" class="ld" text-anchor="start">flags directly</text>
+<polyline points="1005,838 1028,838" class="data" marker-end="url(#data)"/>
+<polyline points="452,838 473,838" class="ctl" marker-end="url(#ctl)"/>
+<polyline points="1160,470 1258,470" class="data" marker-end="url(#data)" marker-start="url(#datas)"/>
+<text x="1209" y="457" class="ld" text-anchor="middle">8 pins</text>
+<text x="1209" y="491" class="small" text-anchor="middle">uio[7:0]</text>
+<rect x="1260" y="350" width="160" height="240" rx="8" class="b"/>
+<text x="1340.0" y="432.5" class="h" text-anchor="middle">Your circuit</text>
+<text x="1340.0" y="449.5" class="d" text-anchor="middle"></text>
+<text x="1340.0" y="466.5" class="d" text-anchor="middle">LEDs, sensors,</text>
+<text x="1340.0" y="483.5" class="d" text-anchor="middle">displays, radios,</text>
+<text x="1340.0" y="500.5" class="d" text-anchor="middle">buses: UART, SPI,</text>
+<text x="1340.0" y="517.5" class="d" text-anchor="middle">I2C, USB, CAN, …</text>
+</g>
+</svg>

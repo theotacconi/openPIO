@@ -28,6 +28,12 @@ Instead of forcing you to choose between a rigid hardwired peripheral (inflexibl
 
 In short: **openPIO gives you the freedom of software bit-banging with the rock-solid reliability of dedicated silicon.**
 
+## Architecture
+
+![openPIO architecture: a host microcontroller, the chip with its state machines, and the 8 pins](docs/architecture.svg)
+
+Exact rules: [instruction set](sim/model/ISA.md), [host interface](sim/model/HOST.md), [reference card](docs/REFERENCE.md).
+
 ## Microarchitecture & Datapath Evolution
 
 The core microarchitecture was thought and designed by hand.

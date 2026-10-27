@@ -3,6 +3,8 @@
 Everything needed to program and drive the chip. Exact rules: `sim/model/ISA.md` (instructions,
 PAU, timing) and `sim/model/HOST.md` (SPI, registers).
 
+![openPIO architecture](architecture.svg)
+
 ## 1. The machine
 
 ```

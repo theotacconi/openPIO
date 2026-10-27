@@ -1,0 +1,163 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 900" width="1240" height="900" role="img" aria-labelledby="t d">
+<title id="t">X, Y and the ALU</title>
+<desc id="d">X and Y are two 16-bit registers with a selector for what they load; comparisons feed the conditions. The ALU combines the destination&#x27;s current value with a source and writes the result back to the destination.</desc>
+<style>
+.bg { fill: #ffffff; }
+text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: #1f2933; }
+.h { font-size: 15px; font-weight: 700; }
+.d { font-size: 13px; fill: #3e4c59; }
+.small { font-size: 11.5px; fill: #7b8794; }
+.ld { font-size: 12.5px; fill: #1d5fbf; }
+.lc { font-size: 12.5px; fill: #52606d; }
+.term { font-size: 12.5px; font-weight: 700; fill: #1f2933; }
+.def { font-size: 12.5px; fill: #3e4c59; }
+.group { font-size: 12.5px; font-weight: 700; fill: #616e7c; }
+.chiptitle { font-size: 17px; font-weight: 700; }
+.smtitle { font-size: 15px; font-weight: 700; }
+.b { fill: #ffffff; stroke: #9aa5b1; stroke-width: 1.5; }
+.bar { fill: #f0f2f5; stroke: #9aa5b1; stroke-width: 1.5; }
+.chip { fill: #f7f8fa; stroke: #323f4b; stroke-width: 2.5; }
+.sm { fill: #ffffff; stroke: #616e7c; stroke-width: 1.8; }
+.core { fill: #f7f8fa; stroke: #cbd2d9; stroke-width: 1.2; stroke-dasharray: 5 4; }
+.q { fill: #e8f0fc; stroke: #1d5fbf; stroke-width: 1.5; }
+.pau { fill: #eef7f0; stroke: #2f8a4c; stroke-width: 1.5; }
+.sel { fill: #fff8e6; stroke: #b7791f; stroke-width: 1.5; }
+.legend { fill: #f7f8fa; stroke: #cbd2d9; stroke-width: 1.2; }
+.data { fill: none; stroke: #1d5fbf; stroke-width: 2.2; }
+.ctl { fill: none; stroke: #7b8794; stroke-width: 1.6; }
+.dash { fill: none; stroke: #1d5fbf; stroke-width: 1.8; stroke-dasharray: 6 5; }
+.ah-data, .ah-dash { fill: #1d5fbf; }
+.ah-ctl { fill: #7b8794; }
+.cell { fill: #ffffff; stroke: #b7791f; stroke-width: 1.3; }
+</style>
+<defs><marker id="data" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="ah-data"/></marker><marker id="datas" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M10,0 L0,5 L10,10 z" class="ah-data"/></marker><marker id="ctl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="ah-ctl"/></marker><marker id="ctls" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M10,0 L0,5 L10,10 z" class="ah-ctl"/></marker><marker id="dash" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="ah-dash"/></marker><marker id="dashs" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M10,0 L0,5 L10,10 z" class="ah-dash"/></marker></defs>
+<rect x="0" y="0" width="1240" height="900" rx="18" class="bg"/>
+<text x="40" y="36" class="group" text-anchor="start">X and Y: two 16-bit working registers (counters, constants, temporary values)</text>
+<polygon points="260,60 290,74 290,216 260,230" class="sel"/>
+<text x="275.0" y="52" class="small" text-anchor="middle">what X loads</text>
+<text x="250" y="76.0" class="d" text-anchor="end">SET: a constant 0 … 31</text>
+<polyline points="252,72.0 259,72.0" class="ctl"/>
+<text x="250" y="112.5" class="d" text-anchor="end">ALU result</text>
+<polyline points="252,108.5 259,108.5" class="ctl"/>
+<text x="250" y="149.0" class="d" text-anchor="end">bits taken by OUT</text>
+<polyline points="252,145.0 259,145.0" class="ctl"/>
+<text x="250" y="185.5" class="d" text-anchor="end">X − 1 (JMP X--: count down)</text>
+<polyline points="252,181.5 259,181.5" class="ctl"/>
+<text x="250" y="222.0" class="d" text-anchor="end">host (machine stopped)</text>
+<polyline points="252,218.0 259,218.0" class="ctl"/>
+<polyline points="290,145.0 358,145.0" class="data" marker-end="url(#data)"/>
+<rect x="360" y="110" width="90" height="70" rx="8" class="b"/>
+<text x="405.0" y="141.5" class="h" text-anchor="middle">X</text>
+<text x="405.0" y="158.5" class="d" text-anchor="middle">16 bits</text>
+<text x="405" y="206" class="small" text-anchor="middle">Y: same selector</text>
+<polyline points="450,145 538,145" class="data" marker-end="url(#data)"/>
+<rect x="540" y="70" width="230" height="150" rx="8" class="b"/>
+<text x="655.0" y="117.0" class="h" text-anchor="middle">Comparisons</text>
+<text x="655.0" y="139.0" class="d" text-anchor="middle">X == 0,  Y == 0</text>
+<text x="655.0" y="161.0" class="d" text-anchor="middle">X == Y</text>
+<text x="655.0" y="183.0" class="d" text-anchor="middle">bit n of X or of Y</text>
+<polyline points="770,145 898,145" class="ctl" marker-end="url(#ctl)"/>
+<text x="834" y="135" class="lc" text-anchor="middle">to the conditions</text>
+<rect x="900" y="110" width="300" height="70" rx="8" class="b"/>
+<text x="1050.0" y="133.0" class="d" text-anchor="middle">used by JMP and WAIT, e.g.</text>
+<text x="1050.0" y="150.0" class="d" text-anchor="middle">jmp x--, loop   ·   wait 1 x 3</text>
+<text x="40" y="270" class="group" text-anchor="start">ALU: Arithmetic Logic Unit, one operation per instruction:  destination = D  op  S</text>
+<polygon points="260,300 290,314 290,486 260,500" class="sel"/>
+<text x="275.0" y="292" class="small" text-anchor="middle">D: current value of the destination</text>
+<text x="250" y="316.0" class="d" text-anchor="end">pins (outputs)</text>
+<polyline points="252,312.0 259,312.0" class="ctl"/>
+<text x="250" y="341.14285714285717" class="d" text-anchor="end">pin directions</text>
+<polyline points="252,337.14285714285717 259,337.14285714285717" class="ctl"/>
+<text x="250" y="366.2857142857143" class="d" text-anchor="end">X</text>
+<polyline points="252,362.2857142857143 259,362.2857142857143" class="ctl"/>
+<text x="250" y="391.42857142857144" class="d" text-anchor="end">Y</text>
+<polyline points="252,387.42857142857144 259,387.42857142857144" class="ctl"/>
+<text x="250" y="416.57142857142856" class="d" text-anchor="end">ISR</text>
+<polyline points="252,412.57142857142856 259,412.57142857142856" class="ctl"/>
+<text x="250" y="441.7142857142857" class="d" text-anchor="end">OSR</text>
+<polyline points="252,437.7142857142857 259,437.7142857142857" class="ctl"/>
+<text x="250" y="466.8571428571429" class="d" text-anchor="end">NULL → 0</text>
+<polyline points="252,462.8571428571429 259,462.8571428571429" class="ctl"/>
+<text x="250" y="492.0" class="d" text-anchor="end">COND → 0</text>
+<polyline points="252,488.0 259,488.0" class="ctl"/>
+<polyline points="290,400.0 330,400.0 330,460 398,460" class="data" marker-end="url(#data)"/>
+<polygon points="260,540 290,554 290,726 260,740" class="sel"/>
+<text x="275.0" y="532" class="small" text-anchor="middle">S: the source</text>
+<text x="250" y="556.0" class="d" text-anchor="end">pins (inputs)</text>
+<polyline points="252,552.0 259,552.0" class="ctl"/>
+<text x="250" y="581.1428571428571" class="d" text-anchor="end">pin directions</text>
+<polyline points="252,577.1428571428571 259,577.1428571428571" class="ctl"/>
+<text x="250" y="606.2857142857143" class="d" text-anchor="end">X</text>
+<polyline points="252,602.2857142857143 259,602.2857142857143" class="ctl"/>
+<text x="250" y="631.4285714285714" class="d" text-anchor="end">Y</text>
+<polyline points="252,627.4285714285714 259,627.4285714285714" class="ctl"/>
+<text x="250" y="656.5714285714286" class="d" text-anchor="end">ISR</text>
+<polyline points="252,652.5714285714286 259,652.5714285714286" class="ctl"/>
+<text x="250" y="681.7142857142857" class="d" text-anchor="end">OSR</text>
+<polyline points="252,677.7142857142857 259,677.7142857142857" class="ctl"/>
+<text x="250" y="706.8571428571429" class="d" text-anchor="end">NULL → 0</text>
+<polyline points="252,702.8571428571429 259,702.8571428571429" class="ctl"/>
+<text x="250" y="732.0" class="d" text-anchor="end">STATUS</text>
+<polyline points="252,728.0 259,728.0" class="ctl"/>
+<polyline points="290,640.0 330,640.0 330,580 398,580" class="data" marker-end="url(#data)"/>
+<polygon points="400,420 500,470 500,570 400,620 400,540 422,520 400,500" class="sel"/>
+<text x="458" y="525" class="h" text-anchor="middle">ALU</text>
+<polyline points="450,690 450,600" class="ctl" marker-end="url(#ctl)"/>
+<text x="450" y="708" class="small" text-anchor="middle">operation (from the instruction)</text>
+<polyline points="500,520 578,520" class="data" marker-end="url(#data)"/>
+<text x="539" y="510" class="ld" text-anchor="middle">result</text>
+<line x1="580" y1="400" x2="580" y2="660" class="data"/>
+<polyline points="580,410 608,410" class="data" marker-end="url(#data)"/>
+<text x="614" y="414" class="d" text-anchor="start">X or Y</text>
+<polyline points="580,458 608,458" class="data" marker-end="url(#data)"/>
+<text x="614" y="462" class="d" text-anchor="start">ISR (then counted as full)</text>
+<polyline points="580,506 608,506" class="data" marker-end="url(#data)"/>
+<text x="614" y="510" class="d" text-anchor="start">OSR (then counted as full)</text>
+<polyline points="580,554 608,554" class="data" marker-end="url(#data)"/>
+<text x="614" y="558" class="d" text-anchor="start">pins or directions (all 8, within PIN_MASK)</text>
+<polyline points="580,602 608,602" class="data" marker-end="url(#data)"/>
+<text x="614" y="606" class="d" text-anchor="start">COND: rewrites one condition</text>
+<polyline points="580,650 608,650" class="data" marker-end="url(#data)"/>
+<text x="614" y="654" class="d" text-anchor="start">NULL: thrown away</text>
+<rect x="900" y="300" width="300" height="330" rx="8" class="b"/>
+<text x="1050" y="332" class="h" text-anchor="middle">Operations</text>
+<text x="0" y="368" class="def" text-anchor="start"></text>
+<text x="924" y="368" class="term" text-anchor="start">MOV</text>
+<text x="990" y="368" class="def" text-anchor="start">copy S</text>
+<text x="0" y="394" class="def" text-anchor="start"></text>
+<text x="924" y="394" class="term" text-anchor="start">REV</text>
+<text x="990" y="394" class="def" text-anchor="start">S, bit order reversed</text>
+<text x="0" y="420" class="def" text-anchor="start"></text>
+<text x="924" y="420" class="term" text-anchor="start">AND</text>
+<text x="990" y="420" class="def" text-anchor="start">D and S, bit by bit</text>
+<text x="0" y="446" class="def" text-anchor="start"></text>
+<text x="924" y="446" class="term" text-anchor="start">OR</text>
+<text x="990" y="446" class="def" text-anchor="start">D or S</text>
+<text x="0" y="472" class="def" text-anchor="start"></text>
+<text x="924" y="472" class="term" text-anchor="start">XOR</text>
+<text x="990" y="472" class="def" text-anchor="start">D xor S</text>
+<text x="0" y="498" class="def" text-anchor="start"></text>
+<text x="924" y="498" class="term" text-anchor="start">XNOR</text>
+<text x="990" y="498" class="def" text-anchor="start">not (D xor S)</text>
+<text x="0" y="524" class="def" text-anchor="start"></text>
+<text x="924" y="524" class="term" text-anchor="start">ADD</text>
+<text x="990" y="524" class="def" text-anchor="start">D + S</text>
+<text x="0" y="550" class="def" text-anchor="start"></text>
+<text x="924" y="550" class="term" text-anchor="start">SUB</text>
+<text x="990" y="550" class="def" text-anchor="start">D − S</text>
+<text x="924" y="590" class="small" text-anchor="start">NOT d is written as XNOR d, NULL</text>
+<rect x="40" y="775" width="1160" height="100" rx="8" class="legend"/>
+<text x="56" y="799" class="group" text-anchor="start">Legend</text>
+<polyline points="130,795 164,795" class="data" marker-end="url(#data)"/>
+<text x="174" y="799" class="def" text-anchor="start">data</text>
+<polyline points="232.8,795 266.8,795" class="ctl" marker-end="url(#ctl)"/>
+<text x="276.8" y="799" class="def" text-anchor="start">control, settings</text>
+<polygon points="429.20000000000005,785 445.20000000000005,791 445.20000000000005,799 429.20000000000005,805" class="sel"/>
+<text x="453.20000000000005" y="799" class="def" text-anchor="start">selector: passes one input, chosen by the instruction</text>
+<text x="56.0" y="829" class="def"><tspan class="term">ISR / OSR</tspan>  Input / Output Shift Register</text>
+<text x="56.0" y="850" class="def"><tspan class="term">NULL</tspan>  nothing: reads 0, a write is lost</text>
+<text x="432.0" y="829" class="def"><tspan class="term">COND</tspan>  the 4 programmable conditions</text>
+<text x="432.0" y="850" class="def"><tspan class="term">STATUS</tspan>  16 status bits (conditions page)</text>
+<text x="808.0" y="829" class="def"><tspan class="term">PIN_MASK</tspan>  the pins this state machine may change</text>
+<text x="808.0" y="850" class="def"><tspan class="term">16 bits</tspan>  all values are 16-bit numbers</text>
+</svg>

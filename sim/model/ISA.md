@@ -1,5 +1,7 @@
 # openPIO ISA v2
 
+![openPIO architecture](../../docs/architecture.svg)
+
 Each state machine (SM) executes 16-bit instructions from its own 64-word instruction memory,
 one instruction per strobe: CLKDIV (host, HOST.md) makes every Nth clock a strobe. The chip has an even number of SMs sharing the pins
 (see Multiple state machines); the host interface is in HOST.md. Encoding rule: codes of similar

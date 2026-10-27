@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 640" width="1240" height="640" role="img" aria-labelledby="t d">
+<title id="t">TX and RX FIFOs</title>
+<desc id="d">Each state machine has two queues of 133 words. Next to the machine, 4 fast words; behind them, a 128-word ring in a memory chip (SRAM) shared by the two queues, which moves one word per clock; an IN or OUT register meets the host. When the memory part is empty, words skip it.</desc>
+<style>
+.bg { fill: #ffffff; }
+text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: #1f2933; }
+.h { font-size: 15px; font-weight: 700; }
+.d { font-size: 13px; fill: #3e4c59; }
+.small { font-size: 11.5px; fill: #7b8794; }
+.ld { font-size: 12.5px; fill: #1d5fbf; }
+.lc { font-size: 12.5px; fill: #52606d; }
+.term { font-size: 12.5px; font-weight: 700; fill: #1f2933; }
+.def { font-size: 12.5px; fill: #3e4c59; }
+.group { font-size: 12.5px; font-weight: 700; fill: #616e7c; }
+.chiptitle { font-size: 17px; font-weight: 700; }
+.smtitle { font-size: 15px; font-weight: 700; }
+.b { fill: #ffffff; stroke: #9aa5b1; stroke-width: 1.5; }
+.bar { fill: #f0f2f5; stroke: #9aa5b1; stroke-width: 1.5; }
+.chip { fill: #f7f8fa; stroke: #323f4b; stroke-width: 2.5; }
+.sm { fill: #ffffff; stroke: #616e7c; stroke-width: 1.8; }
+.core { fill: #f7f8fa; stroke: #cbd2d9; stroke-width: 1.2; stroke-dasharray: 5 4; }
+.q { fill: #e8f0fc; stroke: #1d5fbf; stroke-width: 1.5; }
+.pau { fill: #eef7f0; stroke: #2f8a4c; stroke-width: 1.5; }
+.sel { fill: #fff8e6; stroke: #b7791f; stroke-width: 1.5; }
+.legend { fill: #f7f8fa; stroke: #cbd2d9; stroke-width: 1.2; }
+.data { fill: none; stroke: #1d5fbf; stroke-width: 2.2; }
+.ctl { fill: none; stroke: #7b8794; stroke-width: 1.6; }
+.dash { fill: none; stroke: #1d5fbf; stroke-width: 1.8; stroke-dasharray: 6 5; }
+.ah-data, .ah-dash { fill: #1d5fbf; }
+.ah-ctl { fill: #7b8794; }
+.cell { fill: #ffffff; stroke: #b7791f; stroke-width: 1.3; }
+</style>
+<defs><marker id="data" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="ah-data"/></marker><marker id="datas" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M10,0 L0,5 L10,10 z" class="ah-data"/></marker><marker id="ctl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="ah-ctl"/></marker><marker id="ctls" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M10,0 L0,5 L10,10 z" class="ah-ctl"/></marker><marker id="dash" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="ah-dash"/></marker><marker id="dashs" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M10,0 L0,5 L10,10 z" class="ah-dash"/></marker></defs>
+<rect x="0" y="0" width="1240" height="640" rx="18" class="bg"/>
+<text x="40" y="36" class="group" text-anchor="start">TX FIFO: words to send  (133 = 1 IN register + 128 in memory + 4 front)</text>
+<text x="40" y="104" class="term" text-anchor="start">host (TX_PUSH)</text>
+<text x="40" y="122" class="small" text-anchor="start">or the other machine</text>
+<polyline points="190,110 258,110" class="data" marker-end="url(#data)"/>
+<rect x="260" y="85" width="100" height="50" rx="8" class="b"/>
+<text x="310.0" y="115.0" class="h" text-anchor="middle">IN register</text>
+<rect x="470" y="60" width="260" height="300" rx="8" class="b"/>
+<text x="600" y="90" class="h" text-anchor="middle">Data memory (SRAM)</text>
+<text x="600" y="110" class="small" text-anchor="middle">256 words, one access per clock</text>
+<rect x="490" y="125" width="220" height="60" rx="8" class="q"/>
+<text x="600.0" y="151.5" class="h" text-anchor="middle">TX ring</text>
+<text x="600.0" y="168.5" class="d" text-anchor="middle">128 words</text>
+<rect x="490" y="235" width="220" height="60" rx="8" class="q"/>
+<text x="600.0" y="261.5" class="h" text-anchor="middle">RX ring</text>
+<text x="600.0" y="278.5" class="d" text-anchor="middle">128 words</text>
+<text x="600" y="330" class="small" text-anchor="middle">in turn: TX in · TX out · RX in · RX out</text>
+<polyline points="360,110 488,155" class="data" marker-end="url(#data)"/>
+<polyline points="710,155 838,110" class="data" marker-end="url(#data)"/>
+<rect x="840" y="85" width="120" height="50" rx="8" class="q"/>
+<text x="900.0" y="106.5" class="h" text-anchor="middle">TX front</text>
+<text x="900.0" y="123.5" class="d" text-anchor="middle">4 words</text>
+<polyline points="960,110 1028,110" class="data" marker-end="url(#data)"/>
+<text x="1036" y="105" class="term" text-anchor="start">PULL, OUT … auto</text>
+<text x="1036" y="123" class="small" text-anchor="start">the machine</text>
+<polyline points="310,85 310,52 900,52 900,83" class="dash" marker-end="url(#dash)"/>
+<text x="600" y="46" class="ld" text-anchor="middle">memory part empty: skip it</text>
+<text x="40" y="400" class="group" text-anchor="start">RX FIFO: words received  (133 = 4 front + 128 in memory + 1 OUT register)</text>
+<text x="1036" y="300" class="term" text-anchor="start">PUSH, IN … auto</text>
+<text x="1036" y="318" class="small" text-anchor="start">the machine</text>
+<polyline points="1028,305 962,305" class="data" marker-end="url(#data)"/>
+<rect x="840" y="280" width="120" height="50" rx="8" class="q"/>
+<text x="900.0" y="301.5" class="h" text-anchor="middle">RX front</text>
+<text x="900.0" y="318.5" class="d" text-anchor="middle">4 words</text>
+<polyline points="838,305 712,265" class="data" marker-end="url(#data)"/>
+<polyline points="488,265 362,305" class="data" marker-end="url(#data)"/>
+<rect x="260" y="280" width="100" height="50" rx="8" class="b"/>
+<text x="310.0" y="310.0" class="h" text-anchor="middle">OUT register</text>
+<polyline points="258,305 192,305" class="data" marker-end="url(#data)"/>
+<text x="40" y="300" class="term" text-anchor="start">host (RX_POP)</text>
+<text x="40" y="318" class="small" text-anchor="start">or the other machine</text>
+<polyline points="900,332 900,372 310,372 310,333" class="dash" marker-end="url(#dash)"/>
+<text x="600" y="390" class="ld" text-anchor="middle">memory part empty: skip it</text>
+<rect x="40" y="430" width="1160" height="70" rx="8" class="b"/>
+<text x="620.0" y="450.0" class="d" text-anchor="middle">Why it matters: the host and the other machine never touch the memory directly, so the machine never waits for them.</text>
+<text x="620.0" y="470.0" class="d" text-anchor="middle">A program moving more than about one word every 2 clocks can briefly wait for the memory.</text>
+<rect x="40" y="520" width="1160" height="100" rx="8" class="legend"/>
+<text x="56" y="544" class="group" text-anchor="start">Legend</text>
+<polyline points="130,540 164,540" class="data" marker-end="url(#data)"/>
+<text x="174" y="544" class="def" text-anchor="start">data</text>
+<polyline points="232.8,540 266.8,540" class="dash" marker-end="url(#dash)"/>
+<text x="276.8" y="544" class="def" text-anchor="start">shortcut when the memory part is empty</text>
+<text x="56.0" y="574" class="def"><tspan class="term">FIFO</tspan>  First In, First Out: a queue, words leave in the order they came</text>
+<text x="56.0" y="595" class="def"><tspan class="term">SRAM</tspan>  Static RAM: the memory chip holding the long part of the queues</text>
+<text x="620.0" y="574" class="def"><tspan class="term">TX / RX</tspan>  transmit (host → pins) / receive (pins → host)</text>
+<text x="620.0" y="595" class="def"><tspan class="term">PUSH / PULL</tspan>  the program puts a word in / takes a word out</text>
+</svg>
