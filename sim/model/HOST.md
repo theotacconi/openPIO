@@ -42,7 +42,7 @@ the header. Chip registers (`Addr` >= 0x20) ignore `SM`.
 | 0x03 | PINBASE | RW | [2:0] in_base, [6:4] out_base, [10:8] set_base (0), [14:12] set_count (5) |
 | 0x04 | PIN_MASK | RW | [7:0] pins this SM may change (0xFF) |
 | 0x05 | MISC | RW | [0] ISR shift right (1), [1] OSR shift right (1), [11:8] push threshold (0 = 16), [15:12] pull threshold (0 = 16) |
-| 0x06 | CLKDIV | RW | strobe divider: [4:0] integer (1), [15:8] fraction / 256 (0); loaded on RESET |
+| 0x06 | CLKDIV | RW | strobe divider: [7:0] integer (1; 0 = 1), [15:8] fraction / 256 (0); loaded on RESET |
 | 0x07 | COND_CFG | W | `{Slot[9:8], condition[7:0]}`, one condition per write (ISA.md, Conditions) |
 | 0x08 | COND_CFG01 | R | COND_CFG slots 1 [15:8], 0 [7:0] (0x6160) |
 | 0x09 | COND_CFG23 | R | slots 3, 2 (0xE400) |

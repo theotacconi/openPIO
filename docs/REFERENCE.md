@@ -16,7 +16,7 @@ PAU, timing) and `sim/model/HOST.md` (SPI, registers).
 ```
 
 - All registers are 16 bits. FIFOs hold 132 words of 16 bits.
-- **Strobe**: one every CLKDIV clocks (CLKDIV = int + frac/256, int 1..31). One instruction per
+- **Strobe**: one every CLKDIV clocks (CLKDIV = int + frac/256, int 1..255). One instruction per
   strobe. A stalled instruction repeats every strobe. `[n]` then idles n x DLYMUL strobes.
 - **Program counter**: after the instruction at `wrap_top`, PC = `wrap_bottom` (unless it jumped).
 
@@ -78,7 +78,7 @@ Per SM (`SM` field). R = read only, W = write only, RW* = written only while the
 | 03 | PINBASE | RW | [2:0] in_base, [6:4] out_base, [10:8] set_base, [14:12] set_count (5) |
 | 04 | PIN_MASK | RW | pins this SM may change (0xFF) |
 | 05 | MISC | RW | [0] ISR shifts right (1), [1] OSR shifts right (1), [11:8] push thr., [15:12] pull thr. (0 = 16) |
-| 06 | CLKDIV | RW | [4:0] int (1), [15:8] frac/256 (0); applied at RESET |
+| 06 | CLKDIV | RW | [7:0] int (1), [15:8] frac/256 (0); applied at RESET |
 | 07 | COND_CFG | W | [9:8] slot, [7:0] condition (§7) |
 | 08, 09 | COND_CFG01, 23 | R | slots 1:0, 3:2 (0x6160, 0xE400) |
 | 0A | PAU_MODE | RW | [1:0] enc, [2] inv, [3] diff, [7:4] stuff len, [9:8] stuff mode, [14:10] baud (§8) |

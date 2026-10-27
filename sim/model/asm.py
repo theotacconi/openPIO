@@ -388,8 +388,8 @@ def assemble(source_code: str) -> Program:
                 if len(parts) < 2:
                     raise AssemblerError(".clkdiv requires a divider", line_num, raw_line)
                 cfg["clkdiv_int"] = _parse_int(parts[1], line_num, raw_line)
-                if not 1 <= cfg["clkdiv_int"] <= 31:
-                    raise AssemblerError("CLKDIV integer part must be 1..31", line_num, raw_line)
+                if not 1 <= cfg["clkdiv_int"] <= 255:
+                    raise AssemblerError("CLKDIV integer part must be 1..255", line_num, raw_line)
                 if len(parts) > 2:
                     cfg["clkdiv_frac"] = _parse_int(parts[2], line_num, raw_line) & 0xFF
             elif directive in (".push_thresh", ".pull_thresh"):

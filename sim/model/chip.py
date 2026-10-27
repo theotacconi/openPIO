@@ -164,7 +164,7 @@ class Chip:
             sm.shift_in_right, sm.shift_out_right = bool(val & 1), bool(val >> 1 & 1)
             sm.push_thresh, sm.pull_thresh = val >> 8 & 0xF, val >> 12 & 0xF
         elif addr == CLKDIV:
-            sm.clkdiv_cfg_int, sm.clkdiv_cfg_frac = (val & 0x1F) or 1, val >> 8
+            sm.clkdiv_cfg_int, sm.clkdiv_cfg_frac = (val & 0xFF) or 1, val >> 8
         elif addr == COND_CFG:
             sm.cond_cfg[val >> 8 & 3] = val & 0xFF
         elif addr == PAU_MODE:

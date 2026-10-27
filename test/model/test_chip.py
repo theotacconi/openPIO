@@ -135,6 +135,17 @@ class HostInterface(unittest.TestCase):
         chip.reg_write(0, CTRL, 1 << 4)                          # RESET SM 0
         self.assertEqual((chip.reg_read(0, IRQ), chip.sms[1].peer_irq_flags[7]), (0, False))
 
+    def test_clkdiv_up_to_255(self):
+        chip = Chip(2)
+        load(chip, 0, assemble("loop:\nin null, 1\njmp loop"), clkdiv_int=200, clkdiv_frac=128)
+        self.assertEqual(chip.reg_read(0, CLKDIV), 0x80C8)
+        chip.reg_write(0, CTRL, 1)
+        strobes = 0
+        for _ in range(2010):
+            chip.step()
+            strobes += chip.sms[0].strobed
+        self.assertEqual(strobes, 10, "one strobe every 200.5 clocks")
+
     def test_registers_written_only_while_stopped(self):
         chip = Chip(2)
         chip.reg_write(0, X, 0x1234)
