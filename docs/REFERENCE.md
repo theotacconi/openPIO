@@ -15,7 +15,7 @@ PAU, timing) and `sim/model/HOST.md` (SPI, registers).
           + IMEM 64 x 16 bit, X, Y, 8 IRQ flags, 4 conditions, clock divider
 ```
 
-- All registers are 16 bits. FIFOs hold 132 words of 16 bits.
+- All registers are 16 bits. FIFOs hold 133 words of 16 bits.
 - **Strobe**: one every CLKDIV clocks (CLKDIV = int + frac/256, int 1..255). One instruction per
   strobe. A stalled instruction repeats every strobe. `[n]` then idles n x DLYMUL strobes.
 - **Program counter**: after the instruction at `wrap_top`, PC = `wrap_bottom` (unless it jumped).
@@ -61,7 +61,7 @@ header: Op[15:13] | SM[12:11] | 0[10:6] | Addr[5:0]
 | `100` | TX_PUSH | TX FIFO = word (dropped if full) |
 | `101` | RX_POP | MISO = RX FIFO word (0 if empty) |
 | `110` | IMEM_WR | instruction Addr = word; Addr + 1 (SM stopped only) |
-| `111` | IMEM_RD | MISO = instruction Addr; Addr + 1 |
+| `111` | IMEM_RD | MISO = instruction Addr; Addr + 1 (SM stopped only, else 0) |
 
 MISO carries the read data during read words. During the header and every other word it
 carries the STATUS register of SM `SM`. Chip registers (Addr >= 0x20) ignore `SM`.
@@ -91,7 +91,7 @@ Per SM (`SM` field). R = read only, W = write only, RW* = written only while the
 | 17, 18 | COND01, 23 | R | live conditions (a program can change them) |
 | 19, 1A | CRC_LO, HI | R | current CRC |
 | 1B | SM_STATUS | R | the STATUS operand: SM status [7:0], PAU status [15:8] (§7) |
-| 1C | FIFO_LEVEL | R | [7:0] TX words, [15:8] RX words (0..132) |
+| 1C | FIFO_LEVEL | R | [7:0] TX words, [15:8] RX words (0..133) |
 | 1D | IRQ_MASK | RW | to HOST_IRQ: [7:0] flags (0xFF), [8] RX FIFO not empty (0), [9] TX FIFO <= 64 words (0) |
 
 Chip (any `SM`):
@@ -310,7 +310,9 @@ bit:
 
 - **IMEM** is written only while the SM is stopped.
 - **`set` reaches 31 at most**: for larger constants use `.x`, `.y`, or a FIFO word.
-- **FIFO speed**: PUSH and PULL see a 4-word front of the 132-word FIFO, which refills one word
-  per clock. A program moving more than one word per clock can briefly wait.
+- **FIFO speed**: PUSH and PULL see a 4-word front of the 133-word FIFO; behind it a one-port
+  SRAM moves a word per clock, shared by the two FIFOs. A program, or a peer, moving more than
+  about a word every 2 clocks can briefly wait.
+- **IMEM_RD** works only while the SM is stopped (its IMEM port fetches instructions).
 - **Host data rate**: about 7.8 Mbit/s at a 50 MHz clock with long bursts.
 - **Programs in this repo**: `programs/` holds 17 tested protocols (`programs/README.md`).

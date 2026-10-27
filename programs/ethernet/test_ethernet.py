@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """10BASE-T transmitter judged by a reference Manchester receiver: preamble and SFD, frame bits,
 FCS against zlib.crc32, half-bit timing, TD- the complement of TD+, TP_IDL; a 250-byte frame
-loaded by an SPI-speed host into the 132-word FIFO, then started by a flag the host sets."""
+loaded by an SPI-speed host into the 133-word FIFO, then started by a flag the host sets."""
 import random
 import sys
 import unittest
@@ -65,7 +65,7 @@ class EthernetTx(unittest.TestCase):
 
     def test_frame_from_a_slow_host(self):
         """An SPI host gives a word every ~96 clocks, the line takes one every 64: the frame waits
-        in the 132-word FIFO (data SRAM) until the host sets flag 0."""
+        in the 133-word FIFO (data SRAM) until the host sets flag 0."""
         f = bytes(random.Random(5).randrange(256) for _ in range(250))
         bench, rx = setup(host_word_clocks=96)
         send(bench, f)

@@ -337,22 +337,35 @@ are queued it does nothing and issues again every strobe.
 
 ## FIFOs
 
-Each SM has a TX FIFO (host to SM) and an RX FIFO (SM to host) of 132 words: a 4-word front next
-to the SM and 128 words in the SM's data SRAM (256 x 16). PULL, PUSH, autopull and autopush see
-the front only; the SM status bits and the host see the whole FIFO.
+Each SM has a TX FIFO (host to SM) and an RX FIFO (SM to host) of 133 words, kept in order
+along this path. The SM's data SRAM (256 x 16, one port: one read or write per clock, a read's
+word available a clock later) holds a 128-word ring for each FIFO.
 
-- The host writes a TX word into the front if the SRAM part is empty and no word is moving,
-  else into the SRAM part (dropped when that is full). It reads RX words from the SRAM part
-  first, then from the front.
-- The SRAM moves one word per clock, at the end of the clock. A TX word that waits in the SRAM
-  starts moving if the front, with a word already moving, has room; it reaches the front at the
-  end of the next clock. Otherwise, the oldest RX front word moves into the SRAM part if that has
-  room.
-- PUSH / PULL `Peer` reach the peer's FIFOs the same way: a push writes the peer's TX FIFO as
-  the host does, a pull reads the peer's RX FIFO as the host does.
-- TX FIFO empty: no word anywhere; RX FIFO full: front and SRAM part full. A program that keeps
-  pulling and pushing more than one word per clock in total can find a front empty (full) while
-  the SRAM part still holds words (has room): it then waits until the SRAM catches up.
+```
+TX: host, peer -> front (if nothing waits) or IN register -> SRAM ring -> front (4) -> PULL
+RX: PUSH -> front (4) -> SRAM ring -> OUT register, or the front (if nothing waits) -> host, peer
+```
+
+- PULL, PUSH, autopull and autopush see the 4-word fronts only. The SM status bits and the host
+  registers count the whole FIFO.
+- **Writers** (host TX_PUSH, a peer's PUSH PEER) put a word into the front when the ring is
+  empty, the IN register empty and no word is moving to the front; else into the IN register if
+  it is free; else the write is refused (TX_PUSH drops the word, PUSH PEER sees a full FIFO).
+- **Readers** (host RX_POP, a peer's PULL PEER) take the OUT register's word; if it is empty, the
+  oldest front word when the ring is empty and no word is moving to the OUT register; else
+  nothing (RX_POP reads 0, PULL PEER sees an empty FIFO).
+- In a clock the host acts first, then the SMs (in index order).
+- **At the end of each clock**:
+  1. Words read from the SRAM in the clock before land in the TX front and the OUT register.
+  2. Bypasses, without the SRAM: the IN word moves to the TX front when the ring is empty, no
+     word is moving and the front has room; the oldest RX front word moves to an empty OUT
+     register when the ring is empty and no word is moving.
+  3. The SRAM port serves one request: TX refill (ring to TX front, which has room), TX store (IN
+     to ring), RX store (oldest RX front word to ring), RX fetch (ring to the empty OUT register).
+     The search starts after the request served last, in that order: each pending request is
+     served within 4 clocks, and a request alone every clock.
+- An SPI word lasts at least 96 clocks, so the host always finds a free IN register and a ready
+  OUT register. A peer moving more than about a word every 2 clocks can find them busy and wait.
 
 ## Multiple state machines
 
@@ -440,6 +453,6 @@ the shift counts. A program carries all of it as assembler directives (`sim/mode
 - Timing within a clock written down, with the 2-clock input synchronizer in the model.
 - After CTRL.RESET the OSR is empty (`osr_count` = 16; v1: 0, a full OSR of zeros), the IRQ
   flags are clear and the CRC holds its initial value.
-- FIFOs of 132 words (4 + 128 in a data SRAM per SM; v1: 4).
+- FIFOs of 133 words (4 front + 128 in a data SRAM per SM + an IN / OUT register; v1: 4).
 - STATUS as IN / ALU source `111`; PUSH / PULL `Peer`; several SMs with shared pins, PIN_MASK
   and chip-level open drain (v1: one SM, open drain rewrote its pindirs).

@@ -27,6 +27,7 @@ SEPARATOR = "-----+----+--------------------+-----+--------+--------+--------+--
 
 PAU_QUEUE_BITS = 32
 BUFFER_WORDS = 128                  # SRAM part of each FIFO (ISA.md, FIFOs)
+SRAM_TX_REFILL, SRAM_TX_STORE, SRAM_RX_STORE, SRAM_RX_FETCH = range(4)   # SRAM port requests
 
 
 def _rev16(v: int) -> int:
@@ -165,9 +166,13 @@ class StateMachine:
         self.tx_fifo: deque[int] = deque(maxlen=fifo_depth)     # fronts, next to the SM
         self.rx_fifo: deque[int] = deque(maxlen=fifo_depth)
         self.buffer = buffer                                      # SRAM parts (chip SMs)
-        self.tx_back: deque[int] = deque()
+        self.tx_back: deque[int] = deque()                        # SRAM rings
         self.rx_back: deque[int] = deque()
-        self.tx_flight: int | None = None                         # TX word moving to the front
+        self.tx_in: int | None = None                             # TX IN register
+        self.rx_out: int | None = None                            # RX OUT register
+        self.tx_flight: int | None = None                         # SRAM reads under way
+        self.rx_flight: int | None = None
+        self.sram_turn = 0                                        # request served first
         self.peer: StateMachine | None = None
         self.gpio_in = 0
         self.irq_flags = [False] * 8
@@ -272,7 +277,8 @@ class StateMachine:
         self.rx_fifo.clear()
         self.tx_back.clear()
         self.rx_back.clear()
-        self.tx_flight = None
+        self.tx_in = self.rx_out = self.tx_flight = self.rx_flight = None
+        self.sram_turn = 0
         self.prev_gpio_in = self.gpio_in
         self.timeout_val = self.timeout_counter = 0
         self.timeout_flag = False
@@ -311,45 +317,91 @@ class StateMachine:
 
     # ------------------------------------------------------------------ FIFOs (host side)
 
+    @property
+    def capacity(self) -> int:
+        """Words a FIFO holds: the front, plus the SRAM ring and the IN / OUT register."""
+        return self.fifo_depth + (BUFFER_WORDS + 1 if self.buffer else 0)
+
+    def _tx_direct(self) -> bool:
+        """A TX word can go straight to the front: nothing older waits behind it."""
+        return (not self.tx_back and self.tx_in is None and self.tx_flight is None
+                and len(self.tx_fifo) < self.fifo_depth)
+
     def tx_room(self) -> bool:
-        return (not self.tx_back and self.tx_flight is None and len(self.tx_fifo) < self.fifo_depth
-                or self.buffer and len(self.tx_back) < BUFFER_WORDS)
+        return self._tx_direct() or self.buffer and self.tx_in is None
 
     def tx_write(self, word: int) -> bool:
-        """Write a TX word as the host does: into the front if nothing waits in the SRAM part."""
-        if not self.tx_back and self.tx_flight is None and len(self.tx_fifo) < self.fifo_depth:
+        """Write a TX word as the host or the peer does: into the front if nothing waits, else
+        into the IN register if it is free; else refused (full for this write)."""
+        if self._tx_direct():
             self.tx_fifo.append(word & 0xFFFF)
-        elif self.buffer and len(self.tx_back) < BUFFER_WORDS:
-            self.tx_back.append(word & 0xFFFF)
+        elif self.buffer and self.tx_in is None:
+            self.tx_in = word & 0xFFFF
         else:
             return False
         return True
 
     def rx_read(self) -> int | None:
-        """Read an RX word as the host does: the SRAM part first (older), then the front."""
-        if self.rx_back:
-            return self.rx_back.popleft()
-        return self.rx_fifo.popleft() if self.rx_fifo else None
+        """Read an RX word as the host or the peer does: the OUT register, else the front when
+        nothing waits in the SRAM; else None (empty for this read)."""
+        if self.rx_out is not None:
+            word, self.rx_out = self.rx_out, None
+            return word
+        if not self.rx_back and self.rx_flight is None and self.rx_fifo:
+            return self.rx_fifo.popleft()
+        return None
 
     @property
     def tx_level(self) -> int:
-        return len(self.tx_fifo) + len(self.tx_back) + (self.tx_flight is not None)
+        return (len(self.tx_fifo) + len(self.tx_back) + (self.tx_flight is not None)
+                + (self.tx_in is not None))
 
     @property
     def rx_level(self) -> int:
-        return len(self.rx_fifo) + len(self.rx_back)
+        return (len(self.rx_fifo) + len(self.rx_back) + (self.rx_flight is not None)
+                + (self.rx_out is not None))
 
     def buffer_clock(self) -> None:
-        """End of a clock: the data SRAM moves one word (ISA.md, FIFOs)."""
+        """End of a clock: SRAM reads land, the bypasses move, the SRAM port serves one request
+        (ISA.md, FIFOs)."""
         if not self.buffer:
             return
         if self.tx_flight is not None:
             self.tx_fifo.append(self.tx_flight)
             self.tx_flight = None
-        if self.tx_back and len(self.tx_fifo) < self.fifo_depth:
+        if self.rx_flight is not None:
+            self.rx_out, self.rx_flight = self.rx_flight, None
+        if self.tx_in is not None and self._tx_bypass():
+            self.tx_fifo.append(self.tx_in)
+            self.tx_in = None
+        if self.rx_out is None and not self.rx_back and self.rx_fifo:
+            self.rx_out = self.rx_fifo.popleft()
+        ring_room = len(self.tx_back) < BUFFER_WORDS, len(self.rx_back) < BUFFER_WORDS
+        pending = [
+            bool(self.tx_back) and len(self.tx_fifo) < self.fifo_depth,     # TX refill
+            self.tx_in is not None and ring_room[0],                        # TX store
+            bool(self.rx_fifo) and ring_room[1],                            # RX store
+            bool(self.rx_back) and self.rx_out is None,                     # RX fetch
+        ]
+        for k in range(4):
+            req = (self.sram_turn + k) % 4
+            if pending[req]:
+                break
+        else:
+            return
+        self.sram_turn = (req + 1) % 4
+        if req == SRAM_TX_REFILL:
             self.tx_flight = self.tx_back.popleft()
-        elif self.rx_fifo and len(self.rx_back) < BUFFER_WORDS:
+        elif req == SRAM_TX_STORE:
+            self.tx_back.append(self.tx_in)
+            self.tx_in = None
+        elif req == SRAM_RX_STORE:
             self.rx_back.append(self.rx_fifo.popleft())
+        else:
+            self.rx_flight = self.rx_back.popleft()
+
+    def _tx_bypass(self) -> bool:
+        return not self.tx_back and self.tx_flight is None and len(self.tx_fifo) < self.fifo_depth
 
     # ------------------------------------------------------------------ PAU
 
@@ -560,7 +612,7 @@ class StateMachine:
             self.x == 0, self.y == 0, self.x == self.y, self.timeout_flag,
             self.osr_count >= (self.pull_thresh or 16), self.isr_count >= (self.push_thresh or 16),
             self.tx_level == 0,
-            len(self.rx_fifo) >= self.fifo_depth and (not self.buffer or len(self.rx_back) >= BUFFER_WORDS),
+            self.rx_level >= self.capacity,
         ][idx] if idx < 8 else 0)
 
     def status_word(self) -> int:

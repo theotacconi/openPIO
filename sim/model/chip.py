@@ -34,7 +34,8 @@ def header(op: int, sm: int = 0, addr: int = 0) -> int:
 class Chip:
     """openPIO chip: SMs, shared pins, host registers."""
 
-    def __init__(self, n_sm: int = 2, fifo_depth: int = 4) -> None:
+    def __init__(self, n_sm: int = 2, fifo_depth: int = 4, spi_word_clocks: int = 96) -> None:
+        """spi_word_clocks: clocks a 16-bit SPI word takes (SCLK = clk / 6: 96)."""
         assert n_sm in (2, 4), "an even number of SMs, at most 4 (CTRL has 4 bits per field)"
         self.bus = PinBus()
         self.sms = [StateMachine(bus=self.bus, index=i, fifo_depth=fifo_depth, buffer=True)
@@ -43,6 +44,7 @@ class Chip:
             sm.peer = self.sms[sm.index ^ 1]
             sm.peer_irq_flags = sm.peer.irq_flags
         self.irq_mask = [0xFF] * n_sm
+        self.spi_word_clocks = spi_word_clocks
         self.en = 0
         self.in_sel = 0
         self.uio_in = 0                 # pin levels now
@@ -252,33 +254,36 @@ class Chip:
             self.sms[n].memory[addr % IMEM_WORDS] = word & 0xFFFF
 
     def imem_read(self, n: int, addr: int) -> int:
+        """0 while SM n runs: its IMEM port fetches instructions."""
+        if self.en >> n & 1:
+            return 0
         return self.sms[n].memory[addr % IMEM_WORDS]
 
     # ------------------------------------------------------------------ SPI transaction
 
     def spi(self, hdr: int, words: Sequence[int] = ()) -> list[int]:
-        """One SPI transaction (HOST.md): header then a burst of data words. Returns the MISO
-        words: the header's, then one per data word."""
+        """One SPI transaction (HOST.md): header then a burst of data words, each taking
+        spi_word_clocks clocks. A read word takes its value when it starts, a write acts when
+        its last bit is in. Returns the MISO words: the header's, then one per data word."""
         op, n, addr = hdr >> 13 & 7, hdr >> 11 & 3, hdr & 0x3F
         n = min(n, len(self.sms) - 1)
         miso = [self._sm_status_reg(self.sms[n])]
+        self.step(self.spi_word_clocks)
         for word in words:
-            if op == OP_REG_RD:
-                miso.append(self.reg_read(n, addr))
+            if op in (OP_REG_RD, OP_RX_POP, OP_IMEM_RD):
+                miso.append(self.reg_read(n, addr) if op == OP_REG_RD else
+                            self.rx_pop(n) if op == OP_RX_POP else self.imem_read(n, addr))
+                addr += op != OP_RX_POP
+                self.step(self.spi_word_clocks)
+                continue
+            miso.append(self._sm_status_reg(self.sms[n]))
+            self.step(self.spi_word_clocks)
+            if op == OP_REG_WR:
+                self.reg_write(n, addr, word)
                 addr += 1
-            elif op == OP_RX_POP:
-                miso.append(self.rx_pop(n))
-            elif op == OP_IMEM_RD:
-                miso.append(self.imem_read(n, addr))
+            elif op == OP_TX_PUSH:
+                self.tx_push(n, word)
+            elif op == OP_IMEM_WR:
+                self.imem_write(n, addr, word)
                 addr += 1
-            else:
-                miso.append(self._sm_status_reg(self.sms[n]))
-                if op == OP_REG_WR:
-                    self.reg_write(n, addr, word)
-                    addr += 1
-                elif op == OP_TX_PUSH:
-                    self.tx_push(n, word)
-                elif op == OP_IMEM_WR:
-                    self.imem_write(n, addr, word)
-                    addr += 1
         return miso

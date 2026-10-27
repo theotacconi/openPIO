@@ -43,16 +43,74 @@ class HostInterface(unittest.TestCase):
     def test_fifo_depth_through_the_sram(self):
         chip = Chip(2)
         load(chip, 0, assemble("loop:\npull block\nmov isr, osr\npush block\njmp loop"))
-        accepted = [chip.tx_push(0, w) for w in range(134)]
-        self.assertEqual(accepted, [True] * 132 + [False] * 2, "4 front + 128 SRAM words")
-        self.assertEqual(chip.reg_read(0, FIFO_LEVEL), 132)
+        accepted = []
+        for w in range(135):                       # a word a clock: the IN register empties
+            accepted.append(chip.tx_push(0, w))
+            chip.step()
+        self.assertEqual(accepted, [True] * 133 + [False] * 2, "4 front + 128 SRAM + IN")
+        self.assertEqual(chip.reg_read(0, FIFO_LEVEL), 133)
+        self.assertEqual(chip.tx_push(0, 0), False, "full")
         chip.reg_write(0, CTRL, 1)
         out = []
-        for _ in range(2000):
+        for _ in range(3000):
             chip.step()
-            if chip.sms[0].rx_level:
-                out.append(chip.rx_pop(0))
-        self.assertEqual(out, list(range(132)), "order kept across front and SRAM")
+            if (word := chip.sms[0].rx_read()) is not None:
+                out.append(word)
+        self.assertEqual(out, list(range(133)), "order kept across front, SRAM and registers")
+
+    def test_random_traffic_keeps_order(self):
+        """Host writes SM 0 and reads SM 1 at random clocks; SM 0 forwards each word to SM 1
+        (push peer), SM 1 adds 1: every word arrives once, in order, through front, SRAM, IN
+        and OUT registers in both FIFOs of both SMs."""
+        import random
+        for seed, clkdiv in ((1, 1), (2, 1), (3, 2)):
+            rng = random.Random(seed)
+            chip = Chip(2)
+            load(chip, 0, assemble(".wrap_target\npull block\nmov isr, osr\npush peer block\n.wrap"),
+                 clkdiv_int=clkdiv)
+            load(chip, 1, assemble(".y 1\n.wrap_target\npull block\nmov x, osr\nadd x, y\n"
+                                   "mov isr, x\npush block\n.wrap"), clkdiv_int=clkdiv)
+            chip.reg_write(0, CTRL, 0b11)
+            sent, got, levels = 0, [], set()
+            for _ in range(6000):
+                if rng.random() < 0.5 and sent < 3000 and chip.tx_push(0, sent):
+                    sent += 1
+                if rng.random() < 0.05 and (w := chip.sms[1].rx_read()) is not None:
+                    got.append(w)
+                chip.step()
+                levels.add((chip.sms[0].tx_level, chip.sms[1].tx_level, chip.sms[1].rx_level))
+            self.assertEqual(got, list(range(1, len(got) + 1)), f"seed {seed}")
+            self.assertGreater(len(got), 250)
+            self.assertEqual([max(x) for x in zip(*levels)], [133] * 3, "all three FIFOs filled up")
+
+    def test_sram_port_serves_every_request_within_4_clocks(self):
+        sm = Chip(2).sms[0]
+        sm.tx_back.extend(range(10, 20))           # TX refill pending (front empty)
+        sm.tx_in = 99                              # TX store pending
+        sm.rx_fifo.extend([1, 2])                  # RX store pending
+        sm.rx_back.extend([5, 6])                  # RX fetch pending (OUT empty)
+        for _ in range(4):
+            sm.buffer_clock()
+        self.assertEqual((sm.tx_in, sm.tx_back[-1], len(sm.rx_fifo), sm.rx_out is not None
+                          or sm.rx_flight is not None, len(sm.tx_fifo) + (sm.tx_flight is not None)),
+                         (None, 99, 1, True, 1), "one of each, in turn")
+
+    def test_imem_read_only_while_stopped(self):
+        chip = Chip(2)
+        load(chip, 0, assemble("nop\nend: jmp end"))
+        self.assertEqual(chip.spi(header(OP_IMEM_RD, 0, 1), [0])[1:], [0x0001])
+        chip.reg_write(0, CTRL, 1)
+        self.assertEqual(chip.spi(header(OP_IMEM_RD, 0, 1), [0])[1:], [0], "the port fetches")
+
+    def test_writes_faster_than_the_sram_wait(self):
+        """Two writes in one clock: the second finds the IN register busy (the first went to the
+        front only while nothing waited)."""
+        chip = Chip(2)
+        for w in range(5):
+            self.assertTrue(chip.tx_push(0, w))    # 4 to the front, 1 to IN
+        self.assertFalse(chip.tx_push(0, 5), "IN busy this clock")
+        chip.step()
+        self.assertTrue(chip.tx_push(0, 5), "IN stored into the SRAM at the clock's end")
 
     def test_host_sets_a_flag_and_masks_the_irq_pin(self):
         chip = Chip(2)
@@ -203,7 +261,8 @@ class MultiSm(unittest.TestCase):
         for w in (1, 2, 3):
             chip.tx_push(0, w)
         chip.step(60)
-        self.assertEqual([chip.rx_pop(1) for _ in range(3)], [3, 5, 7])
+        self.assertEqual(chip.spi(header(OP_RX_POP, 1), [0] * 3)[1:], [3, 5, 7],
+                         "an SPI burst: every word ready at its start")
 
     def test_pull_peer_and_peer_irq(self):
         chip = Chip(2)
@@ -240,13 +299,14 @@ class MultiSm(unittest.TestCase):
         self.assertTrue(chip.sms[0].irq_flags[0])
 
     def test_push_peer_to_a_full_fifo(self):
-        """The peer's TX FIFO (132 words) full: PUSH PEER stalls; NOBLOCK drops the word."""
+        """The peer's TX FIFO (133 words) full: PUSH PEER stalls; NOBLOCK drops the word."""
         chip = Chip(2)
         for n, push in ((0, "push peer"), (1, "push peer noblock")):
             load(chip, n, assemble(f"set x, {n + 1}\nmov isr, x\n{push}\nirq 0\nend: jmp end"))
-        for n in (0, 1):
-            for w in range(132):
-                chip.tx_push(n, w)
+        for w in range(133):
+            chip.tx_push(0, w)
+            chip.tx_push(1, w)
+            chip.step()
         chip.reg_write(0, CTRL, 0b11)
         chip.step(10)
         self.assertEqual((chip.reg_read(0, PC), chip.sms[0].stalled), (2, True), "SM 0 stalls")
@@ -254,7 +314,7 @@ class MultiSm(unittest.TestCase):
         chip.sms[1].tx_fifo.popleft()               # SM 1 takes a word: room for SM 0's
         chip.step(10)
         self.assertTrue(chip.sms[0].irq_flags[0])
-        self.assertEqual(chip.reg_read(1, FIFO_LEVEL) & 0xFF, 132)
+        self.assertEqual(chip.reg_read(1, FIFO_LEVEL) & 0xFF, 133)
 
     def test_pull_ifempty_waits_for_the_threshold(self):
         chip = Chip(2)

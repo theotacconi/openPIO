@@ -129,8 +129,8 @@ class Bench:
             self.chip.uio_in = lv
             self.chip.step()
             for sm, s in enumerate(self.chip.sms):
-                while host_turn and s.rx_level:
-                    self.received[sm].append(self.chip.rx_pop(sm))
+                while host_turn and (word := s.rx_read()) is not None:
+                    self.received[sm].append(word)
                     if self.host_word_clocks:
                         break
             self.t += 1

@@ -23,10 +23,10 @@ header:  15  14  13 | 12  11 | 10 .. 6 | 5 .. 0
 | `001` | reserved | ignored |
 | `010` | REG_WR | register `Addr` of SM `SM` <= word, then Addr + 1 |
 | `011` | REG_RD | MISO = register `Addr`, then Addr + 1 |
-| `100` | TX_PUSH | TX FIFO <= word (dropped when full) |
+| `100` | TX_PUSH | TX FIFO <= word (dropped when full; ISA.md, FIFOs) |
 | `101` | RX_POP | MISO = RX FIFO head, popped (0 when empty) |
 | `110` | IMEM_WR | instruction `Addr` <= word, then Addr + 1 (SM stopped) |
-| `111` | IMEM_RD | MISO = instruction `Addr`, then Addr + 1 |
+| `111` | IMEM_RD | MISO = instruction `Addr`, then Addr + 1 (SM stopped; 0 while it runs: the port fetches) |
 
 MISO carries the read data during the data words of REG_RD, RX_POP and IMEM_RD (the value is
 taken when the word starts) and the SM's STATUS register during every other word and during
@@ -64,7 +64,7 @@ the header. Chip registers (`Addr` >= 0x20) ignore `SM`.
 | 0x19 | CRC_LO | R | CRC [15:0] |
 | 0x1A | CRC_HI | R | CRC [31:16] |
 | 0x1B | SM_STATUS | R | the STATUS operand (ISA.md): SM status [7:0], PAU status [15:8] |
-| 0x1C | FIFO_LEVEL | R | words in the TX FIFO [7:0], in the RX FIFO [15:8] (0..132; ISA.md, FIFOs) |
+| 0x1C | FIFO_LEVEL | R | words in the TX FIFO [7:0], in the RX FIFO [15:8] (0..133; ISA.md, FIFOs) |
 | 0x1D | IRQ_MASK | RW | what reaches HOST_IRQ: [7:0] these flags when set (0xFF), [8] RX FIFO not empty (0), [9] TX FIFO at most 64 words (0) |
 
 RW*: written only while the SM is stopped (CTRL EN = 0); writes while it runs are ignored.
