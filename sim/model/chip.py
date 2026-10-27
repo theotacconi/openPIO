@@ -17,7 +17,7 @@ from emu import PinBus, StateMachine, pad_outputs
 # Registers of an SM (HOST.md)
 STATUS, WRAP, SIDESET, PINBASE, PIN_MASK, MISC, CLKDIV, COND_CFG = range(8)
 COND_CFG01, COND_CFG23, PAU_MODE, CRC_CFG, CRC_POLY_LO, CRC_POLY_HI, CRC_RES_LO, CRC_RES_HI = range(8, 16)
-IRQ, PC, X, Y, ISR, OSR, COUNTS, COND01, COND23, CRC_LO, CRC_HI, SM_STATUS = range(16, 28)
+IRQ, PC, X, Y, ISR, OSR, COUNTS, COND01, COND23, CRC_LO, CRC_HI, SM_STATUS, FIFO_LEVEL = range(16, 29)
 # Chip registers
 CTRL, GPIO, PINS, PINS_IN, IRQ_SUM, ID = range(0x20, 0x26)
 
@@ -38,12 +38,11 @@ class Chip:
     def __init__(self, n_sm: int = 2, fifo_depth: int = 4) -> None:
         assert n_sm in (2, 4), "an even number of SMs, at most 4 (CTRL has 4 bits per field)"
         self.bus = PinBus()
-        self.sms = [StateMachine(bus=self.bus, index=i, fifo_depth=fifo_depth) for i in range(n_sm)]
+        self.sms = [StateMachine(bus=self.bus, index=i, fifo_depth=fifo_depth, buffer=True)
+                    for i in range(n_sm)]
         for sm in self.sms:
-            peer = self.sms[sm.index ^ 1]
-            sm.peer_irq_flags = peer.irq_flags
-            sm.peer_tx_fifo = peer.tx_fifo
-            sm.peer_rx_fifo = peer.rx_fifo
+            sm.peer = self.sms[sm.index ^ 1]
+            sm.peer_irq_flags = sm.peer.irq_flags
         self.en = 0
         self.in_sel = 0
         self.uio_in = 0
@@ -67,6 +66,8 @@ class Chip:
                 if self.en >> sm.index & 1:
                     sm.step()
             self.bus.commit()
+            for sm in self.sms:
+                sm.buffer_clock()
             self.cycle += 1
 
     @property
@@ -102,8 +103,8 @@ class Chip:
     # ------------------------------------------------------------------ host registers
 
     def _sm_status_reg(self, sm: StateMachine) -> int:
-        return (int(not sm.tx_fifo) | int(len(sm.tx_fifo) >= sm.fifo_depth) << 1
-                | int(not sm.rx_fifo) << 2 | int(len(sm.rx_fifo) >= sm.fifo_depth) << 3
+        return (int(sm.tx_level == 0) | int(not sm.tx_room()) << 1
+                | int(sm.rx_level == 0) << 2 | sm._sm_status(7) << 3
                 | int(sm.stalled) << 4 | (self.en >> sm.index & 1) << 5 | sm.pc << 8)
 
     def reg_read(self, n: int, addr: int) -> int:
@@ -141,6 +142,7 @@ class Chip:
             CRC_LO: lambda: sm.crc & 0xFFFF,
             CRC_HI: lambda: sm.crc >> 16,
             SM_STATUS: lambda: sm.status_word(),
+            FIFO_LEVEL: lambda: sm.rx_level << 8 | sm.tx_level,
         }
         return regs[addr]() & 0xFFFF if addr in regs else 0
 
@@ -237,15 +239,11 @@ class Chip:
     # ------------------------------------------------------------------ FIFOs and IMEM
 
     def tx_push(self, n: int, word: int) -> bool:
-        sm = self.sms[n]
-        if len(sm.tx_fifo) >= sm.fifo_depth:
-            return False
-        sm.tx_fifo.append(word & 0xFFFF)
-        return True
+        return self.sms[n].tx_write(word)
 
     def rx_pop(self, n: int) -> int:
-        sm = self.sms[n]
-        return sm.rx_fifo.popleft() if sm.rx_fifo else 0
+        word = self.sms[n].rx_read()
+        return 0 if word is None else word
 
     def imem_write(self, n: int, addr: int, word: int) -> None:
         if not self.en >> n & 1:

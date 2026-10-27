@@ -10,7 +10,7 @@ emulator. Program size in instructions (of 64).
 |---|---|---|---|
 | bridge | programs of other rows | 1 / 1 | Two state machines as a protocol bridge: SM 0 receives UART bytes and pushes them straight into SM 1's TX FIFO (push peer), SM 1 sends them as an SPI master. No host in between. |
 | can | `can_rx.asm` (24), `can_tx.asm` (25) | 4 / 4 | CAN transmitter and receiver against reference CAN nodes on a wired-AND bus: frames, ACK, arbitration lost at the exact bit, CRC errors. |
-| ethernet | `eth_tx.asm` (26) | 1 / 1 | 10BASE-T transmitter judged by a reference Manchester receiver: preamble and SFD, frame bits, FCS against zlib.crc32, half-bit timing, TD- the complement of TD+, TP_IDL. |
+| ethernet | `eth_tx.asm` (26) | 2 / 2 | 10BASE-T transmitter judged by a reference Manchester receiver: preamble and SFD, frame bits, FCS against zlib.crc32, half-bit timing, TD- the complement of TD+, TP_IDL; a whole frame sent from an SPI-speed host through the 132-word FIFO. |
 | fourb5b | `fourb5b_tx.asm` (39) | 1 / 1 | 4b5b in software through a jump table, BMC on the PAU, decoded by a reference biphase mark receiver: every nibble comes back, symbols back to back on the line. |
 | i2c | `i2c_master.asm` (61) | 4 / 4 | I2C controller judged by the reference I2C target (open drain, pull-ups): writes, reads with a repeated START, NACK from an absent target, clock stretching and lost arbitration. |
 | jtag | `jtag.asm` (5) | 3 / 3 | JTAG cycle engine driving a reference IEEE 1149.1 TAP: IDCODE after reset, IR and DR scans, a USER register written and read back, BYPASS. |

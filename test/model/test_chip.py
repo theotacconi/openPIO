@@ -9,7 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "sim" / "model"))
 from asm import assemble                                             # noqa: E402
-from chip import (Chip, header, CTRL, GPIO, ID, IRQ, PC, PINS, STATUS, WRAP, X,       # noqa: E402
+from chip import (Chip, header, CTRL, GPIO, ID, IRQ, PC, PINS, STATUS, WRAP, X, FIFO_LEVEL,  # noqa: E402
                   COND_CFG01, COND_CFG23, PINBASE, PIN_MASK, MISC, CLKDIV, SM_STATUS,
                   OP_IMEM_RD, OP_IMEM_WR, OP_REG_RD, OP_REG_WR, OP_RX_POP, OP_TX_PUSH)
 
@@ -30,10 +30,24 @@ class Host(unittest.TestCase):
         chip.spi(header(OP_IMEM_WR, 1, 0), list(prog))
         self.assertEqual(chip.spi(header(OP_IMEM_RD, 1, 0), [0] * 3)[1:], list(prog))
         chip.reg_write(1, WRAP, 2 << 8)
-        chip.spi(header(OP_TX_PUSH, 1), [0x1111, 0x2222, 0x3333, 0x4444, 0x5555])   # 5th dropped
+        chip.spi(header(OP_TX_PUSH, 1), [0x1111, 0x2222, 0x3333, 0x4444, 0x5555])
         chip.reg_write(1, CTRL, 0b10)
         chip.step(40)
-        self.assertEqual(chip.spi(header(OP_RX_POP, 1), [0] * 5)[1:], [0x1111, 0x2222, 0x3333, 0x4444, 0])
+        self.assertEqual(chip.spi(header(OP_RX_POP, 1), [0] * 6)[1:], [0x1111, 0x2222, 0x3333, 0x4444, 0x5555, 0])
+
+    def test_fifo_depth_through_the_sram(self):
+        chip = Chip(2)
+        chip.load(0, assemble("loop:\npull block\nmov isr, osr\npush block\njmp loop"))
+        accepted = [chip.tx_push(0, w) for w in range(134)]
+        self.assertEqual(accepted, [True] * 132 + [False] * 2, "4 front + 128 SRAM words")
+        self.assertEqual(chip.reg_read(0, FIFO_LEVEL), 132)
+        chip.reg_write(0, CTRL, 1)
+        out = []
+        for _ in range(2000):
+            chip.step()
+            if chip.sms[0].rx_level:
+                out.append(chip.rx_pop(0))
+        self.assertEqual(out, list(range(132)), "order kept across front and SRAM")
 
     def test_registers_written_only_while_stopped(self):
         chip = Chip(2)

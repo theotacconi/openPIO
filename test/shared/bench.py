@@ -43,8 +43,11 @@ class Device:
 class Bench:
     """Chip model + devices + host, clocked together."""
 
-    def __init__(self, n_sm: int = 2, pullups: int = 0) -> None:
+    def __init__(self, n_sm: int = 2, pullups: int = 0, host_word_clocks: int = 0) -> None:
+        """host_word_clocks: clocks the host needs per FIFO word (an SPI host: about 100);
+        0 = one word per clock."""
         self.chip = Chip(n_sm)
+        self.host_word_clocks = host_word_clocks
         self.pullups = pullups
         self.devices: list[Device] = []
         self.trace: list[int] = []                      # resolved levels, one per clock
@@ -95,8 +98,9 @@ class Bench:
     def run(self, cycles: int, until: Callable[[], bool] | None = None) -> int:
         """Run up to `cycles` clocks, stopping after the clock where until() is true."""
         for n in range(cycles):
+            host_turn = not self.host_word_clocks or self.t % self.host_word_clocks == 0
             for sm, words in enumerate(self.to_send):
-                if words and self.chip.tx_push(sm, words[0]):
+                if host_turn and words and self.chip.tx_push(sm, words[0]):
                     words.pop(0)
             lv = self.levels()
             self.trace.append(lv)
@@ -105,8 +109,10 @@ class Bench:
             self.chip.uio_in = lv
             self.chip.step()
             for sm, s in enumerate(self.chip.sms):
-                while s.rx_fifo:
+                while host_turn and s.rx_level:
                     self.received[sm].append(self.chip.rx_pop(sm))
+                    if self.host_word_clocks:
+                        break
             self.t += 1
             if until is not None and until():
                 return n + 1

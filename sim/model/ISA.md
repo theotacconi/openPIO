@@ -332,11 +332,30 @@ the CRC (CRC on, TX off) and enter the RX queue; a bit arriving at a full queue 
 sets RX overrun. IN PINS with RX on takes `count` bits from the queue (oldest first in time order); while fewer
 are queued it does nothing and issues again every strobe.
 
+## FIFOs
+
+Each SM has a TX FIFO (host to SM) and an RX FIFO (SM to host) of 132 words: a 4-word front next
+to the SM and 128 words in the SM's data SRAM (256 x 16). PULL, PUSH, autopull and autopush see
+the front only; the SM status bits and the host see the whole FIFO.
+
+- The host writes a TX word into the front if the SRAM part is empty and no word is moving,
+  else into the SRAM part (dropped when that is full). It reads RX words from the SRAM part
+  first, then from the front.
+- The SRAM moves one word per clock, at the end of the clock. A TX word that waits in the SRAM
+  starts moving if the front, with a word already moving, has room; it reaches the front at the
+  end of the next clock. Otherwise, the oldest RX front word moves into the SRAM part if that has
+  room.
+- PUSH / PULL `Peer` reach the peer's FIFOs the same way: a push writes the peer's TX FIFO as
+  the host does, a pull reads the peer's RX FIFO as the host does.
+- TX FIFO empty: no word anywhere; RX FIFO full: front and SRAM part full. A program that keeps
+  pulling and pushing more than one word per clock in total can find a front empty (full) while
+  the SRAM part still holds words (has room): it then waits until the SRAM catches up.
+
 ## Multiple state machines
 
 - **Peer**: SM i and SM i XOR 1 are peers (0 and 1, 2 and 3). Peer IRQ flags are the peer's own
   flags: `irq peer 3` sets flag 3 of the peer, a peer IRQ condition reads the peer's flags.
-  PUSH / PULL `Peer` reach the peer's FIFOs.
+  PUSH / PULL `Peer` reach the peer's FIFOs (see FIFOs).
 - **Pins**: the SMs share the 8 pins: one output latch and one direction latch. An SM changes
   only the pins in its PIN_MASK; when several SMs change the same pin in the same strobe, the
   highest-numbered SM wins. The PAU TX of an SM drives its pins over the latch, also within
@@ -389,5 +408,6 @@ the shift counts.
 - Delays count strobes times DLYMUL; CLKDIV only divides the strobe rate (v1: delays were scaled
   by CLKDIV too, except after a WAIT / PUSH / PULL stall).
 - After CTRL.RESET the OSR is empty (`osr_count` = 16; v1: 0, a full OSR of zeros).
+- FIFOs of 132 words (4 + 128 in a data SRAM per SM; v1: 4).
 - STATUS as IN / ALU source `111`; PUSH / PULL `Peer`; several SMs with shared pins, PIN_MASK
   and chip-level open drain (v1: one SM, open drain rewrote its pindirs).

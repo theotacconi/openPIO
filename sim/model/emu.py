@@ -26,6 +26,7 @@ HEADER = "CYC  | PC | INSTR              | DLY | X      | Y      | OSR    | ISR 
 SEPARATOR = "-----+----+--------------------+-----+--------+--------+--------+--------+--------+---------+------"
 
 PAU_QUEUE_BITS = 32
+BUFFER_WORDS = 128                  # SRAM part of each FIFO (ISA.md, FIFOs)
 
 
 def _rev16(v: int) -> int:
@@ -132,6 +133,7 @@ class StateMachine:
         pin_mask: int = 0xFF,
         bus: PinBus | None = None,
         index: int = 0,
+        buffer: bool = False,
         instructions: Sequence[int] | None = None,
     ) -> None:
         if program is None and instructions is not None:
@@ -163,8 +165,13 @@ class StateMachine:
         self.crc_poly, self.crc_res = crc_poly & 0xFFFFFFFF, crc_res & 0xFFFFFFFF
 
         self.fifo_depth = fifo_depth
-        self.tx_fifo: deque[int] = deque(maxlen=fifo_depth)
+        self.tx_fifo: deque[int] = deque(maxlen=fifo_depth)     # fronts, next to the SM
         self.rx_fifo: deque[int] = deque(maxlen=fifo_depth)
+        self.buffer = buffer                                      # SRAM parts (chip SMs)
+        self.tx_back: deque[int] = deque()
+        self.rx_back: deque[int] = deque()
+        self.tx_flight: int | None = None                         # TX word moving to the front
+        self.peer: StateMachine | None = None
         self.gpio_in = 0
         self.irq_flags = [False] * 8
         # The peer's IRQ flags and FIFOs; a chip links them to SM index ^ 1
@@ -305,6 +312,9 @@ class StateMachine:
         self._current_instr_str = "nop"
         self.tx_fifo.clear()
         self.rx_fifo.clear()
+        self.tx_back.clear()
+        self.rx_back.clear()
+        self.tx_flight = None
         self.prev_gpio_in = self.gpio_in
         self.timeout_val = self.timeout_counter = 0
         self.timeout_flag = False
@@ -340,6 +350,48 @@ class StateMachine:
         self.rx_stuff_err = False
         self.rx_overrun = False
         self.cond_prev = [self._cond_value(s) for s in range(4)]
+
+    # ------------------------------------------------------------------ FIFOs (host side)
+
+    def tx_room(self) -> bool:
+        return (not self.tx_back and self.tx_flight is None and len(self.tx_fifo) < self.fifo_depth
+                or self.buffer and len(self.tx_back) < BUFFER_WORDS)
+
+    def tx_write(self, word: int) -> bool:
+        """Write a TX word as the host does: into the front if nothing waits in the SRAM part."""
+        if not self.tx_back and self.tx_flight is None and len(self.tx_fifo) < self.fifo_depth:
+            self.tx_fifo.append(word & 0xFFFF)
+        elif self.buffer and len(self.tx_back) < BUFFER_WORDS:
+            self.tx_back.append(word & 0xFFFF)
+        else:
+            return False
+        return True
+
+    def rx_read(self) -> int | None:
+        """Read an RX word as the host does: the SRAM part first (older), then the front."""
+        if self.rx_back:
+            return self.rx_back.popleft()
+        return self.rx_fifo.popleft() if self.rx_fifo else None
+
+    @property
+    def tx_level(self) -> int:
+        return len(self.tx_fifo) + len(self.tx_back) + (self.tx_flight is not None)
+
+    @property
+    def rx_level(self) -> int:
+        return len(self.rx_fifo) + len(self.rx_back)
+
+    def buffer_clock(self) -> None:
+        """End of a clock: the data SRAM moves one word (ISA.md, FIFOs)."""
+        if not self.buffer:
+            return
+        if self.tx_flight is not None:
+            self.tx_fifo.append(self.tx_flight)
+            self.tx_flight = None
+        if self.tx_back and len(self.tx_fifo) < self.fifo_depth:
+            self.tx_flight = self.tx_back.popleft()
+        elif self.rx_fifo and len(self.rx_back) < BUFFER_WORDS:
+            self.rx_back.append(self.rx_fifo.popleft())
 
     # ------------------------------------------------------------------ PAU
 
@@ -548,7 +600,8 @@ class StateMachine:
         return int([
             self.x == 0, self.y == 0, self.x == self.y, self.timeout_flag,
             self.osr_count >= (self.pull_thresh or 16), self.isr_count >= (self.push_thresh or 16),
-            not self.tx_fifo, len(self.rx_fifo) >= self.fifo_depth,
+            self.tx_level == 0,
+            len(self.rx_fifo) >= self.fifo_depth and (not self.buffer or len(self.rx_back) >= BUFFER_WORDS),
         ][idx] if idx < 8 else 0)
 
     def status_word(self) -> int:
@@ -623,6 +676,7 @@ class StateMachine:
         self._clock()
         if self._own_bus:
             self.bus.commit()
+            self.buffer_clock()
 
     def _clock(self) -> None:
         self.cycle_count += 1
@@ -683,11 +737,11 @@ class StateMachine:
                     done = True
             done = done or self._wait_met(info["pol"], info["edge"], info["slot"])
         elif self.stall_reason == "PULL":
-            if info["fifo"]:
-                self.osr, self.osr_count, done = info["fifo"].popleft(), 0, True
+            word = self._pull_word(info["peer"])
+            if word is not None:
+                self.osr, self.osr_count, done = word, 0, True
         elif self.stall_reason == "PUSH":
-            if len(info["fifo"]) < self.fifo_depth:
-                info["fifo"].append(self.isr)
+            if self._push_word(info["peer"]):
                 self.isr = self.isr_count = 0
                 done = True
         elif self.stall_reason == "IRQ":
@@ -697,6 +751,28 @@ class StateMachine:
             self.stalled = False
             self.stall_reason = ""
             self._finish(info["delay"], info["next_pc"])
+
+    def _pull_word(self, peer: bool) -> int | None:
+        """PULL source: the own TX front, or the peer's RX FIFO read as the host does."""
+        if not peer:
+            return self.tx_fifo.popleft() if self.tx_fifo else None
+        if self.peer is not None:
+            return self.peer.rx_read()
+        return self.peer_rx_fifo.popleft() if self.peer_rx_fifo else None
+
+    def _push_word(self, peer: bool) -> bool:
+        """PUSH target: the own RX front, or the peer's TX FIFO written as the host does."""
+        if not peer:
+            if len(self.rx_fifo) >= self.fifo_depth:
+                return False
+            self.rx_fifo.append(self.isr)
+            return True
+        if self.peer is not None:
+            return self.peer.tx_write(self.isr)
+        if len(self.peer_tx_fifo) >= self.fifo_depth:
+            return False
+        self.peer_tx_fifo.append(self.isr)
+        return True
 
     def _stall(self, reason: str, **info) -> None:
         self.stalled = True
@@ -758,11 +834,10 @@ class StateMachine:
                 self.isr = ((self.isr << count) | val) & 0xFFFF
             self.isr_count = min(16, self.isr_count + count)
             if auto and self.isr_count >= (self.push_thresh or 16):
-                if len(self.rx_fifo) < self.fifo_depth:
-                    self.rx_fifo.append(self.isr)
+                if self._push_word(False):
                     self.isr = self.isr_count = 0
                 else:
-                    return self._stall("PUSH", fifo=self.rx_fifo, delay=delay, next_pc=next_pc)
+                    return self._stall("PUSH", peer=False, delay=delay, next_pc=next_pc)
 
         elif opcode == OP_OUT:
             dest, auto = (args >> 5) & 7, (args >> 4) & 1
@@ -837,26 +912,23 @@ class StateMachine:
             elif ctype == CT_FIFO and not a & 3:
                 is_pull, block, ifcond, peer = a >> 5 & 1, a >> 4 & 1, a >> 3 & 1, a >> 2 & 1
                 if is_pull:
-                    fifo = self.peer_rx_fifo if peer else self.tx_fifo
                     if ifcond and self.osr_count < (self.pull_thresh or 16):
                         pass
-                    elif fifo:
-                        self.osr, self.osr_count = fifo.popleft(), 0
+                    elif (word := self._pull_word(peer)) is not None:
+                        self.osr, self.osr_count = word, 0
                     elif not block:
                         self.osr, self.osr_count = self.x, 0
                     else:
-                        return self._stall("PULL", fifo=fifo, delay=delay, next_pc=next_pc)
+                        return self._stall("PULL", peer=peer, delay=delay, next_pc=next_pc)
                 else:
-                    fifo = self.peer_tx_fifo if peer else self.rx_fifo
                     if ifcond and self.isr_count < (self.push_thresh or 16):
                         pass
-                    elif len(fifo) < self.fifo_depth:
-                        fifo.append(self.isr)
+                    elif self._push_word(peer):
                         self.isr = self.isr_count = 0
                     elif not block:
                         self.isr = self.isr_count = 0
                     else:
-                        return self._stall("PUSH", fifo=fifo, delay=delay, next_pc=next_pc)
+                        return self._stall("PUSH", peer=peer, delay=delay, next_pc=next_pc)
             elif ctype == CT_WAIT and not a & 4:
                 pol, edge, t_en, slot = a >> 5 & 1, a >> 4 & 1, a >> 3 & 1, a & 3
                 if t_en:

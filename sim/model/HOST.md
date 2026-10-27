@@ -36,7 +36,7 @@ the header. Chip registers (`Addr` >= 0x20) ignore `SM`.
 
 | Addr | Name | R/W | Fields (reset value) |
 |---|---|---|---|
-| 0x00 | STATUS | R | [0] TX FIFO empty, [1] TX full, [2] RX empty, [3] RX full, [4] stalled, [5] enabled, [13:8] PC |
+| 0x00 | STATUS | R | whole FIFOs (ISA.md, FIFOs): [0] TX empty, [1] TX full, [2] RX empty, [3] RX full, [4] stalled, [5] enabled, [13:8] PC |
 | 0x01 | WRAP | RW | [5:0] wrap_bottom (0), [13:8] wrap_top (63) |
 | 0x02 | SIDESET | RW | [2:0] count (0), [3] opt (0), [4] drives pindirs (0), [10:8] base (0) |
 | 0x03 | PINBASE | RW | [2:0] in_base, [6:4] out_base, [10:8] set_base (0), [14:12] set_count (5) |
@@ -64,6 +64,7 @@ the header. Chip registers (`Addr` >= 0x20) ignore `SM`.
 | 0x19 | CRC_LO | R | CRC [15:0] |
 | 0x1A | CRC_HI | R | CRC [31:16] |
 | 0x1B | SM_STATUS | R | the STATUS operand (ISA.md): SM status [7:0], PAU status [15:8] |
+| 0x1C | FIFO_LEVEL | R | words in the TX FIFO [7:0], in the RX FIFO [15:8] (0..132; ISA.md, FIFOs) |
 
 RW*: written only while the SM is stopped (CTRL EN = 0); writes while it runs are ignored.
 
