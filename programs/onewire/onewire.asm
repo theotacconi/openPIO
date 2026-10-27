@@ -2,9 +2,12 @@
 ; 1-Wire master, standard speed. DQ = set_base = in_base, in the chip open-drain mask, pulled up;
 ; PIN_MASK: DQ. 1 strobe = 1 us (CLKDIV = clock in MHz). ISR shifts right (LSB first).
 ; TX FIFO, one command a word: bit 15 set = reset pulse; else bits 7:0 = a byte to write, LSB
-; first (0xFF reads a byte: a read slot is a write-1 slot sampled at 15 us).
-; RX FIFO, one result a command (bits 15:8): the 8 bits seen on DQ; after a reset, bit 15 is the
-; presence (0: a device answered). The host checks CRC8s (the slots do not pass the PAU).
+; first (0xFF reads a byte: a read slot is a write-1 slot sampled at 15 us); bit 14 resets the
+; CRC8 first.
+; RX FIFO, one result a command: bits 15:8 the 8 bits seen on DQ, which feed the CRC8, and bit 0
+; set when the CRC8 is then 0 (a block read with its CRC is right). After a reset, bit 15 is the
+; presence (0: a device answered).
+.crc width=8 poly=0x31
 
     set pins, 1
     set pindirs, 1
@@ -12,6 +15,9 @@
     pull block
     mov x, osr
     jmp x 15, reset
+    jmp !x 14, keep
+    pau crc_reset
+keep:
     set x, 7
 bit:                        ; 70 us a slot, t0 = slot start
     out y, 1
@@ -21,13 +27,21 @@ bit:                        ; 70 us a slot, t0 = slot start
     in pins, 1 [31]         ; t0 + 15: sample
     nop [21]
     jmp x--, bit            ; t0 + 69
-    jmp done
+    jmp byte
 zero:
     nop [7]
     in pins, 1 [31]         ; t0 + 15: reads 0
     nop [12]
     set pins, 1 [8]         ; t0 + 60: release
     jmp x--, bit            ; t0 + 69
+byte:
+    pau crc_feed, 8         ; the byte, LSB first (its order on DQ)
+    mov x, isr
+    jmp !pau crc_zero, result
+    set y, 1
+    or x, y                 ; bit 0: CRC8 is 0
+result:
+    mov isr, x
     jmp done
 reset:
     set dlymul, 16

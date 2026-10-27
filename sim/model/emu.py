@@ -865,9 +865,14 @@ class StateMachine:
                 if not self._wait_met(pol, edge, slot):
                     return self._stall("WAIT", pol=pol, edge=edge, t_en=t_en, slot=slot,
                                        delay=delay, next_pc=next_pc)
-            elif ctype == CT_PAU and not a & 0xF:
+            elif ctype == CT_PAU and (a >> 4 == 3 or not a & 0xF):
                 action = a >> 4
-                if action == 0:
+                if action == 3:                         # CRC feed: last bits into the ISR, oldest first
+                    n = (a & 0xF) or 16
+                    order = range(16 - n, 16) if self.shift_in_right else range(n - 1, -1, -1)
+                    for i in order:
+                        self._crc_feed(self.isr >> i & 1)
+                elif action == 0:
                     self.crc = self._crc_mask if self.crc_cfg >> 5 & 1 else 0
                 elif action == 2:
                     self._tx_abort()

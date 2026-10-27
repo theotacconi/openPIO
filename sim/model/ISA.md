@@ -128,7 +128,7 @@ value (0 for COND).
 | `00` | IRQ | Clear, Wait, Peer, Index (3) | flags / FIFOs |
 | `01` | PUSH / PULL | Dir, Block, IfCond, Peer, `00` | |
 | `10` | WAIT | Pol, Edge, T_EN, `0`, Slot (2) | wait / PAU |
-| `11` | PAU action | Action (2), `0000` | |
+| `11` | PAU action | Action (2), Count (4) | |
 
 **IRQ**: `Clear` = 1 clears the flag, 0 sets it; `Wait` = 1 then stalls until the flag is
 cleared; `Peer` = 1 selects the peer flag bank.
@@ -146,7 +146,8 @@ FIFO): two SMs pass data without the host.
 since the previous strobe. With `T_EN` the stall also ends after TIMEOUT_VAL strobes, setting
 the timeout flag (cleared when a timed WAIT issues).
 
-**PAU action** (see PAU): `00` CRC reset, `01` CRC append, `10` TX abort, `11` reserved.
+**PAU action** (see PAU): `00` CRC reset, `01` CRC append, `10` TX abort, `11` CRC feed (Count
+1..15, 0 = 16; the other actions need Count 0, else they are reserved).
 
 ## SET `111`
 
@@ -284,6 +285,11 @@ The program controls the PAU with SET PAU_BAUD, SET PAU_CTL and the PAU actions:
   Appended bits do not feed the CRC and are stuffed like data.
 - **TX abort**: discards the TX queue and the bit in progress; the pins return to `gpio_out`
   now and TX is off.
+- **CRC feed** Count: feeds the CRC with the last Count bits shifted into the ISR, oldest first
+  (shift right: from bit 16 - Count up to bit 15; shift left: from bit Count - 1 down to bit 0),
+  whatever PAU_CTL[3]. It brings the CRC to protocols whose bits do not pass the PAU (1-Wire,
+  SWD parity: a 1-bit CRC with polynomial 1); `mov isr, osr` then a feed of 16 covers a word
+  about to be sent.
 
 ### Transmitter
 
@@ -376,7 +382,7 @@ the shift counts.
 - JMP conditions: `!x`, `!y`, `timeout`, `pin`, `!osre` become programmable (COND0..3, reset
   values as v1 except `timeout`); `never` added; Y-- `100` -> `011`. The MISC `jmp_pin` field is
   replaced by COND_CFG slot 2.
-- PAU v2: own bit timing, TX and RX, NRZ / NRZI / Manchester / biphase mark, programmable
+- PAU v2: own bit timing, TX and RX, line monitor, CRC feed from the ISR, NRZ / NRZI / Manchester / biphase mark, programmable
   stuffing and CRC (up to 32 bits; parity is a 1-bit CRC with polynomial 1). v1 had TX-only
   NRZI with a stuffing toggle that took a data bit's time slot (a defect) and a Manchester TX
   queue; IRQ no longer waits for the PAU (PAU_BUSY): WAIT on PAU status TX idle instead.

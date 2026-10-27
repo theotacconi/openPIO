@@ -242,6 +242,22 @@ class IrqFifo(unittest.TestCase):
         self.assertEqual((list(sm.peer_tx_fifo), sm.osr, list(sm.rx_fifo)), ([0x1234], 0x5678, []))
 
 
+class CrcFeed(unittest.TestCase):
+
+    def test_feeds_the_last_isr_bits_oldest_first(self):
+        for right, isr in ((True, 0xA500), (False, 0x00A5)):   # 0xA5 shifted in, both directions
+            sm = sm_of(".crc width=8 poly=0x31\npau crc_feed, 8" + HALT, shift_in_right=right)
+            sm.isr = isr
+            run(sm, 1)
+            ref = 0                                   # serial CRC-8, 0xA5 in arrival order
+            bits = [0xA5 >> i & 1 for i in range(8)] if right else [0xA5 >> i & 1 for i in range(7, -1, -1)]
+            for b in bits:
+                fb = (ref >> 7 & 1) ^ b
+                ref = (ref << 1) & 0xFF
+                ref ^= 0x31 if fb else 0
+            self.assertEqual(sm.crc, ref)
+
+
 class Wait(unittest.TestCase):
 
     def test_level(self):

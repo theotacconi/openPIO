@@ -59,7 +59,7 @@ SET_DEST = {"pins": 0, "pindirs": 1, "x": 2, "y": 3, "dlymul": 4,
 REV_SET_DEST = ["pins", "pindirs", "x", "y", "dlymul", "timeout_val", "pau_baud", "pau_ctl"]
 PAU_CTL_FLAGS = {"tx": 1, "rx": 2, "stuff": 4, "crc": 8, "monitor": 16}
 
-PAU_ACTIONS = {"crc_reset": 0, "crc_append": 1, "tx_abort": 2}
+PAU_ACTIONS = {"crc_reset": 0, "crc_append": 1, "tx_abort": 2, "crc_feed": 3}
 
 # Condition sources (bits [6:4] of a condition) and named status indices
 CS_GPIO, CS_INBASE, CS_IRQ, CS_PEER, CS_XBIT, CS_YBIT, CS_STATUS, CS_PAU = range(8)
@@ -224,8 +224,10 @@ def disassemble(word: int, side_set_count: int = 0, side_set_opt: bool = False) 
             pol, edge, t_en, slot = a >> 5 & 1, a >> 4 & 1, a >> 3 & 1, a & 3
             return (f"wait {pol} cond{slot}{' edge' if edge else ''}"
                     f"{' timeout' if t_en else ''}{suffix}")
-        action = next((n for n, v in PAU_ACTIONS.items() if v == a >> 4), None)
-        return f"pau {action}{suffix}" if action and not a & 0xF else f".word 0x{word:04x}"
+        action = next(n for n, v in PAU_ACTIONS.items() if v == a >> 4)
+        if action == "crc_feed":
+            return f"pau crc_feed, {a & 0xF or 16}{suffix}"
+        return f"pau {action}{suffix}" if not a & 0xF else f".word 0x{word:04x}"
     dest = (args >> 5) & 7
     return f"set {REV_SET_DEST[dest]}, {args & 0x1F}{suffix}"
 
@@ -553,9 +555,16 @@ def assemble(source_code: str) -> Program:
                          | peer << 2)
 
         elif mnem == "pau":
-            if len(args) != 1 or args[0].lower() not in PAU_ACTIONS:
-                raise AssemblerError(f"PAU action: one of {list(PAU_ACTIONS)}", line_num, clean)
-            words.append((OP_CTRL << 13) | dss | CT_PAU << 6 | PAU_ACTIONS[args[0].lower()] << 4)
+            action = args[0].lower() if args else ""
+            count = 0
+            if action == "crc_feed" and len(args) == 2:
+                count = _parse_int(args[1], line_num, clean)
+                if not 1 <= count <= 16:
+                    raise AssemblerError("CRC feed count out of range (1-16)", line_num, clean)
+            elif action not in PAU_ACTIONS or len(args) != 1:
+                raise AssemblerError(f"PAU action: one of {list(PAU_ACTIONS)}; crc_feed takes a count",
+                                     line_num, clean)
+            words.append((OP_CTRL << 13) | dss | CT_PAU << 6 | PAU_ACTIONS[action] << 4 | (count & 0xF))
 
         elif mnem in ("set", "cfg"):
             if len(args) < 2:

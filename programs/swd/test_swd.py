@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""SWD host against a reference ADIv5 target: DP / AP reads and writes, ACK, parity, no
-contention on SWDIO around the turnarounds."""
+"""SWD host against a reference ADIv5 target: DP / AP reads and writes, ACK, read parity, write
+parity computed on the chip, no contention on SWDIO around the turnarounds."""
 import sys
 import unittest
 from pathlib import Path
@@ -23,7 +23,7 @@ def request(ap, rnw, addr):
 
 
 def write(ap, addr, value):
-    return [request(ap, 0, addr), value & 0xFFFF, value >> 16, bin(value).count("1") % 2]
+    return [request(ap, 0, addr), value & 0xFFFF, value >> 16]
 
 
 class Swd(unittest.TestCase):
@@ -35,15 +35,15 @@ class Swd(unittest.TestCase):
         bench.chip.reg_write(0, PIN_MASK, 1 << CLK | 1 << DIO)
         target = bench.add(SwdTarget(CLK, DIO, {(0, 0x0): DPIDR}))
         bench.send(0, [request(0, 1, 0x0)] + write(1, 0x4, 0xCAFE1234) + [request(1, 1, 0x4)]
-                   + write(0, 0x8, 0x00000000) + [request(0, 1, 0x8)])
+                   + write(0, 0x8, 0x00000001) + [request(0, 1, 0x8)])
         bench.start(1)
         bench.run(1500)
         self.assertEqual(bench.errors(), [])
         self.assertEqual(target.log, [("r", 0, 0x0, DPIDR), ("w", 1, 0x4, 0xCAFE1234),
-                                      ("r", 1, 0x4, 0xCAFE1234), ("w", 0, 0x8, 0), ("r", 0, 0x8, 0)])
+                                      ("r", 1, 0x4, 0xCAFE1234), ("w", 0, 0x8, 1), ("r", 0, 0x8, 1)])
         words = bench.received[0]
         reads = [words[0:4], words[5:9], words[10:14]]   # ACK, data lo, data hi, parity
-        for (ack, lo, hi, par), value in zip(reads, [DPIDR, 0xCAFE1234, 0]):
+        for (ack, lo, hi, par), value in zip(reads, [DPIDR, 0xCAFE1234, 1]):
             self.assertEqual(ack >> 13, 0b001, "ACK OK")
             self.assertEqual(lo | hi << 16, value)
             self.assertEqual(par >> 15, bin(value).count("1") % 2)

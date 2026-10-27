@@ -4,10 +4,11 @@
 ; As the Raspberry Pi picoprobe: the host changes SWDIO with SWCLK low and the target samples on
 ; the rising edge; the target changes SWDIO after a rising edge and the host samples on the next.
 ; TX FIFO: request byte (bits 7:0: start, APnDP, RnW, A2, A3, parity, stop, park); for a write,
-;   then the data (2 words, LSB first) and its even parity (bit 0), computed by the host.
+;   then the data (2 words, LSB first). The program sends its even parity (CRC feed: a 1-bit CRC).
 ; RX FIFO: ACK (bits 15:13, OK = 0b001); for a read with ACK OK, data (2 words) and parity (bit 15).
 ; After a WAIT / FAULT ACK the data phase is skipped (write data is taken from the FIFO and dropped).
 .side_set 1 opt
+.crc width=1 poly=1
 
     set y, 0
     not y
@@ -34,13 +35,25 @@ ack:
     nop side 0 [1]              ; write: turnaround
     nop side 1 [1]
     set pindirs, 1 side 0
-    set x, 31
+    pau crc_reset
+    set x, 1                    ; two data words
+word:
+    pull block
+    mov isr, osr
+    pau crc_feed, 16            ; the word into the parity
+    set y, 15
 wr:
-    out pins, 1 auto side 0 [1] ; data, then the parity bit of the next word
-    jmp x--, wr side 1 [1]
-    out pins, 1 auto side 0 [1]
+    out pins, 1 side 0 [1]
+    jmp y--, wr side 1 [1]
+    jmp x--, word side 0
+    jmp pau crc_zero, even
+    set pins, 1 side 0 [1]      ; parity 1
+    jmp pend
+even:
+    set pins, 0 side 0 [1]      ; parity 0
+pend:
     nop side 1 [1]
-    out null, 15 side 0         ; rest of the parity word
+    mov isr, null               ; drop the copy
     jmp idle
 read:
     set x, 31
@@ -63,7 +76,6 @@ fail:
     nop side 1 [1]
     set pindirs, 1 side 0
     jmp y 2, idle
-    pull block                  ; drop the write data and parity
-    pull block
+    pull block                  ; drop the write data
     pull block
     jmp idle
