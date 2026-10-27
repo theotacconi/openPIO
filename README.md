@@ -111,7 +111,8 @@ The image is built on first use and rebuilt whenever `Containerfile` changes. On
 ```
 cd test
 ../scripts/dev.sh make -B                                 # RTL; results.xml, waveforms in tb.fst
+../scripts/dev.sh make -B IMEM=sram PDK_ROOT=<pdk dir>    # RTL with the chip's SRAM IMEM
 ../scripts/dev.sh make -B GATES=yes PDK_ROOT=<pdk dir>    # gate level, see below
 ```
 
-Gate level needs `test/gate_level_netlist.v` (the `.v` file of the `tt_submission` artifact of a gds run) and the IHP cell models `ihp-sg13cmos5l/libs.ref/{sg13cmos5l_stdcell,sg13cmos5l_io}/verilog/*.v` from IHP-Open-PDK under `<pdk dir>`, inside the repository so the container sees them.
+On the chip the instruction memory is an IHP SRAM macro (`src/imem_sram.v`, listed in `info.yaml`); `src/imem.v` is its flip-flop model, used by the RTL tests, formal, lockstep and the FPGA build. `IMEM=sram` and gate level need IHP-Open-PDK models under `<pdk dir>`, inside the repository so the container sees them: `ihp-sg13cmos5l/libs.ref/sg13cmos5l_sram/verilog/` (SRAM) and, for gate level, `ihp-sg13cmos5l/libs.ref/{sg13cmos5l_stdcell,sg13cmos5l_io}/verilog/*.v` (cells). Gate level also needs `test/gate_level_netlist.v` (the `.v` file of the `tt_submission` artifact of a gds run).
