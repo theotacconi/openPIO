@@ -312,4 +312,4 @@ bit:
 - **FIFO speed**: PUSH and PULL see a 4-word front of the 132-word FIFO, which refills one word
   per clock. A program moving more than one word per clock can briefly wait.
 - **Host data rate**: about 7.8 Mbit/s at a 50 MHz clock with long bursts.
-- **Programs in this repo**: `programs/` holds 13 tested protocols (`programs/README.md`).
+- **Programs in this repo**: `programs/` holds 17 tested protocols (`programs/README.md`).
