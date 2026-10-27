@@ -18,7 +18,7 @@ project:
     - "pau.v"
     - "shifter.v"
     - "alu.v"
-    - "imem.v"
+    - "imem_sram.v"     # IHP SRAM macro; imem.v is the RTL/FPGA model
 
 pinout:
   ui[0]: "HOST_SCK"      # SPI slave clock, mode 0, <= clk/12

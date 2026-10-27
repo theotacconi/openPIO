@@ -32,6 +32,53 @@
   "GRT_DESIGN_REPAIR_MAX_SLEW_PCT": 40,
   "GRT_DESIGN_REPAIR_MAX_WIRE_LENGTH": 300,
 
+  "//": "IMEM: IHP SRAM RM_IHPSG13_1P_64x16_c2 (236.80 x 64.36 um, src/imem_sram.v), views from the PDK.",
+  "//": "Bottom-left corner of the core, FS: its signal pins (bottom edge) face up, towards the logic.",
+  "//": "Recipe from UW-ASIC/TinyTracer (same flow and PDK commit), after kdp1965/ihp-um-janestreet-prism.",
+  "MACROS": {
+    "RM_IHPSG13_1P_64x16_c2": {
+      "instances": {
+        "u_core.u_imem.u_sram": { "location": [3.36, 3.78], "orientation": "FS" }
+      },
+      "gds": ["pdk_dir::libs.ref/sg13cmos5l_sram/gds/RM_IHPSG13_1P_64x16_c2.gds"],
+      "lef": ["pdk_dir::libs.ref/sg13cmos5l_sram/lef/RM_IHPSG13_1P_64x16_c2.lef"],
+      "spice": ["pdk_dir::libs.ref/sg13cmos5l_sram/cdl/RM_IHPSG13_1P_64x16_c2.cdl"],
+      "lib": {
+        "nom_typ_1p20V_25C": ["pdk_dir::libs.ref/sg13cmos5l_sram/lib/RM_IHPSG13_1P_64x16_c2_typ_1p20V_25C.lib"],
+        "nom_fast_1p32V_m40C": ["pdk_dir::libs.ref/sg13cmos5l_sram/lib/RM_IHPSG13_1P_64x16_c2_fast_1p32V_m55C.lib"],
+        "nom_slow_1p08V_125C": ["pdk_dir::libs.ref/sg13cmos5l_sram/lib/RM_IHPSG13_1P_64x16_c2_slow_1p08V_125C.lib"]
+      }
+    }
+  },
+
+  "//": "VDD! (periphery) and VDDARRAY! (bit cells) on VPWR, VSS! on VGND.",
+  "PDN_MACRO_CONNECTIONS": [
+    "u_core.u_imem.u_sram VPWR VGND VDD! VSS!",
+    "u_core.u_imem.u_sram VPWR VGND VDDARRAY! VSS!"
+  ],
+
+  "//": "The tile PDN is Metal4 stripes only and the SRAM blocks Metal2-Metal4, so pdngen stops its",
+  "//": "stripes at the macro. pdn_cfg.tcl drops LibreLane's empty per-macro grid; the step",
+  "//": "Project.ExtendPowerStripes (librelane_plugin_openpio_pdn.py, odb_stripes.py) redraws the",
+  "//": "stripes through the macro on its Metal4 supply columns.",
+  "PDN_CFG": "dir::pdn_cfg.tcl",
+  "meta": {
+    "flow": "Classic",
+    "substituting_steps": { "+OpenROAD.GeneratePDN": "Project.ExtendPowerStripes" }
+  },
+
+  "//": "GeneratePDN checks the grid before ExtendPowerStripes connects the SRAM: it always counts",
+  "//": "the SRAM as unconnected. LVS (unmatched pins) is the check that the SRAM is powered.",
+  "ERROR_ON_PDN_VIOLATIONS": false,
+
+  "//": "Magic misreads the SRAM's LEF obstructions (false illegal overlaps at the VDD!/VDDARRAY!",
+  "//": "break); the precheck's KLayout DRC on the real GDS is the DRC sign-off. LVS treats the",
+  "//": "SRAM as a black box (its CDL is not LVS clean).",
+  "RUN_MAGIC_DRC": false,
+  "ERROR_ON_ILLEGAL_OVERLAPS": false,
+  "MAGIC_MACRO_STD_CELL_SOURCE": "PDK",
+  "MAGIC_EXT_ABSTRACT_CELLS": ["RM_IHPSG13_.*"],
+
   "//": "RUN_LINTER, LINTER_INCLUDE_PDK_MODELS - Disabling the linter is not recommended!",
   "RUN_LINTER": 1,
   "LINTER_INCLUDE_PDK_MODELS": 1,
