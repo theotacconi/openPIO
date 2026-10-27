@@ -2,7 +2,7 @@ project:
   title:        "openPIO"
   author:       "Matteo Tacconi"
   discord:      ""
-  description:  "General-purpose hardware protocol emulator ASIC with PAU acceleration"
+  description:  "Programmable I/O co-processor: two state machines for serial protocols, with a protocol acceleration unit"
   language:     "Verilog"
   clock_hz:     50000000
 
@@ -22,25 +22,25 @@ project:
     - "sram_blackbox.v" # its ports, for lint and synthesis
 
 pinout:
-  ui[0]: "HOST_SCK"      # SPI slave clock, mode 0, <= clk/12
+  ui[0]: "HOST_SCK"      # SPI slave clock, mode 0, <= clk/6
   ui[1]: "HOST_MOSI"     # SPI slave data in
   ui[2]: "HOST_CS_N"     # SPI slave chip select (active low)
-  ui[3]: "GPIO_IN_3"     # replaces uio_in[3] as gpio_in[3] when GPIO.in_sel[3] = 1
-  ui[4]: "GPIO_IN_4"     # same, gpio_in[4]
-  ui[5]: "GPIO_IN_5"     # same, gpio_in[5]
-  ui[6]: "GPIO_IN_6"     # same, gpio_in[6]
-  ui[7]: "GPIO_IN_7"     # same, gpio_in[7]
+  ui[3]: "PIO_IN_11"      # pin 8 + k input (pins 11..15)
+  ui[4]: "PIO_IN_12"
+  ui[5]: "PIO_IN_13"
+  ui[6]: "PIO_IN_14"
+  ui[7]: "PIO_IN_15"
 
   uo[0]: "HOST_MISO"     # SPI Slave Data Out
-  uo[1]: "HOST_IRQ"      # OR of the 8 local IRQ flags
-  uo[2]: "GPIO_OUT_2"    # push-pull mirror of gpio_out[2] (uo[3..7] likewise)
-  uo[3]: "GPIO_OUT_3"
-  uo[4]: "GPIO_OUT_4"
-  uo[5]: "GPIO_OUT_5"
-  uo[6]: "GPIO_OUT_6"
-  uo[7]: "GPIO_OUT_7"
+  uo[1]: "HOST_IRQ"      # high while an SM requests it (IRQ flags, FIFO levels; IRQ_MASK)
+  uo[2]: "PIO_OUT_10"     # pin 8 + k output, always driven (pins 10..15)
+  uo[3]: "PIO_OUT_11"
+  uo[4]: "PIO_OUT_12"
+  uo[5]: "PIO_OUT_13"
+  uo[6]: "PIO_OUT_14"
+  uo[7]: "PIO_OUT_15"
 
-  uio[0]: "PIO_IO_0"      # gpio[i]: out = gpio_out, oe = pindirs, in = pad (all uio)
+  uio[0]: "PIO_IO_0"      # pin i, bidirectional: out = pin latch or PAU TX, oe = direction latch, in = pad
   uio[1]: "PIO_IO_1"
   uio[2]: "PIO_IO_2"
   uio[3]: "PIO_IO_3"
