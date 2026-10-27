@@ -8,26 +8,27 @@ Target flow, as TinyTapeout/ttihp-verilog-template branch `cmos5l`: tt-gds-actio
 |---|---|
 | `info.yaml` | project metadata, `top_module`, `source_files`, `tiles`, pinout (yaml_version 6) |
 | `docs/info.md` | datasheet page: How it works / How to test / External hardware |
-| `src/config.json` | LibreLane settings: the template's `cmos5l` branch (20 ns clock, 60 % placement density, vertical PDN pitch 50 um / width 2.1 um) plus the slew repair settings below |
+| `src/config.json` | LibreLane settings: the template's `cmos5l` branch (20 ns clock, 60 % placement density, vertical PDN pitch 50 um / width 2.1 um) plus the slew repair settings and the SRAM macro (below) |
+| `src/pdn_cfg.tcl`, `librelane_plugin_openpio_pdn.py`, `odb_stripes.py` | power grid for the SRAM macro (see IMEM SRAM macro) |
 | `.github/workflows/gds.yaml` | hardening, sign-off, gate-level test, precheck and GDS viewer jobs |
 | `.github/workflows/test.yaml` | cocotb tests (`test/`) on the RTL |
 | `.github/workflows/docs.yaml` | `tt_tool.py --check-docs` and datasheet PDF on every push |
 
 ### Tile size
 
-tt-support-tools has the same tile sizes for ihp-sg13g2 and ihp-sg13cmos5l, 8x4 included. The competition allows 6x4, and 8x4 once the organisers announce it. The design does not need that much area. Utilisation below uses the CMOS5L final standard-cell area (151,609 um^2, hold and repair buffers included):
+tt-support-tools has the same tile sizes for ihp-sg13g2 and ihp-sg13cmos5l, 8x4 included. The competition allows 6x4, and 8x4 once the organisers announce it. The design does not need that much area. Utilisation below uses the CMOS5L final area with the SRAM IMEM: 93,854 um^2 of standard cells (hold and repair buffers included) plus the 15,240 um^2 macro, 109,094 um^2:
 
-| tiles | die (um) | die area (um^2) | utilisation of final cell area (151,609 um^2) |
+| tiles | die (um) | die area (um^2) | utilisation of 109,094 um^2 |
 |---|---|---|---|
-| 3x2 | 636.96 x 313.74 | 199,840 | 76 % (above the 60 % placement target) |
-| 4x2 | 854.40 x 313.74 | 268,061 | 57 % |
-| 6x2 | 1289.28 x 313.74 | 404,499 | 37 % |
-| 6x4 | 1289.28 x 710.64 | 916,214 | 17 % |
+| 3x2 | 636.96 x 313.74 | 199,840 | 55 % |
+| 4x2 | 854.40 x 313.74 | 268,061 | 41 % |
+| 6x2 | 1289.28 x 313.74 | 404,499 | 27 % |
+| 6x4 | 1289.28 x 710.64 | 916,214 | 12 % |
 
 ## Hardening on GitHub Actions (reference flow)
 
 1. Enable Pages (Settings > Pages > Source: GitHub Actions) for the viewer job.
-2. The `gds` workflow runs on pushes that change `src/`, `info.yaml`, the workflow or `scripts/tt_signoff.py`, and by hand (Actions > gds > Run workflow):
+2. The `gds` workflow runs on pushes that change `src/`, `info.yaml`, the workflow, `scripts/tt_signoff.py` or the PDN plugin files, and by hand (Actions > gds > Run workflow):
    - **gds**: `tt_tool.py --create-user-config --ihp`, then `tt_tool.py --harden --ihp` (LibreLane). The job summary shows cell usage, utilisation, routing stats, linter output and timing.
    - **precheck**: Tiny Tapeout precheck on the final GDS (KLayout DRC, pin, boundary, layer and cell-name checks, Verilog syntax). Results in the job summary and the `precheck_reports` artifact.
    - **viewer**: 3D GDS viewer on GitHub Pages.
@@ -42,27 +43,38 @@ tt-support-tools has the same tile sizes for ihp-sg13g2 and ihp-sg13cmos5l, 8x4 
 
 There is no local hardening flow for CMOS5L: no LibreLane container is published for 3.1.0.dev3 (checked 2026-10-24). The earlier SG13G2 script (`scripts/tt_harden.sh`) was removed; it is in git history (commit 388261d).
 
-## Results (SG13CMOS5L, 6x4)
+## Results (SG13CMOS5L, 6x4, SRAM IMEM)
 
-Commit fbaf574, https://github.com/theotacconi/openPIO/actions/runs/40218780632: all jobs green, all precheck checks passing, `scripts/tt_signoff.py` passes.
+Commit 359c7ff (branch sram-imem), https://github.com/theotacconi/openPIO/actions/runs/40483141307: all jobs green (gds, precheck, gl_test 5/5, signoff, viewer), `scripts/tt_signoff.py` passes.
 
 | Check | Result |
 |---|---|
 | Detailed-route DRC | 0 |
-| Magic DRC | 0 |
-| KLayout SG13CMOS5L DRC (precheck) | pass |
-| LVS (netgen): errors / unmatched pins | 0 / 0 |
+| Magic DRC | not run (see IMEM SRAM macro) |
+| KLayout SG13CMOS5L DRC (precheck, on the full GDS with the SRAM) | pass |
+| LVS (netgen, SRAM as a black box): errors / unmatched pins | 0 / 0 ("Circuits match uniquely") |
 | Antenna violating nets / pins | 0 / 0 |
 | Max slew / max cap violations | 0 / 0 |
-| Precheck: pins, boundary, layers, cell names, zero area, label overlap, analog pins | pass |
+| IR drop, worst case VPWR / VGND | 0.16 mV / 0.15 mV |
+| Precheck: pins, boundary, layers, cell names, zero area, label overlap | pass |
 
 | Corner | Setup WNS | Hold WNS |
 |---|---|---|
-| nom_slow_1p08V_125C | +4.530 ns | +0.443 ns |
-| nom_typ_1p20V_25C | +10.132 ns | +0.187 ns |
-| nom_fast_1p32V_m40C | +13.106 ns | +0.039 ns |
+| nom_slow_1p08V_125C | +2.335 ns | +0.578 ns |
+| nom_typ_1p20V_25C | +9.007 ns | +0.270 ns |
+| nom_fast_1p32V_m40C | +12.869 ns | +0.094 ns |
 
-11,046 standard cells (151,609 um^2, 16.8 % of the 6x4 core), 1,181 hold buffers, 3.8 mW total power (LibreLane power report, 50 MHz), 493 mm routed wire. Global routing overflow 0. The slow-corner critical path (15.8 ns of the 20 ns period) runs from the instruction register `u_core.dbg_instr` back into it.
+7,440 standard cells (93,854 um^2) plus the SRAM (15,240 um^2), 663 hold buffers, 2.0 mW total power (LibreLane power report, 50 MHz), 403 mm routed wire. The slow-corner critical path (18.0 ns of the 20 ns period) starts at the SRAM output (`u_core.u_imem.u_sram`, clock to A_DOUT up to 5.3 ns in that corner).
+
+Against the flip-flop IMEM (commit fbaf574, run 40218780632: 11,046 cells, 151,609 um^2, 1,181 hold buffers, 3.8 mW, slow setup +4.530 ns / hold +0.443 ns, critical path `u_core.dbg_instr` back into itself, 15.8 ns): -28 % area, -47 % power, -2.2 ns slow-corner setup margin.
+
+### IMEM SRAM macro
+
+The instruction memory is IHP's `RM_IHPSG13_1P_64x16_c2` (64 x 16, single port, 236.80 x 64.36 um, at (3.36, 3.78) um, orientation FS, pins facing the logic), instantiated by `src/imem_sram.v` (module `imem`, words 0..31 used). The recipe follows UW-ASIC/TinyTracer (same action and PDK commit), which took it from kdp1965/ihp-um-janestreet-prism:
+
+- `MACROS` and `PDN_MACRO_CONNECTIONS` (`VDD!`, `VDDARRAY!` on VPWR, `VSS!` on VGND) in `src/config.json`; `src/sram_blackbox.v` declares the macro's ports for the Verilator lint (the flow otherwise knows it only from `MACROS`).
+- Power: the tile grid is Metal4 stripes only and the macro blocks Metal2-Metal4, so pdngen stops at it. `src/pdn_cfg.tcl` drops LibreLane's empty per-macro grid, and the `Project.ExtendPowerStripes` step (`librelane_plugin_openpio_pdn.py`, loaded by LibreLane from the repository root, running `odb_stripes.py`) moves the 5+5 tile stripes over the macro onto its supply columns and adds one pair over its periphery band: 2 VPWR/VGND pairs in each region (left array, band, right array). `ERROR_ON_PDN_VIOLATIONS` is off because GeneratePDN checks the grid before that step; LVS and the IR drop report check the result.
+- Sign-off: Magic DRC and its illegal-overlap check are off (false overlaps on the macro LEF's Metal4 obstruction at the `VDD!`/`VDDARRAY!` break, not in its GDS); the precheck's KLayout DRC on the real GDS is the DRC sign-off. LVS extracts the macro as an abstract cell (`MAGIC_EXT_ABSTRACT_CELLS`).
 
 ### Timing closure history
 
