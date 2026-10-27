@@ -43,12 +43,14 @@ JC_ALWAYS, JC_NEVER, JC_XDEC, JC_YDEC = 0, 1, 2, 3   # 4..7 = COND0..COND3
 # Operand codes (IN source, OUT destination, ALU source / destination)
 R_PINS, R_PINDIRS, R_X, R_Y, R_ISR, R_OSR, R_NULL, R_SPECIAL = range(8)
 OPERAND_NAMES = ["pins", "pindirs", "x", "y", "isr", "osr", "null", "special"]
-IN_SRC = {"pins": R_PINS, "x": R_X, "y": R_Y, "isr": R_ISR, "osr": R_OSR, "null": R_NULL}
+IN_SRC = {"pins": R_PINS, "x": R_X, "y": R_Y, "isr": R_ISR, "osr": R_OSR, "null": R_NULL,
+          "status": R_SPECIAL}
 OUT_DEST = {"pins": R_PINS, "pindirs": R_PINDIRS, "x": R_X, "y": R_Y, "isr": R_ISR,
             "null": R_NULL, "pc": R_SPECIAL}
-ALU_SRC = {"pins": R_PINS, "pindirs": R_PINDIRS, "x": R_X, "y": R_Y, "isr": R_ISR, "osr": R_OSR,
-           "null": R_NULL}
-ALU_DEST = {**ALU_SRC, "cond": R_SPECIAL}
+ALU_DEST = {"pins": R_PINS, "pindirs": R_PINDIRS, "x": R_X, "y": R_Y, "isr": R_ISR, "osr": R_OSR,
+            "null": R_NULL, "cond": R_SPECIAL}
+ALU_SRC = {**ALU_DEST, "status": R_SPECIAL}
+del ALU_SRC["cond"]
 
 ALU_OPS = ["mov", "rev", "and", "or", "xor", "xnor", "add", "sub"]
 
@@ -214,6 +216,8 @@ def disassemble(word: int, side_set_count: int = 0, side_set_opt: bool = False) 
                 parts.append("noblock")
             if a >> 3 & 1:
                 parts.append("ifempty" if is_pull else "iffull")
+            if a >> 2 & 1:
+                parts.append("peer")
             return f"{' '.join(parts)}{suffix}"
         if ctype == CT_WAIT:
             pol, edge, t_en, slot = a >> 5 & 1, a >> 4 & 1, a >> 3 & 1, a & 3
@@ -531,10 +535,12 @@ def assemble(source_code: str) -> Program:
             words.append((OP_CTRL << 13) | dss | CT_IRQ << 6 | bits | idx)
 
         elif mnem in ("push", "pull"):
-            is_pull, block, ifcond = int(mnem == "pull"), 1, 0
+            is_pull, block, ifcond, peer = int(mnem == "pull"), 1, 0, 0
             for a in args:
                 al = a.lower()
-                if al in ("block", "blocking"):
+                if al == "peer":
+                    peer = 1
+                elif al in ("block", "blocking"):
                     block = 1
                 elif al in ("noblock", "nonblock", "nonblocking"):
                     block = 0
@@ -542,7 +548,8 @@ def assemble(source_code: str) -> Program:
                     ifcond = 1
                 else:
                     raise AssemblerError(f"Invalid argument for {mnem}: '{a}'", line_num, clean)
-            words.append((OP_CTRL << 13) | dss | CT_FIFO << 6 | is_pull << 5 | block << 4 | ifcond << 3)
+            words.append((OP_CTRL << 13) | dss | CT_FIFO << 6 | is_pull << 5 | block << 4 | ifcond << 3
+                         | peer << 2)
 
         elif mnem == "pau":
             if len(args) != 1 or args[0].lower() not in PAU_ACTIONS:

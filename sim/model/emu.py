@@ -61,8 +61,48 @@ class _Stuffer:
             self.run, self.last = 0, bit
 
 
+class PinBus:
+    """Pin output and direction latches, shared by the SMs of a chip (ISA.md, Multiple state
+    machines). Writes made during a clock are applied at its end in SM order: the highest SM wins.
+    An SM reads the latches of the clock start with its own writes applied."""
+
+    def __init__(self) -> None:
+        self.out = 0
+        self.dirs = 0
+        self.od_mask = 0
+        self._writes: list[tuple[int, int, int, int]] = []   # (sm, latch: 0 out / 1 dirs, mask, value)
+
+    def view(self, sm: int, latch: int) -> int:
+        v = self.dirs if latch else self.out
+        for i, lt, m, val in self._writes:
+            if i == sm and lt == latch:
+                v = (v & ~m) | (val & m)
+        return v & 0xFF
+
+    def write(self, sm: int, latch: int, mask: int, value: int) -> None:
+        self._writes.append((sm, latch, mask & 0xFF, value & 0xFF))
+
+    def commit(self) -> None:
+        for _, lt, m, val in sorted(self._writes, key=lambda w: w[0]):
+            if lt:
+                self.dirs = (self.dirs & ~m) | (val & m)
+            else:
+                self.out = (self.out & ~m) | (val & m)
+        self._writes.clear()
+
+
+def pad_outputs(bus: PinBus, sms: Sequence["StateMachine"]) -> tuple[int, int]:
+    """(values, output enables) of the 8 pins: latches, PAU TX overrides in SM order, open drain."""
+    out, oe = bus.out, bus.dirs
+    for sm in sms:
+        out = sm.pau_override(out)
+    od = bus.od_mask
+    return out & ~od & 0xFF, ((oe & ~od) | (~out & od)) & 0xFF
+
+
 class StateMachine:
-    """Cycle-accurate emulator for a single PIO state machine."""
+    """Cycle-accurate emulator of one state machine. Standalone it owns its pins; in a
+    chip.Chip it shares a PinBus and has a peer (ISA.md, Multiple state machines)."""
 
     def __init__(
         self,
@@ -89,11 +129,19 @@ class StateMachine:
         crc_cfg: int = 0,
         crc_poly: int = 0,
         crc_res: int = 0,
+        pin_mask: int = 0xFF,
+        bus: PinBus | None = None,
+        index: int = 0,
         instructions: Sequence[int] | None = None,
     ) -> None:
         if program is None and instructions is not None:
             program = instructions
         self.memory: list[int] = [0] * IMEM_WORDS
+        self.index = index
+        self._own_bus = bus is None
+        self.bus = bus if bus is not None else PinBus()
+        self.pin_mask = pin_mask & 0xFF
+        self.strobed = False                            # the last step() was a strobe
 
         # Host configuration
         self.wrap_bottom = wrap_bottom
@@ -101,9 +149,10 @@ class StateMachine:
         self.side_set_count = side_set_count
         self.side_set_opt = side_set_opt
         self.side_set_pindirs = side_set_pindirs
-        self._open_drain_mask = open_drain_mask & 0xFF
-        self.clkdiv_int = clkdiv_int if clkdiv_int > 0 else 1
-        self._clkdiv_frac = clkdiv_frac & 0xFF
+        if open_drain_mask:
+            self.bus.od_mask = open_drain_mask & 0xFF
+        self.clkdiv_cfg_int = clkdiv_int if clkdiv_int > 0 else 1
+        self.clkdiv_cfg_frac = clkdiv_frac & 0xFF
         self.in_base, self.out_base, self.set_base = in_base, out_base, set_base
         self.set_count, self.sideset_base = set_count, sideset_base
         self.shift_in_right = True
@@ -117,10 +166,11 @@ class StateMachine:
         self.tx_fifo: deque[int] = deque(maxlen=fifo_depth)
         self.rx_fifo: deque[int] = deque(maxlen=fifo_depth)
         self.gpio_in = 0
-        self.gpio_out = 0
-        self.pindirs = 0
         self.irq_flags = [False] * 8
+        # The peer's IRQ flags and FIFOs; a chip links them to SM index ^ 1
         self.peer_irq_flags = [False] * 8
+        self.peer_tx_fifo: deque[int] = deque(maxlen=fifo_depth)
+        self.peer_rx_fifo: deque[int] = deque(maxlen=fifo_depth)
         self.history: deque[str] = deque(maxlen=15)
 
         if program is not None:
@@ -157,12 +207,30 @@ class StateMachine:
         self.pc = val % IMEM_WORDS
 
     @property
+    def gpio_out(self) -> int:
+        """Pin output latch as this SM sees it."""
+        return self.bus.view(self.index, 0)
+
+    @gpio_out.setter
+    def gpio_out(self, val: int) -> None:
+        self.bus.out = val & 0xFF
+
+    @property
+    def pindirs(self) -> int:
+        """Pin direction latch as this SM sees it."""
+        return self.bus.view(self.index, 1)
+
+    @pindirs.setter
+    def pindirs(self, val: int) -> None:
+        self.bus.dirs = val & 0xFF
+
+    @property
     def open_drain_mask(self) -> int:
-        return self._open_drain_mask
+        return self.bus.od_mask
 
     @open_drain_mask.setter
     def open_drain_mask(self, val: int) -> None:
-        self._open_drain_mask = val & 0xFF
+        self.bus.od_mask = val & 0xFF
 
     @property
     def clkdiv(self) -> int:
@@ -186,21 +254,28 @@ class StateMachine:
         return (bool(self.pau_ctl & 1) or self.tx_active or bool(self.tx_queue)
                 or self.tx_stuff_pending is not None)
 
+    def pau_override(self, out: int) -> int:
+        """Pin values with this SM's PAU TX line on out_base (+1) while it drives, in PIN_MASK."""
+        if not self.tx_drives:
+            return out
+        line = self.tx_line ^ (self.pau_mode >> 2 & 1)
+        val = line << (self.out_base & 7)
+        mask = 1 << (self.out_base & 7)
+        if self.pau_mode >> 3 & 1:
+            val |= (1 - line) << ((self.out_base + 1) & 7)
+            mask |= 1 << ((self.out_base + 1) & 7)
+        mask &= self.pin_mask
+        return (out & ~mask) | (val & mask)
+
     @property
     def pins(self) -> int:
-        """Pin output values: gpio_out, with the PAU TX line on out_base (+1) while it drives."""
-        out = self.gpio_out
-        if self.tx_drives:
-            line = self.tx_line ^ (self.pau_mode >> 2 & 1)
-            out = self._put_pin(out, self.out_base, line)
-            if self.pau_mode >> 3 & 1:
-                out = self._put_pin(out, self.out_base + 1, 1 - line)
-        return out
+        """Pin values driven (standalone SM): latch, PAU TX, open drain."""
+        return pad_outputs(self.bus, [self])[0]
 
-    @staticmethod
-    def _put_pin(word: int, pin: int, bit: int) -> int:
-        pin &= 7
-        return (word & ~(1 << pin)) | (bit << pin)
+    @property
+    def pin_oe(self) -> int:
+        """Pin output enables (standalone SM)."""
+        return pad_outputs(self.bus, [self])[1]
 
     def load_program(self, program: Sequence[int], origin: int = 0) -> None:
         """Load instruction words and the configuration carried by an asm.Program."""
@@ -217,10 +292,10 @@ class StateMachine:
         if hasattr(program, "cond_cfg"):
             self.cond_cfg = list(program.cond_cfg)
         if getattr(program, "_has_explicit_open_drain", False) or getattr(program, "open_drain_mask", 0):
-            self._open_drain_mask = program.open_drain_mask & 0xFF
+            self.bus.od_mask = program.open_drain_mask & 0xFF
         if getattr(program, "_has_explicit_clkdiv", False):
-            self.clkdiv_int = program.clkdiv_int or 1
-            self._clkdiv_frac = program.clkdiv_frac & 0xFF
+            self.clkdiv_cfg_int = program.clkdiv_int or 1
+            self.clkdiv_cfg_frac = program.clkdiv_frac & 0xFF
 
     def reset(self, pc: int = 0) -> None:
         """CTRL.RESET: SM registers, FIFOs, PAU; COND = COND_CFG, PAU_BAUD = PAU_MODE.BAUD."""
@@ -240,6 +315,7 @@ class StateMachine:
         self.timeout_val = self.timeout_counter = 0
         self.timeout_flag = False
         self.cond = list(self.cond_cfg)
+        self.clkdiv_int, self._clkdiv_frac = self.clkdiv_cfg_int, self.clkdiv_cfg_frac
         self.clkdiv_counter = self.clkdiv_accum = self._current_clkdiv_period = 0
         self.cycle_count = 0
         self.history.clear()
@@ -459,6 +535,10 @@ class StateMachine:
             not self.tx_fifo, len(self.rx_fifo) >= self.fifo_depth,
         ][idx] if idx < 8 else 0)
 
+    def status_word(self) -> int:
+        """The STATUS operand: SM status [7:0], PAU status [15:8] (ISA.md)."""
+        return sum(self._sm_status(i) << i | self._pau_status(i) << (8 + i) for i in range(8))
+
     def _cond_value(self, slot: int) -> int:
         c = self.cond[slot]
         src, idx = (c >> 4) & 7, c & 0xF
@@ -488,18 +568,11 @@ class StateMachine:
 
     # ------------------------------------------------------------------ pins
 
-    def _apply_open_drain(self) -> None:
-        """Open-drain pins: driving 1 floats the pin (pindir 0), driving 0 drives it low."""
-        for pin in range(8):
-            if (self._open_drain_mask >> pin) & 1:
-                if (self.gpio_out >> pin) & 1:
-                    self.pindirs &= ~(1 << pin)
-                else:
-                    self.pindirs |= 1 << pin
-
     def _write_pins(self, mask: int, value: int) -> None:
-        self.gpio_out = ((self.gpio_out & ~mask) | (value & mask)) & 0xFF
-        self._apply_open_drain()
+        self.bus.write(self.index, 0, mask & self.pin_mask, value)
+
+    def _write_dirs(self, mask: int, value: int) -> None:
+        self.bus.write(self.index, 1, mask & self.pin_mask, value)
 
     def _decode_delay_sideset(self, delay_ss: int) -> tuple[int, int | None]:
         if self.side_set_count == 0:
@@ -517,9 +590,9 @@ class StateMachine:
         mask = ((1 << self.side_set_count) - 1) << self.sideset_base
         val = (side_val << self.sideset_base) & mask & 0xFF
         if self.side_set_pindirs:
-            self.pindirs = ((self.pindirs & ~mask) | val) & 0xFF
+            self._write_dirs(mask, val)
         else:
-            self._write_pins(mask & 0xFF, val)
+            self._write_pins(mask, val)
 
     # ------------------------------------------------------------------ execution
 
@@ -530,6 +603,12 @@ class StateMachine:
 
     def step(self) -> None:
         """Advance the state machine by exactly one clock cycle."""
+        self.strobed = False
+        self._clock()
+        if self._own_bus:
+            self.bus.commit()
+
+    def _clock(self) -> None:
         self.cycle_count += 1
         trace_pc = self.pc
 
@@ -546,6 +625,7 @@ class StateMachine:
                 return
             self.clkdiv_counter = 0
 
+        self.strobed = True
         self._pau_tx_strobe()
         self._pau_rx_strobe()
 
@@ -587,11 +667,11 @@ class StateMachine:
                     done = True
             done = done or self._wait_met(info["pol"], info["edge"], info["slot"])
         elif self.stall_reason == "PULL":
-            if self.tx_fifo:
-                self.osr, self.osr_count, done = self.tx_fifo.popleft(), 0, True
+            if info["fifo"]:
+                self.osr, self.osr_count, done = info["fifo"].popleft(), 0, True
         elif self.stall_reason == "PUSH":
-            if len(self.rx_fifo) < self.fifo_depth:
-                self.rx_fifo.append(self.isr)
+            if len(info["fifo"]) < self.fifo_depth:
+                info["fifo"].append(self.isr)
                 self.isr = self.isr_count = 0
                 done = True
         elif self.stall_reason == "IRQ":
@@ -608,6 +688,9 @@ class StateMachine:
         self.stall_info = info
 
     def _operand(self, code: int) -> int:
+        """Source operand value (IN / ALU); PINDIRS reads 0 for IN (handled there)."""
+        if code == R_SPECIAL:
+            return self.status_word()
         return {R_PINS: self.gpio_in, R_PINDIRS: self.pindirs, R_X: self.x, R_Y: self.y,
                 R_ISR: self.isr, R_OSR: self.osr}.get(code, 0)
 
@@ -663,7 +746,7 @@ class StateMachine:
                     self.rx_fifo.append(self.isr)
                     self.isr = self.isr_count = 0
                 else:
-                    return self._stall("PUSH", delay=delay, next_pc=next_pc)
+                    return self._stall("PUSH", fifo=self.rx_fifo, delay=delay, next_pc=next_pc)
 
         elif opcode == OP_OUT:
             dest, auto = (args >> 5) & 7, (args >> 4) & 1
@@ -695,8 +778,7 @@ class StateMachine:
             elif dest == R_PINS:
                 self._write_pins((mask << (self.out_base & 7)) & 0xFF, val << (self.out_base & 7))
             elif dest == R_PINDIRS:
-                m = (mask << (self.out_base & 7)) & 0xFF
-                self.pindirs = ((self.pindirs & ~m) | ((val << (self.out_base & 7)) & m)) & 0xFF
+                self._write_dirs(mask << (self.out_base & 7), val << (self.out_base & 7))
             elif dest == R_X:
                 self.x = val
             elif dest == R_Y:
@@ -709,14 +791,14 @@ class StateMachine:
         elif opcode >> 1 == OP_ALU >> 1:
             op = ((opcode & 1) << 2) | ((args >> 3) & 3)
             dest, src = (args >> 5) & 7, args & 7
-            s = self._operand(src) if src != R_SPECIAL else 0
+            s = self._operand(src)
             d = {R_PINS: self.gpio_out, R_PINDIRS: self.pindirs, R_X: self.x, R_Y: self.y,
                  R_ISR: self.isr, R_OSR: self.osr}.get(dest, 0)
             res = [s, _rev16(s), d & s, d | s, d ^ s, ~(d ^ s), d + s, d - s][op] & 0xFFFF
             if dest == R_PINS:
                 self._write_pins(0xFF, res)
             elif dest == R_PINDIRS:
-                self.pindirs = res & 0xFF
+                self._write_dirs(0xFF, res)
             elif dest == R_X:
                 self.x = res
             elif dest == R_Y:
@@ -736,27 +818,29 @@ class StateMachine:
                 flags[idx] = not clear
                 if wait and not clear:
                     return self._stall("IRQ", peer=peer, idx=idx, delay=delay, next_pc=next_pc)
-            elif ctype == CT_FIFO and not a & 7:
-                is_pull, block, ifcond = a >> 5 & 1, a >> 4 & 1, a >> 3 & 1
+            elif ctype == CT_FIFO and not a & 3:
+                is_pull, block, ifcond, peer = a >> 5 & 1, a >> 4 & 1, a >> 3 & 1, a >> 2 & 1
                 if is_pull:
+                    fifo = self.peer_rx_fifo if peer else self.tx_fifo
                     if ifcond and self.osr_count < (self.pull_thresh or 16):
                         pass
-                    elif self.tx_fifo:
-                        self.osr, self.osr_count = self.tx_fifo.popleft(), 0
+                    elif fifo:
+                        self.osr, self.osr_count = fifo.popleft(), 0
                     elif not block:
                         self.osr, self.osr_count = self.x, 0
                     else:
-                        return self._stall("PULL", delay=delay, next_pc=next_pc)
+                        return self._stall("PULL", fifo=fifo, delay=delay, next_pc=next_pc)
                 else:
+                    fifo = self.peer_tx_fifo if peer else self.rx_fifo
                     if ifcond and self.isr_count < (self.push_thresh or 16):
                         pass
-                    elif len(self.rx_fifo) < self.fifo_depth:
-                        self.rx_fifo.append(self.isr)
+                    elif len(fifo) < self.fifo_depth:
+                        fifo.append(self.isr)
                         self.isr = self.isr_count = 0
                     elif not block:
                         self.isr = self.isr_count = 0
                     else:
-                        return self._stall("PUSH", delay=delay, next_pc=next_pc)
+                        return self._stall("PUSH", fifo=fifo, delay=delay, next_pc=next_pc)
             elif ctype == CT_WAIT and not a & 4:
                 pol, edge, t_en, slot = a >> 5 & 1, a >> 4 & 1, a >> 3 & 1, a & 3
                 if t_en:
@@ -784,11 +868,8 @@ class StateMachine:
         else:  # SET
             dest, val = (args >> 5) & 7, args & 0x1F
             if dest in (0, 1):
-                m = ((((1 << self.set_count) - 1) & 0x1F) << (self.set_base & 7)) & 0xFF
-                if dest == 0:
-                    self._write_pins(m, val << (self.set_base & 7))
-                else:
-                    self.pindirs = ((self.pindirs & ~m) | ((val << (self.set_base & 7)) & m)) & 0xFF
+                m = (((1 << self.set_count) - 1) & 0x1F) << (self.set_base & 7)
+                (self._write_dirs if dest else self._write_pins)(m, val << (self.set_base & 7))
             elif dest == 2:
                 self.x = val
             elif dest == 3:

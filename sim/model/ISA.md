@@ -1,8 +1,9 @@
 # openPIO ISA v2
 
-One state machine (SM) executes 16-bit instructions from a 64-word instruction memory, one
-instruction per strobe (see CLKDIV). Encoding rule: codes of similar or opposite operations
-differ only in their least significant bit.
+Each state machine (SM) executes 16-bit instructions from its own 64-word instruction memory,
+one instruction per strobe (see CLKDIV). The chip has an even number of SMs sharing the pins
+(see Multiple state machines); the host interface is in HOST.md. Encoding rule: codes of similar
+or opposite operations differ only in their least significant bit.
 
 ```
  15  14  13 | 12  11  10   9   8 |  7   6   5   4   3   2   1   0
@@ -42,17 +43,18 @@ a write is discarded.
 
 | Code | Operand | IN src | OUT dest | ALU src | ALU dest |
 |---|---|---|---|---|---|
-| `000` | PINS | pins from `in_base`, or the PAU RX | pins from `out_base`, or the PAU TX | `gpio_in` | `gpio_out` |
+| `000` | PINS | pins from `in_base`, or the PAU RX | pins from `out_base`, or the PAU TX | `gpio_in` | pin values |
 | `001` | PINDIRS | - | pindirs from `out_base` | pindirs | pindirs |
 | `010` | X | X | X | X | X |
 | `011` | Y | Y | Y | Y | Y |
 | `100` | ISR | ISR | ISR (count = bits) | ISR | ISR (count = 16) |
 | `101` | OSR | OSR | - | OSR | OSR (count = 0) |
 | `110` | NULL | zeros | discard | 0 | discard |
-| `111` | special | - | PC (indirect jump) | - | COND |
+| `111` | special | STATUS | PC (indirect jump) | STATUS | COND |
 
 ALU PINS / PINDIRS are all 8 pins, bits [7:0] (no base); the upper bits read 0 and are not
-written. Writes to `gpio_out` go through the open-drain mask, as every pin write.
+written. STATUS (read-only) is the SM status in bits [7:0] and the PAU status in bits [15:8],
+indices 0..7 of the Conditions tables, bit i = index i.
 
 ## JMP `00A`
 
@@ -124,7 +126,7 @@ value (0 for COND).
 | Type | Instruction | Arguments [5:0] | Pair |
 |---|---|---|---|
 | `00` | IRQ | Clear, Wait, Peer, Index (3) | flags / FIFOs |
-| `01` | PUSH / PULL | Dir, Block, IfCond, `000` | |
+| `01` | PUSH / PULL | Dir, Block, IfCond, Peer, `00` | |
 | `10` | WAIT | Pol, Edge, T_EN, `0`, Slot (2) | wait / PAU |
 | `11` | PAU action | Action (2), `0000` | |
 
@@ -135,7 +137,9 @@ cleared; `Peer` = 1 selects the peer flag bank.
 OSR, count cleared). `Block` = 1 stalls on a full RX / empty TX FIFO. Non-blocking: PUSH on a
 full FIFO drops the word (ISR still cleared); PULL on an empty FIFO copies X into the OSR.
 `IfCond` = 1: PUSH only when `isr_count >= push threshold`, PULL only when
-`osr_count >= pull threshold`.
+`osr_count >= pull threshold`. `Peer` = 1: PUSH writes the peer SM's TX FIFO instead of the own
+RX FIFO, PULL reads the peer's RX FIFO instead of the own TX FIFO (full / empty refer to that
+FIFO): two SMs pass data without the host.
 
 **WAIT**: stalls until programmable condition `Slot` (see Conditions) matches: level
 (`Edge` = 0) equal to `Pol`, or edge (`Edge` = 1) rising (`Pol` = 1) / falling (`Pol` = 0)
@@ -311,15 +315,27 @@ the CRC (CRC on, TX off) and enter the RX queue; a bit arriving at a full queue 
 sets RX overrun. IN PINS with RX on takes `count` bits from the queue (oldest first in time order); while fewer
 are queued it does nothing and issues again every strobe.
 
+## Multiple state machines
+
+- **Peer**: SM i and SM i XOR 1 are peers (0 and 1, 2 and 3). Peer IRQ flags are the peer's own
+  flags: `irq peer 3` sets flag 3 of the peer, a peer IRQ condition reads the peer's flags.
+  PUSH / PULL `Peer` reach the peer's FIFOs.
+- **Pins**: the SMs share the 8 pins: one output latch and one direction latch. An SM changes
+  only the pins in its PIN_MASK; when several SMs change the same pin in the same strobe, the
+  highest-numbered SM wins. The PAU TX of an SM drives its pins over the latch, also within
+  PIN_MASK and with the same priority. An instruction sees the latches as they were at the
+  start of the clock, with the writes it made itself (side-set) applied.
+- **Open drain** (chip, HOST.md GPIO): a pin in the open-drain mask is driven low when its latch
+  bit is 0 and floats when it is 1, whatever its direction bit.
+- **Start**: the host enables, resets or single-steps any set of SMs with one write (HOST.md
+  CTRL), so SMs can start on the same clock.
+
 ## Per-SM configuration (host)
 
-Independent of the instruction stream, written over SPI (docs/info.md):
-
-- wrap_bottom / wrap_top (6 bits each; after wrap_top the PC continues at wrap_bottom);
-- side-set: count, opt, pindirs, base; in_base, out_base, set_base, set_count;
-- MISC: ISR / OSR shift direction, push threshold and pull threshold (4 bits each, 0 = 16);
-- open-drain mask; CLKDIV integer and fraction; COND_CFG; PAU_MODE, CRC_CFG, CRC_POLY,
-  CRC_RES.
+Independent of the instruction stream, written over SPI (HOST.md): wrap, side-set, pin bases,
+PIN_MASK, MISC (shift directions, push / pull thresholds, 0 = 16), CLKDIV, COND_CFG, PAU_MODE,
+CRC_CFG, CRC_POLY, CRC_RES. With the SM stopped the host can also write PC, X, Y, ISR, OSR and
+the shift counts.
 
 ## Constraints
 
@@ -353,3 +369,5 @@ Independent of the instruction stream, written over SPI (docs/info.md):
   queue; IRQ no longer waits for the PAU (PAU_BUSY): WAIT on PAU status TX idle instead.
 - Delay always scaled by CLKDIV (v1: not after a WAIT / PUSH / PULL stall).
 - After CTRL.RESET the OSR is empty (`osr_count` = 16; v1: 0, a full OSR of zeros).
+- STATUS as IN / ALU source `111`; PUSH / PULL `Peer`; several SMs with shared pins, PIN_MASK
+  and chip-level open drain (v1: one SM, open drain rewrote its pindirs).
