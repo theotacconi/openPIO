@@ -41,6 +41,23 @@ class Device:
         self.errors.append(f"t={t}: {msg}")
 
 
+class Script(Device):
+    """Drives pins from a list of (clock, {pin: level or None}); None releases the pin."""
+
+    def __init__(self, steps):
+        super().__init__()
+        self.steps = sorted(steps, key=lambda s: s[0])
+        self.tick(-1, 0)                                  # levels of clock 0
+
+    def tick(self, t, levels):
+        while self.steps and self.steps[0][0] <= t + 1:
+            for pin, lv in self.steps.pop(0)[1].items():
+                if lv is None:
+                    self.drive.pop(pin, None)
+                else:
+                    self.drive[pin] = lv
+
+
 class Bench:
     """Chip model + devices + host, clocked together."""
 
