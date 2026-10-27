@@ -14,90 +14,17 @@ What if you had a tiny, separate hardware helper whose only job was to flick pin
 
 That is what a **PIO (Programmable Input/Output)** does, a concept made famous by the Raspberry Pi RP2040. It is a tiny, stripped-down processor with a custom instruction set designed purely for shifting bits into and out of pins with zero timing jitter.
 
-Standard PIO architectures are great for clean serial streams (like SPI or simple UART), but they hit a wall when protocols get messy:
-* **Manchester encoding** (used in 10BASE-T Ethernet) requires flipping the clock on every single bit. Doing that in pure firmware eats up program memory and clock cycles.
-* **Bit-stuffing and NRZI** (used in USB) force the software to constantly check for consecutive ones and insert zeros on the fly. In standard PIO assembly, this quickly blows past instruction limits.
+openPIO gives you programmable state machines backed by dedicated, toggleable micro-hardware.
 
-**openPIO bridges this gap by introducing the PAU (Protocol Acceleration Unit).**
+![architecture](docs/architecture.svg)
 
-Instead of forcing you to choose between a rigid hardwired peripheral (inflexible) and a standard PIO core (too slow for complex line encodings), openPIO gives you programmable state machines backed by dedicated, toggleable micro-hardware:
+- **Instruction set**: [sim/model/ISA.md](sim/model/ISA.md): instructions, programmable conditions, the PAU (Protocol Acceleration Unit: line codes, bit stuffing, CRC, clock recovery), FIFOs, timing within a clock.
+- **Host interface**: [sim/model/HOST.md](sim/model/HOST.md): SPI commands, registers, pins.
+- **Programs**: [programs/README.md](programs/README.md): 17 protocols, each judged on the pins by a reference device.
+- **Datasheet**: [docs/info.md](docs/info.md) (Tiny Tapeout).
 
-* **Cycle-accurate execution**: Every instruction has deterministic latency with built-in side-set and delays.
-* **Hardware protocol assist (PAU)**: In-flight NRZI encoding, automated bit-stuffing for USB, and Manchester TX/RX logic directly in the datapath.
-* **Tiny footprint**: Designed to fit comfortably within a 6x4 tile budget on the IHP 130nm CMOS5L node.
-
-In short: **openPIO gives you the freedom of software bit-banging with the rock-solid reliability of dedicated silicon.**
-
-## Architecture
-
-![openPIO architecture: a host microcontroller, the chip with its state machines, and the 8 pins](docs/architecture.svg)
-
-Exact rules: [instruction set](sim/model/ISA.md), [host interface](sim/model/HOST.md), [reference card](docs/REFERENCE.md).
-
-## Microarchitecture & Datapath Evolution
-
-The core microarchitecture was thought and designed by hand.
-
-![Hand-drawn Datapath Sketch](docs/Drawing.svg)
-
-- **16-bit Deterministic Datapath**: Single-cycle ALU operations (`MOV`, `ADD`, `XOR`, `REV`), shift registers (ISR/OSR), and scratchpad registers (X, Y).
-- **Integrated PAU**:
-  - Hardware NRZI differential encoding/decoding.
-  - Transparent in-flight bit-stuffing counter (stuffed '0' injected after six consecutive '1's without stalling the execution pipeline).
-  - Dedicated Manchester transmitter with programmable baud prescaler.
-- **True Open-Drain & Bidirectional Support**: Integrated pad control masks line direction (`PINDIRS`) and level (`GPIO_OUT`) simultaneously via 1-cycle side-sets.
-- **Hardware Timeout Guards**: Real-time cycle guard counters prevent indefinite hangs during clock-stretching or missing external slave pulses.
-- **Strict Silicon Footprint**: Engineered to fit within 24 Tiny Tapeout tiles (~0.7 mm² / ~24k standard cells).
-
-
-# Co-Design Methodology
-```mermaid
-flowchart TD
-    subgraph ARCH["Lead Architect (Human + Architect Agent)"]
-        A1["Physical Node Constraints<br/>(IHP 130nm CMOS5L, 6x4 TT Tiles)"]
-        A2["Silicon Budgeting & Opcode Allocation"]
-        A3["Golden Model & ISA Definition<br/>(sim/model/: ISA.md, asm.py, emu.py)"]
-        A1 --> A2 --> A3
-    end
-
-    subgraph FLEET["Protocol Verification Fleet (14 Domain Agents)"]
-        direction TB
-        F1["Serial & Buses<br/>(UART, SPI 0-3, I2C Stretch, 1-Wire)"]
-        F2["Automotive & Industrial<br/>(CAN Arbitration, LIN)"]
-        F3["High-Speed & Custom Encodings<br/>(USB-LS NRZI/Stuffing, Manchester)"]
-        F4["Debug & Legacy<br/>(SWD Turnaround, JTAG TAP, PS/2)"]
-    end
-
-    subgraph EVAL["Evaluation & RFC Convergence Loop"]
-        E1["Cycle-Accurate Simulation & Assertions<br/>(<= 32 Instructions per Protocol)"]
-        E2{"100% Convergence?<br/>(All Pass & 0 Blockers)"}
-        E3["Architectural RFC Generation<br/>(Hardware Gaps & Bottlenecks)"]
-    end
-
-    FINAL(["Frozen ISA Ready for RTL Synthesis<br/>(src/ Verilog + Cocotb)"])
-
-    %% Dataflow
-    A3 -->|"Deploy Golden Spec & Asm"| FLEET
-    FLEET -->|"Execute Test Suites"| E1
-    E1 --> E2
-    E2 -- "No (Bottlenecks Found)" --> E3
-    E3 -->|"Submit RFC Digest for ISA Evolving"| A2
-    E2 -- "Yes (14/14 Protocols Pass)" --> FINAL
-
-    %% Styling
-    style ARCH fill:#1f2937,stroke:#3b82f6,stroke-width:2px,color:#f9fafb
-    style FLEET fill:#111827,stroke:#10b981,stroke-width:2px,color:#f9fafb
-    style EVAL fill:#1f2937,stroke:#f59e0b,stroke-width:2px,color:#f9fafb
-    style FINAL fill:#064e3b,stroke:#10b981,stroke-width:2px,color:#f9fafb
-```
-
-To ensure the custom 16-bit PIO instruction set satisfied real-world constraints across diverse hardware protocols within a strict 32-instruction memory ceiling, we developed an autonomous multi-agent hardware-software co-design loop.
-
-Lead Architect (Human + Architect Agent): Defined physical node boundaries (IHP 130nm CMOS5L, 6x4 Tiny Tapeout tiles), established silicon budget constraints, and steered opcode allocation.
-
-Protocol Verification Fleet (Worker & Domain Workers): 14 domain-specialized agents autonomously implemented drivers and unit tests for 14 physical communication protocols (UART, SPI 0-3, I2C with clock stretching, 1-Wire, CAN arbitration, LIN, USB-LS, Manchester/10BASE-T, SWD, JTAG, PS/2).
-
-RFC-Driven ISA Convergence: Limitations discovered by worker agents were formalized as architectural RFCs and iteratively integrated into sim/model/ until 100% test convergence was achieved.
+> [!NOTE]
+> This project is developed with great assistance from AI: lots of Q&A on the architectural choices and agents implementing the code. Humans steer the ideas and the vision.
 
 ## Development environment
 
@@ -111,6 +38,16 @@ scripts/dev.sh python3 test/lockstep/fuzz.py      # run one command
 The image is built on first use and rebuilt whenever `Containerfile` changes. Only the repository is mounted.
 
 ### Tests
+
+The reference model (`sim/model/`: assembler `asm.py`, one state machine `emu.py`, the chip `chip.py`, the host driver `host.py`) and the programs run in plain Python, in seconds (`model` workflow):
+
+```
+for t in test/model/test_*.py; do python3 "$t"; done   # ISA, assembler, chip model
+(cd test/shared && python3 test_devices.py)            # reference devices against known traces
+python3 programs/report.py                             # every program; rewrites programs/README.md
+```
+
+The RTL (`src/`) still implements ISA v1 and is being ported to v2; its tests below follow it.
 
 `test/test.py` holds the cocotb tests of the whole chip (Tiny Tapeout layout): a bit-banged SPI host programs it, and the PIO pins are checked against known data and `sim/model/emu.py`. They run on every relevant push (`test` workflow) and on the hardened netlist after each gds run (`gl_test` job).
 
