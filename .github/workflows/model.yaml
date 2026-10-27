@@ -1,0 +1,36 @@
+# Golden model checks (sim/model): ISA conformance, PAU and chip model, reference devices and the
+# protocol programs, all in Python. A few seconds; no simulator or PDK needed.
+name: model
+
+on:
+  push:
+    paths:
+      - 'sim/model/**'
+      - 'test/model/**'
+      - 'test/shared/**'
+      - 'agents/**'
+      - 'programs/**'
+      - '.github/workflows/model.yaml'
+  workflow_dispatch:
+
+jobs:
+  model:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: checkout repo
+        uses: actions/checkout@v6
+
+      - name: Setup python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Model tests
+        run: |
+          python3 test/model/test_isa_conformance.py
+          python3 test/model/test_isa_v2.py
+          python3 test/model/test_chip.py
+          (cd test/shared && python3 test_devices.py)
+
+      - name: Protocol programs
+        run: for t in agents/*/test_*.py; do python3 "$t" || exit 1; done
