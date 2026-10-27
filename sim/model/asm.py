@@ -57,7 +57,7 @@ ALU_OPS = ["mov", "rev", "and", "or", "xor", "xnor", "add", "sub"]
 SET_DEST = {"pins": 0, "pindirs": 1, "x": 2, "y": 3, "dlymul": 4,
             "timeout_val": 5, "timeout": 5, "pau_baud": 6, "baud": 6, "pau_ctl": 7}
 REV_SET_DEST = ["pins", "pindirs", "x", "y", "dlymul", "timeout_val", "pau_baud", "pau_ctl"]
-PAU_CTL_FLAGS = {"tx": 1, "rx": 2, "stuff": 4, "crc": 8}
+PAU_CTL_FLAGS = {"tx": 1, "rx": 2, "stuff": 4, "crc": 8, "monitor": 16}
 
 PAU_ACTIONS = {"crc_reset": 0, "crc_append": 1, "tx_abort": 2}
 
@@ -70,7 +70,8 @@ REV_COND_SRC = ["gpio", "in_base", "irq", "peer_irq", "x", "y", "status", "pau"]
 STATUS_NAMES = {"x_zero": 0, "y_zero": 1, "x_eq_y": 2, "timeout": 3,
                 "osr_empty": 4, "isr_full": 5, "tx_empty": 6, "rx_full": 7}
 PAU_STATUS_NAMES = {"tx_idle": 0, "rx_idle": 1, "tx_ready": 2, "rx_ready": 3,
-                    "crc_ok": 4, "crc_zero": 5, "stuff_err": 6, "overrun": 7, "se0": 8, "se1": 9}
+                    "crc_ok": 4, "crc_zero": 5, "stuff_err": 6, "overrun": 7, "se0": 8, "se1": 9,
+                    "bit_err": 10}
 
 # ISA v1 condition names: (inverted, source, index)
 NAMED_CONDS = {

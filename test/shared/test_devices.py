@@ -8,7 +8,7 @@ import random
 import unittest
 
 from bench import Bench, Device
-from devices import I2cTarget, SpiSlave, UartRx, UartTx
+from devices import CanBus, CanNode, I2cTarget, SpiSlave, UartRx, UartTx, can_crc15
 
 
 class Script(Device):
@@ -150,6 +150,25 @@ class I2c(unittest.TestCase):
         target = bench.add(I2cTarget(0, 1, 0x50))
         bench.run(end)
         self.assertEqual(target.transactions[0]["acks"], [])
+
+
+class Can(unittest.TestCase):
+
+    def test_crc15_check_value(self):           # CRC-15/CAN of "123456789", MSB first
+        bits = [b >> i & 1 for b in b"123456789" for i in range(7, -1, -1)]
+        self.assertEqual(can_crc15(bits), 0x059E)
+
+    def test_frame_ack_and_arbitration(self):
+        a = CanNode(8, send=[(0x123, [0x11, 0xFF, 0x00])])
+        b = CanNode(8, send=[(0x122, [0xAA])])            # lower ID: wins arbitration
+        c = CanNode(8)
+        bench = Bench()
+        bench.add(CanBus([], [], [a, b, c]))
+        bench.run(2500)
+        self.assertEqual([n.errors for n in (a, b, c)], [[], [], []])
+        self.assertEqual(c.frames, [{"id": 0x122, "data": [0xAA], "crc_ok": True},
+                                    {"id": 0x123, "data": [0x11, 0xFF, 0x00], "crc_ok": True}])
+        self.assertEqual((a.sent, b.sent), ([(0x123, True)], [(0x122, True)]), "both sent, acked")
 
 
 if __name__ == "__main__":

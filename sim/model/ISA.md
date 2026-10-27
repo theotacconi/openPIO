@@ -163,7 +163,7 @@ the timeout flag (cleared when a timed WAIT issues).
 | `100` | DLYMUL | delay multiplier = Value (0 = 1); does not change the strobe rate | timing |
 | `101` | TIMEOUT_VAL | WAIT timeout = Value strobes; clears the timeout flag | |
 | `110` | PAU_BAUD | PAU half-bit period = Value strobes (0 = 32) | PAU |
-| `111` | PAU_CTL | PAU control: [0] TX, [1] RX, [2] stuffing, [3] CRC, [4] 0 | |
+| `111` | PAU_CTL | PAU control: [0] TX, [1] RX, [2] stuffing, [3] CRC, [4] monitor | |
 
 ## Conditions
 
@@ -199,7 +199,8 @@ The condition is the selected signal, inverted when `Inv` = 1.
 | 7 | RX FIFO full | RX overrun (sticky) | |
 | 8 | 0 | SE0: pins `in_base`, `in_base + 1` both low | line states |
 | 9 | 0 | SE1: both high | |
-| 10..15 | 0 | 0 | |
+| 10 | 0 | bit error (sticky): a monitored TX bit read back different | |
+| 11..15 | 0 | 0 | |
 
 **Edges.** Each strobe the SM keeps the four condition values; a WAIT edge compares them with
 the current ones. The first strobe after a slot is rewritten compares against the old
@@ -246,7 +247,7 @@ Protocol parameters, written by the host (MODE also gives the reset value of PAU
 |---|---|---|
 | PAU_MODE | [1:0] ENC | line code: `00` NRZ, `01` NRZI, `10` Manchester, `11` biphase mark |
 | | [2] INV | invert the line (TX pin and RX input) |
-| | [3] DIFF | TX also drives `out_base + 1` with the complement |
+| | [3] DIFF | TX also drives `out_base + 1` with the complement; RX treats SE0 as the end of a frame |
 | | [7:4] STUFF_LEN | run length before a stuffed bit, 1..15 (0 = 16) |
 | | [9:8] STUFF_MODE | `00` after LEN 1s insert 0, `01` after LEN 0s insert 1, `10` after LEN equal bits insert the complement, `11` reserved |
 | | [14:10] BAUD | PAU_BAUD after CTRL.RESET |
@@ -271,6 +272,13 @@ The program controls the PAU with SET PAU_BAUD, SET PAU_CTL and the PAU actions:
   - [2] stuffing: TX bits queued while it is on are stuffed (a stuffed bit owed after the last
     of them is still sent); RX removes stuffed bits while it is on.
   - [3] CRC: feed the CRC with the data bits of TX (when TX is on) or else of RX.
+  - [4] monitor: TX bits queued while it is on (and the stuffed bits after them) are compared,
+    at the end of their first half, with the receive pin `in_base` (INV applied). On a
+    difference the PAU sets the sticky bit error status and goes quiet: the pins return to
+    `gpio_out` at once and the queued bits, and any bit queued while the error is set, are
+    discarded (OUT PINS and CRC append still go to the PAU, not to the pins). Turning TX on
+    clears the error. Wired-AND buses (CAN, LIN, 1-Wire) use it to stop at the first bit another
+    node overrides, e.g. a lost arbitration, and check the status at the end of the frame.
 - **CRC reset**: CRC = initial value. **CRC append**: queues the CRC (width bits, MSB first,
   complemented if configured) to TX; while the queue has no room it issues again every strobe.
   Appended bits do not feed the CRC and are stuffed like data.
@@ -306,6 +314,9 @@ below are in strobes since the reference edge; H = PAU_BAUD.
 | NRZ, NRZI | every input edge restarts the bit timer; the line is sampled H after it and then every 2H. NRZ bit = sample; NRZI bit = 1 when the sample equals the previous one (the first is compared with the level at RX on). |
 | Manchester | the first edge after RX on is a mid-bit edge. Each mid-bit edge gives a bit: rising = 1. Edges before 1.5H are bit boundaries and ignored; the next mid-bit edge must come by 2.5H, else the decoder re-arms for a new first edge. |
 | Biphase mark | the first edge after RX on is a bit boundary. An edge between 0.5H and 1.5H is a mid-bit edge (bit = 1); the next boundary edge, between 1.5H and 2.5H, ends the bit (bit = 0 without a mid-bit edge). No boundary by 2.5H also ends it (the last bit of a frame) and re-arms the decoder. |
+
+With DIFF, SE0 (pins `in_base` and `in_base + 1` both low, as a USB end of packet) decodes no
+bit: while it lasts the decoder is re-armed for the first edge of the next frame.
 
 Destuffing (stuffing on) drops the bit that follows STUFF_LEN qualifying bits; when that bit is
 not the expected stuffed value the stuff error flag is set and the bit is kept. NRZ and NRZI

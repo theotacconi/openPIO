@@ -243,6 +243,8 @@ class StateMachine:
     @property
     def tx_drives(self) -> bool:
         """The PAU drives the TX pins: TX on, or off and still draining its queue."""
+        if self.tx_bit_err:
+            return False
         return (bool(self.pau_ctl & 1) or self.tx_active or bool(self.tx_queue)
                 or self.tx_stuff_pending is not None)
 
@@ -316,7 +318,9 @@ class StateMachine:
         self.pau_ctl = 0
         self.pau_baud = (self.pau_mode >> 10) & 0x1F
         self.crc = 0
-        self.tx_queue: deque[tuple[int, bool]] = deque()   # (bit, stuffed while queued)
+        self.tx_queue: deque[tuple[int, bool, bool]] = deque()   # (bit, stuffed, monitored)
+        self.tx_monitor = False                         # the bit on the line is monitored
+        self.tx_bit_err = False
         self.tx_line = 0
         self.tx_active = False
         self.tx_half = 0
@@ -364,7 +368,9 @@ class StateMachine:
 
     def _set_pau_ctl(self, val: int) -> None:
         draining = self.tx_drives
-        old, self.pau_ctl = self.pau_ctl, val & 0xF
+        old, self.pau_ctl = self.pau_ctl, val & 0x1F
+        if val & 1 and not old & 1:
+            self.tx_bit_err = False
         if val & 1 and not old & 1 and not draining:
             self.tx_line = ((self.gpio_out >> (self.out_base & 7)) & 1) ^ (self.pau_mode >> 2 & 1)
             self.tx_stuff = _Stuffer()
@@ -384,11 +390,11 @@ class StateMachine:
         """Start the next bit (a stuffed one first) and drive its first half."""
         _, mode, length = self._stuff_cfg()
         if self.tx_stuff_pending is not None:
-            b = self.tx_stuff_pending
+            b = self.tx_stuff_pending                   # monitored like the bit before it
             self.tx_stuff_pending = None
             self.tx_stuff.stuffed(b, mode)
         else:
-            b, stuffed = self.tx_queue.popleft()
+            b, stuffed, self.tx_monitor = self.tx_queue.popleft()
             if stuffed:
                 self.tx_stuff.count(b, mode)
                 self.tx_stuff_pending = self.tx_stuff.due(mode, length)
@@ -413,6 +419,12 @@ class StateMachine:
             if self.tx_cnt:
                 return
             if self.tx_half == 0:                       # middle of the bit
+                if self.tx_monitor and self._rx_input() != self.tx_line:
+                    self.tx_bit_err = True              # quiet until TX is turned on again
+                    self.tx_queue.clear()
+                    self.tx_active = False
+                    self.tx_stuff_pending = None
+                    return
                 self.tx_half, self.tx_cnt = 1, self._half
                 enc = self.pau_mode & 3
                 if enc == 2:
@@ -423,6 +435,12 @@ class StateMachine:
             self.tx_active = False                      # end of the bit
         if self.tx_queue or self.tx_stuff_pending is not None:
             self._tx_start_bit()
+
+    def _tx_abort(self) -> None:
+        self.tx_queue.clear()
+        self.tx_active = False
+        self.tx_stuff_pending = None
+        self.pau_ctl &= ~1
 
     def _rx_input(self) -> int:
         return ((self.gpio_in >> (self.in_base & 7)) & 1) ^ (self.pau_mode >> 2 & 1)
@@ -449,6 +467,9 @@ class StateMachine:
         if not self.pau_ctl & 2:
             return
         inp = self._rx_input()
+        if self.pau_mode >> 3 & 1 and self._pau_status(8):   # DIFF: SE0 ends the frame
+            self.rx_prev_in, self.rx_armed, self.rx_quiet = inp, True, 0
+            return
         edge = inp != self.rx_prev_in
         rising = edge and inp == 1
         self.rx_prev_in = inp
@@ -517,6 +538,8 @@ class StateMachine:
             return int(pair == (0, 0))
         if idx == 9:
             return int(pair == (1, 1))
+        if idx == 10:
+            return int(self.tx_bit_err)
         return 0
 
     # ------------------------------------------------------------------ conditions
@@ -763,9 +786,9 @@ class StateMachine:
                 self.osr, self.osr_count = self.tx_fifo.popleft(), 0
             if dest == R_PINS and self.pau_ctl & 1:
                 order = range(count) if self.shift_out_right else range(count - 1, -1, -1)
-                for i in order:
+                for i in order if not self.tx_bit_err else ():
                     b = (val >> i) & 1
-                    self.tx_queue.append((b, bool(self.pau_ctl & 4)))
+                    self.tx_queue.append((b, bool(self.pau_ctl & 4), bool(self.pau_ctl & 16)))
                     if self.pau_ctl & 8:
                         self._crc_feed(b)
             elif dest == R_PINS:
@@ -847,16 +870,15 @@ class StateMachine:
                 if action == 0:
                     self.crc = self._crc_mask if self.crc_cfg >> 5 & 1 else 0
                 elif action == 2:
-                    self.tx_queue.clear()
-                    self.tx_active = False
-                    self.tx_stuff_pending = None
-                    self.pau_ctl &= ~1
+                    self._tx_abort()
                 elif action == 1:
                     w = self._crc_width
                     if PAU_QUEUE_BITS - len(self.tx_queue) < w:
                         return self._stall("RETRY")
                     out = self.crc ^ (self._crc_mask if self.crc_cfg >> 6 & 1 else 0)
-                    self.tx_queue.extend(((out >> i) & 1, bool(self.pau_ctl & 4)) for i in range(w - 1, -1, -1))
+                    if not self.tx_bit_err:
+                        self.tx_queue.extend(((out >> i) & 1, bool(self.pau_ctl & 4), bool(self.pau_ctl & 16))
+                                             for i in range(w - 1, -1, -1))
 
         else:  # SET
             dest, val = (args >> 5) & 7, args & 0x1F
