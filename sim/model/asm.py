@@ -143,11 +143,6 @@ class Program(list[int]):
         """Every configuration field: the program's over the reset values."""
         return {**CONFIG_RESET, **self.cfg}
 
-    def __getattr__(self, key: str):
-        if key in CONFIG_RESET:
-            return self.config()[key]
-        raise AttributeError(key)
-
     def to_bytes(self) -> bytes:
         """Return raw little-endian 16-bit words."""
         return struct.pack(f"<{len(self)}H", *self)
@@ -666,7 +661,7 @@ def main() -> None:
     with open(out_path, "wb") as f:
         f.write(words.to_bytes())
     print(f"Assembled {len(words)} instructions to {out_path}")
-    for s, c in enumerate(words.cond_cfg):
+    for s, c in enumerate(words.config()["cond_cfg"]):
         print(f"  cond{s} = 0x{c:02x}  {cond_text(c)}")
 
 

@@ -97,6 +97,21 @@ class HostInterface(unittest.TestCase):
         with self.assertRaises(TypeError):
             load(chip, 1, assemble("nop"), in_bsae=1)
 
+    def test_jmp_pin_moved_by_the_host(self):
+        """`jmp pin` gets a GPIO condition slot; the host's jmp_pin picks the pin."""
+        chip = Chip(2)
+        prog = assemble("wait 1 pin\njmp pin, high\nirq 0\nend: jmp end\nhigh: irq 1\njmp end")
+        load(chip, 0, prog, jmp_pin=6)
+        slot = prog.pin_slot
+        self.assertEqual(chip.reg_read(0, COND_CFG01 + slot // 2) >> 8 * (slot % 2) & 0xFF, 0x06)
+        chip.uio_in = 1 << 0                        # the default pin: ignored
+        chip.reg_write(0, CTRL, 1)
+        chip.step(8)
+        self.assertEqual(chip.reg_read(0, PC), 0, "waiting for pin 6")
+        chip.uio_in = 1 << 6
+        chip.step(8)
+        self.assertEqual(chip.sms[0].irq_flags[:2], [False, True], "pin 6 high: jumped")
+
     def test_registers_written_only_while_stopped(self):
         chip = Chip(2)
         chip.reg_write(0, X, 0x1234)
