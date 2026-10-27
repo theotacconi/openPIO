@@ -37,7 +37,7 @@ def run(cycles):
     bench.send(0, [sum((tms << 1 | tdi) << 2 * k for k, (tms, tdi) in enumerate(cycles[i:i + 8]))
                    for i in range(0, len(cycles), 8)])
     bench.start(1)
-    bench.run(len(cycles) * 4 + 50)
+    bench.run(len(cycles) * 6 + 50)
     tdo = [w >> (8 + k) & 1 for w in bench.received[0] for k in range(8)]
     return bench, tap, tdo
 

@@ -26,9 +26,9 @@ next:
     jmp x--, byte
     in pins, 15             ; CRC
     set pau_ctl, rx|stuff   ; the delimiter does not feed the CRC (it comes 2 bit-halves later)
-    in pins, 1              ; CRC delimiter (a stuffed bit before it is still dropped)
     jmp !pau crc_zero, bad
-    set pins, 0 [7]         ; ACK slot: dominant for one bit
+    in pins, 1              ; CRC delimiter (a stuffed bit before it is still dropped)
+    set pins, 0 [7]         ; ACK slot: dominant for one bit, as soon as the delimiter is seen
     set pins, 1
     irq 0
 .wrap

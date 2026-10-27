@@ -367,6 +367,29 @@ the front only; the SM status bits and the host see the whole FIFO.
 - **Start**: the host enables, resets or single-steps any set of SMs with one write (HOST.md
   CTRL), so SMs can start on the same clock.
 
+## Timing within a clock
+
+Every clock, in this order (emu.py and chip.py follow it; the RTL must match it):
+
+1. **Inputs.** `gpio_in` is the pins as they were two clocks before: every input passes a
+   2-flip-flop synchronizer (host SPI pins too).
+2. **Each enabled SM** (in index order, but they act as in parallel):
+   1. The prescaler decides whether this clock is a strobe. On other clocks nothing else of
+      the SM changes.
+   2. The PAU transmitter advances (the line of this strobe), then the receiver samples
+      `gpio_in` and decodes.
+   3. A delaying SM counts down; a stalled one re-evaluates its stall; else the instruction at PC
+      issues: side-set first, then the instruction, which sees the PAU and condition state of
+      step 2 and the pin latches with its own side-set applied.
+   4. The four condition values are kept for the WAIT edges of the next strobe.
+3. **Pin latches.** The writes of the clock are applied, SM by SM in index order and each SM's
+   in program order: the highest SM wins a pin, an instruction wins over its own side-set.
+4. **FIFO SRAMs** move one word each (every SM, enabled or not).
+
+An SM with CTRL EN = 0 is frozen: prescaler, PAU, conditions, delays and stalls keep their
+state; its FIFO SRAM still moves words and the host can still use its FIFOs. Pin outputs are
+the latches with each driving PAU TX line over them, then open drain (Multiple state machines).
+
 ## Per-SM configuration (host)
 
 Independent of the instruction stream, written over SPI (HOST.md): wrap, side-set, pin bases,
@@ -407,6 +430,7 @@ the shift counts.
   queue; IRQ no longer waits for the PAU (PAU_BUSY): WAIT on PAU status TX idle instead.
 - Delays count strobes times DLYMUL; CLKDIV only divides the strobe rate (v1: delays were scaled
   by CLKDIV too, except after a WAIT / PUSH / PULL stall).
+- Timing within a clock written down, with the 2-clock input synchronizer in the model.
 - After CTRL.RESET the OSR is empty (`osr_count` = 16; v1: 0, a full OSR of zeros).
 - FIFOs of 132 words (4 + 128 in a data SRAM per SM; v1: 4).
 - STATUS as IN / ALU source `111`; PUSH / PULL `Peer`; several SMs with shared pins, PIN_MASK

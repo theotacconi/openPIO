@@ -46,21 +46,29 @@ class Chip:
         self.irq_mask = [0xFF] * n_sm
         self.en = 0
         self.in_sel = 0
-        self.uio_in = 0
+        self.uio_in = 0                 # pin levels now
         self.ui_in = 0
+        self._sync = [0, 0]             # 2-flip-flop input synchronizer: gpio_in of 2 clocks ago
         self.cycle = 0
 
     # ------------------------------------------------------------------ clock and pins
 
     @property
-    def gpio_in(self) -> int:
+    def pins_in(self) -> int:
+        """Input pin levels now: uio_in, with ui_in[7:3] where GPIO selects them."""
         sel = (self.in_sel << 3) & 0xF8
         return (self.uio_in & ~sel | self.ui_in & sel) & 0xFF
 
+    @property
+    def gpio_in(self) -> int:
+        """What the SMs see: the input pins two clocks ago (synchronizer)."""
+        return self._sync[0]
+
     def step(self, cycles: int = 1) -> None:
-        """Advance `cycles` clocks: the enabled SMs in parallel, pin writes highest SM last."""
+        """Advance `cycles` clocks (ISA.md, Timing within a clock)."""
         for _ in range(cycles):
-            gpio_in = self.gpio_in
+            gpio_in = self._sync[0]
+            self._sync = [self._sync[1], self.pins_in]
             for sm in self.sms:
                 sm.gpio_in = gpio_in
             for sm in self.sms:

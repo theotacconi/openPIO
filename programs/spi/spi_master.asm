@@ -24,10 +24,10 @@ cpha0:                      ; data out before the leading edge, sampled on it
     xor pins, y             ; trailing edge: the slave shifts
     jmp !osre, cpha0
     jmp word
-cpha1:                      ; data out on the leading edge, sampled on the trailing one
-    out pins, 1
-    xor pins, y [1]         ; leading edge: the slave shifts
+cpha1:                      ; data changed after the leading edge, sampled on the trailing one
+    xor pins, y             ; leading edge: the slave shifts MISO
+    out pins, 1 [1]         ; MOSI, 2 strobes before the slave samples it
     xor pins, y             ; trailing edge
-    in pins, 1 auto
+    in pins, 1 auto         ; MISO, 4 strobes after it changed (input synchronizer)
     jmp !osre, cpha1
     jmp word

@@ -2,7 +2,8 @@
 ; SWD host (ARM ADIv5). SWCLK = sideset_base, SWDIO = set_base = out_base = in_base.
 ; PIN_MASK: SWCLK, SWDIO. ISR and OSR shift right (LSB first). 4 strobes a cycle.
 ; As the Raspberry Pi picoprobe: the host changes SWDIO with SWCLK low and the target samples on
-; the rising edge; the target changes SWDIO after a rising edge and the host samples on the next.
+; the rising edge; the target changes SWDIO after a rising edge and the host samples it at the end
+; of the next high phase (SWCLK to the pin, the target and the input synchronizer take 4 clocks).
 ; TX FIFO: request byte (bits 7:0: start, APnDP, RnW, A2, A3, parity, stop, park); for a write,
 ;   then the data (2 words, LSB first). The program sends its even parity (CRC feed: a 1-bit CRC).
 ; RX FIFO: ACK (bits 15:13, OK = 0b001); for a read with ACK OK, data (2 words) and parity (bit 15).
@@ -26,7 +27,8 @@ req:
     set x, 2
 ack:
     nop side 0 [1]
-    in pins, 1 side 1 [1]       ; ACK bits
+    nop side 1
+    in pins, 1 side 1       ; ACK bits
     jmp x--, ack
     mov x, isr
     push
@@ -59,10 +61,12 @@ read:
     set x, 31
 rd:
     nop side 0 [1]
-    in pins, 1 auto side 1 [1]  ; data, pushed every 16 bits
+    nop side 1
+    in pins, 1 auto side 1  ; data, pushed every 16 bits
     jmp x--, rd
     nop side 0 [1]
-    in pins, 1 side 1 [1]       ; parity
+    nop side 1
+    in pins, 1 side 1       ; parity
     push
     nop side 0 [1]              ; turnaround
     nop side 1 [1]

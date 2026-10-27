@@ -477,7 +477,8 @@ class CanNode:
     data, crc_ok, and pulls the ACK slot dominant for good frames of others. Sends its `send`
     frames (id, data) after 11 idle bits, or joins another node's SOF (hard sync) with a frame
     pending, and stops at a lost arbitration; `sent` gets (id, acked). Bits are sampled in their
-    middle, counted from the SOF edge; every bus edge of a frame must fall on a bit boundary.
+    middle, counted from the SOF edge; every bus edge of a frame must fall within a clock of a
+    bit boundary (a transmitter's loop delay through its transceiver and input synchronizer).
     idle: recessive clocks already seen at start."""
 
     def __init__(self, bit: int, send: list[tuple[int, list[int]]] = (), ack: bool = True,
@@ -501,7 +502,7 @@ class CanNode:
                 self.tx = 0
             return
         k, phase = divmod(t - self._t0, self.bit)
-        if bus != self._bus and phase:
+        if bus != self._bus and 1 < phase < self.bit - 1:
             self.errors.append(f"t={t}: edge {phase} clocks into bit {k}")
         self._bus = bus
         if phase == self.bit - 1:          # drive bit k + 1 from the next clock

@@ -4,6 +4,7 @@
 ; RX FIFO: one byte per word, bits 15:8 (ISR shifts right). A frame whose stop bit is low is
 ; dropped and raises IRQ 0.
 
+    wait 1 in_base 0        ; an idle line first: a low line at start is not a start bit
 .wrap_target
     wait 0 in_base 0 [10]   ; start edge seen at cycle 1-2: sample bit 0 at cycle 12 (its middle)
     set x, 7
