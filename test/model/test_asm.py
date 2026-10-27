@@ -10,13 +10,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "sim" / "model"))
 from asm import CONFIG_RESET, AssemblerError, assemble, disassemble    # noqa: E402
+from emu import StateMachine                                            # noqa: E402
 
 
 class RoundTrip(unittest.TestCase):
 
     def test_every_word(self):
         """disassemble -> assemble -> disassemble gives the same text for all 65536 words (bits
-        the text does not show, as a NOP's target, assemble to 0)."""
+        the text does not show, as a NOP's target, assemble to 0). Reserved words, NOPs when
+        executed (ISA.md), disassemble to .word."""
         for count, opt in ((0, False), (1, False), (2, True)):
             header = f".side_set {count}{' opt' if opt else ''}\n" if count else ""
             valid = 0
@@ -28,7 +30,22 @@ class RoundTrip(unittest.TestCase):
                 again = disassemble(assemble(header + text)[0], count, opt)
                 if again != text:
                     self.fail(f"0x{word:04x}: {text!r} -> {again!r} (side_set {count})")
-            self.assertGreater(valid, 60000 if count == 0 else 0)
+            self.assertEqual(valid, 59488, "90.8 % of the words are instructions, the rest reserved")
+
+    def test_reserved_words_are_nops(self):
+        """What the disassembler calls reserved, the emulator executes as a NOP."""
+        def state(sm):
+            return (sm.x, sm.y, sm.isr, sm.osr, sm.isr_count, sm.osr_count, list(sm.irq_flags),
+                    sm.gpio_out, sm.pindirs, sm.crc, list(sm.tx_queue), sm.pau_ctl, sm.stalled,
+                    list(sm.tx_fifo), list(sm.rx_fifo))
+        for word in range(1 << 16):
+            if not word & 0x1F00 and disassemble(word).startswith(".word"):    # no delay
+                sm = StateMachine([word])
+                sm.x, sm.y, sm.isr, sm.osr, sm.isr_count, sm.osr_count = 1, 2, 3, 4, 5, 6
+                sm.tx_fifo.append(7)
+                before = state(sm)
+                sm.step()
+                self.assertEqual((state(sm), sm.pc), (before, 1), f".word 0x{word:04x}")
 
 
 class Errors(unittest.TestCase):

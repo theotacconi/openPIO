@@ -226,7 +226,7 @@ def disassemble(word: int, side_set_count: int = 0, side_set_opt: bool = False) 
         if ctype == CT_IRQ:
             parts = ["irq"] + [n for n, b in (("clear", 5), ("wait", 4), ("peer", 3)) if a >> b & 1]
             return f"{' '.join(parts)} {a & 7}{suffix}"
-        if ctype == CT_FIFO:
+        if ctype == CT_FIFO and not a & 3:
             is_pull = a >> 5 & 1
             parts = ["pull" if is_pull else "push"]
             if not a >> 4 & 1:
@@ -236,14 +236,17 @@ def disassemble(word: int, side_set_count: int = 0, side_set_opt: bool = False) 
             if a >> 2 & 1:
                 parts.append("peer")
             return f"{' '.join(parts)}{suffix}"
-        if ctype == CT_WAIT:
+        if ctype == CT_WAIT and not a & 4:
             pol, edge, t_en, slot = a >> 5 & 1, a >> 4 & 1, a >> 3 & 1, a & 3
             return (f"wait {pol} cond{slot}{' edge' if edge else ''}"
                     f"{' timeout' if t_en else ''}{suffix}")
-        action = next(n for n, v in PAU_ACTIONS.items() if v == a >> 4)
-        if action == "crc_feed":
-            return f"pau crc_feed, {a & 0xF or 16}{suffix}"
-        return f"pau {action}{suffix}" if not a & 0xF else f".word 0x{word:04x}"
+        if ctype == CT_PAU:
+            action = next(n for n, v in PAU_ACTIONS.items() if v == a >> 4)
+            if action == "crc_feed":
+                return f"pau crc_feed, {a & 0xF or 16}{suffix}"
+            if not a & 0xF:
+                return f"pau {action}{suffix}"
+        return f".word 0x{word:04x}"                    # reserved: a NOP
     dest = (args >> 5) & 7
     return f"set {REV_SET_DEST[dest]}, {args & 0x1F}{suffix}"
 
