@@ -361,6 +361,9 @@ the front only; the SM status bits and the host see the whole FIFO.
   highest-numbered SM wins. The PAU TX of an SM drives its pins over the latch, also within
   PIN_MASK and with the same priority. An instruction sees the latches as they were at the
   start of the clock, with the writes it made itself (side-set) applied.
+- **Pin groups**: IN / OUT PINS and PINDIRS, SET and side-set use consecutive pins upward from
+  their base and stop at pin 7 (bits beyond it are not written and read 0). Single pins
+  (`in_base + Index` in conditions, `out_base + 1` and `in_base + 1` of the PAU) count mod 8.
 - **Open drain** (chip, HOST.md GPIO): a pin in the open-drain mask never drives high: it is
   pulled low when its direction bit is 1 and its latch bit 0, and floats otherwise. Writing 1 to
   the latch releases the line, 0 pulls it low once the program has enabled the pin.
@@ -432,7 +435,8 @@ the shift counts. A program carries all of it as assembler directives (`sim/mode
 - Delays count strobes times DLYMUL; CLKDIV only divides the strobe rate (v1: delays were scaled
   by CLKDIV too, except after a WAIT / PUSH / PULL stall).
 - Timing within a clock written down, with the 2-clock input synchronizer in the model.
-- After CTRL.RESET the OSR is empty (`osr_count` = 16; v1: 0, a full OSR of zeros).
+- After CTRL.RESET the OSR is empty (`osr_count` = 16; v1: 0, a full OSR of zeros), the IRQ
+  flags are clear and the CRC holds its initial value.
 - FIFOs of 132 words (4 + 128 in a data SRAM per SM; v1: 4).
 - STATUS as IN / ALU source `111`; PUSH / PULL `Peer`; several SMs with shared pins, PIN_MASK
   and chip-level open drain (v1: one SM, open drain rewrote its pindirs).

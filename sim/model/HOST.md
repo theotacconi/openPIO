@@ -80,8 +80,9 @@ RW*: written only while the SM is stopped (CTRL EN = 0); writes while it runs ar
 | 0x24 | IRQ_SUM | R | bit i: SM i has a flag set in its IRQ_MASK |
 | 0x25 | ID | R | [15:12] ISA version (2), [11:8] number of SMs, [7:0] 0x50 ('P') |
 
-- **RESET** (bit i): SM i as CTRL.RESET in ISA.md: registers, FIFOs, PAU, PC = 0, COND =
-  COND_CFG, DLYMUL = 1, CLKDIV and PAU_BAUD reloaded. Configuration and IMEM are kept.
+- **RESET** (bit i): SM i as CTRL.RESET in ISA.md: registers, IRQ flags, FIFOs, PAU, PC = 0,
+  COND = COND_CFG, DLYMUL = 1, CRC = its initial value, CLKDIV and PAU_BAUD reloaded.
+  Configuration, IMEM and the pin latches (shared) are kept.
 - **STEP** (bit i, SM stopped): SM i runs until it has executed one strobe.
 - A CTRL write sets EN to its bits [3:0] and applies RESET then STEP in the same clock: SMs
   enabled together start on the same clock.

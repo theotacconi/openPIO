@@ -255,8 +255,10 @@ class StateMachine:
             setattr(self, names.get(key, key), list(val) if key == "cond_cfg" else val)
 
     def reset(self, pc: int = 0) -> None:
-        """CTRL.RESET: SM registers, FIFOs, PAU; COND = COND_CFG, PAU_BAUD = PAU_MODE.BAUD."""
+        """CTRL.RESET: SM registers, IRQ flags, FIFOs, PAU; COND = COND_CFG, PAU_BAUD =
+        PAU_MODE.BAUD, CRC = its initial value."""
         self.x = self.y = self.isr = self.osr = 0
+        self.irq_flags[:] = [False] * 8                 # in place: the peer reads this list
         self.isr_count = 0
         self.osr_count = 16                             # OSR empty: autopull loads first
         self.pc = pc % IMEM_WORDS
@@ -283,7 +285,7 @@ class StateMachine:
         # PAU
         self.pau_ctl = 0
         self.pau_baud = (self.pau_mode >> 10) & 0x1F
-        self.crc = 0
+        self.crc = self._crc_mask if self.crc_cfg >> 5 & 1 else 0
         self.tx_queue: deque[tuple[int, bool, bool]] = deque()   # (bit, stuffed, monitored)
         self.tx_monitor = False                         # the bit on the line is monitored
         self.tx_bit_err = False

@@ -106,9 +106,10 @@ Chip (any `SM`):
 | 25 | ID | R | 0x2250: ISA 2, 2 SMs, 'P' |
 
 - **A CTRL write sets EN for all SMs**: to reset or step one SM, write the others' EN bits too.
-- **RESET**: clears PC, X, Y, ISR, OSR (empty), FIFOs, PAU, CRC (= 0), delays and stalls. It
-  also sets COND = COND_CFG, DLYMUL = 1, and reloads CLKDIV and the PAU baud.
-- **RESET keeps**: configuration, IMEM, IRQ flags and the pin latches.
+- **RESET**: clears PC, X, Y, ISR, OSR (empty), IRQ flags, FIFOs, PAU, delays and stalls. It
+  also sets COND = COND_CFG, DLYMUL = 1, CRC = its initial value, and reloads CLKDIV and the
+  PAU baud.
+- **RESET keeps**: configuration, IMEM and the pin latches.
 - **STEP**: the stopped SM executes one strobe.
 
 ## 6. Instructions
