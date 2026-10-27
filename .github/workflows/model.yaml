@@ -26,9 +26,7 @@ jobs:
 
       - name: Model tests
         run: |
-          python3 test/model/test_isa_conformance.py
-          python3 test/model/test_isa_v2.py
-          python3 test/model/test_chip.py
+          for t in test/model/test_*.py; do python3 "$t"; done
           (cd test/shared && python3 test_devices.py)
 
       - name: Protocol programs and their table
