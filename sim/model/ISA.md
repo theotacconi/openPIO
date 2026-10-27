@@ -280,7 +280,8 @@ The program controls the PAU with SET PAU_BAUD, SET PAU_CTL and the PAU actions:
     discarded (OUT PINS and CRC append still go to the PAU, not to the pins). Turning TX on
     clears the error. Wired-AND buses (CAN, LIN, 1-Wire) use it to stop at the first bit another
     node overrides, e.g. a lost arbitration, and check the status at the end of the frame.
-- **CRC reset**: CRC = initial value. **CRC append**: queues the CRC (width bits, MSB first,
+- **CRC reset**: CRC = initial value; the sticky RX errors (stuff error, overrun) clear: a new
+  frame starts. **CRC append**: queues the CRC (width bits, MSB first,
   complemented if configured) to TX; while the queue has no room it issues again every strobe.
   Appended bits do not feed the CRC and are stuffed like data.
 - **TX abort**: discards the TX queue and the bit in progress; the pins return to `gpio_out`
@@ -325,7 +326,9 @@ With DIFF, SE0 (pins `in_base` and `in_base + 1` both low, as a USB end of packe
 bit: while it lasts the decoder is re-armed for the first edge of the next frame.
 
 Destuffing (stuffing on) drops the bit that follows STUFF_LEN qualifying bits; when that bit is
-not the expected stuffed value the stuff error flag is set and the bit is kept. NRZ and NRZI
+not the expected stuffed value the stuff error flag is set and the bit is kept. Either way that
+bit restarts the count, as a stuffed bit does in TX (an HDLC flag, six 1s then a 0, arrives
+whole). NRZ and NRZI
 keep sampling an idle line: the program frames the data, e.g. it checks the CRC status right
 after taking the last bit of the frame. Bits then feed
 the CRC (CRC on, TX off) and enter the RX queue; a bit arriving at a full queue is dropped and

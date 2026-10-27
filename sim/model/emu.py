@@ -460,12 +460,13 @@ class StateMachine:
         on, mode, length = self._stuff_cfg()
         if on:
             due = self.rx_stuff.due(mode, length)
-            if due is not None:
+            if due is None:
+                self.rx_stuff.count(b, mode)
+            else:
+                self.rx_stuff.stuffed(b, mode)          # the slot's bit restarts the run
                 if b == due:
-                    self.rx_stuff.stuffed(b, mode)
                     return
-                self.rx_stuff_err = True
-            self.rx_stuff.count(b, mode)
+                self.rx_stuff_err = True                # a wrong one is kept
         if self.pau_ctl & 8 and not self.pau_ctl & 1:
             self._crc_feed(b)
         if len(self.rx_queue) >= PAU_QUEUE_BITS:
@@ -902,8 +903,9 @@ class StateMachine:
                     order = range(16 - n, 16) if self.shift_in_right else range(n - 1, -1, -1)
                     for i in order:
                         self._crc_feed(self.isr >> i & 1)
-                elif action == 0:
+                elif action == 0:                       # CRC reset: a new frame, no RX errors
                     self.crc = self._crc_mask if self.crc_cfg >> 5 & 1 else 0
+                    self.rx_stuff_err = self.rx_overrun = False
                 elif action == 2:
                     self._tx_abort()
                 elif action == 1:

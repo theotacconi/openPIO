@@ -242,6 +242,24 @@ class PauErrors(unittest.TestCase):
         self.assertEqual(self.loop(src, [0x003E, 0], 120)._pau_status(6), 0, "stuffed 0 found")
         self.assertEqual(self.loop(src, [0x007E, 0], 120)._pau_status(6), 1, "sixth 1")
 
+    def test_flag_arrives_whole_and_crc_reset_clears(self):
+        """Stuffing 5: an HDLC flag 01111110 (LSB first: 0x7E) sets stuff_err but all 8 bits
+        arrive, the wrong bit restarting the count; CRC reset clears the error."""
+        rx = self.loop("""
+            .pau enc=nrz baud=2 stuff=5
+            .push_thresh 8
+                set pau_ctl, rx|stuff
+                in pins, 8 auto      ; 0x00, the first byte
+                in pins, 8 auto      ; the flag
+                mov x, status
+                pau crc_reset
+                mov y, status
+            end:
+                jmp end
+        """, [0x7E00, 0x0001])          # a 1 after the flag
+        self.assertEqual([w >> 8 for w in rx.rx_fifo], [0x00, 0x7E])
+        self.assertEqual((rx.x >> 14 & 1, rx.y >> 14 & 1), (1, 0), "stuff_err, then cleared")
+
     def test_overrun(self):
         """Nobody reads the 32-bit queue: the 33rd bit time sets the sticky overrun."""
         src = """

@@ -235,11 +235,12 @@ Program control:
     then the pins go back to the latch.
   - `rx`: IN PINS takes decoded bits. Turning it on clears the queue and the errors.
   - `stuff`: TX inserts, RX removes a bit after `stuff` qualifying bits. ones: a 0 after N 1s;
-    zeros: a 1 after N 0s; equal: the complement after N equal bits. A wrong one sets stuff_err.
+    zeros: a 1 after N 0s; equal: the complement after N equal bits. A wrong one sets stuff_err
+    and is kept; either way the count restarts.
   - `crc`: the CRC takes the data bits of TX, or of RX when TX is off.
   - `monitor`: each sent bit is compared with in_base. A mismatch sets bit_err and silences TX
     (bus arbitration on CAN, LIN, 1-Wire).
-- **`pau crc_reset`**: CRC = initial value.
+- **`pau crc_reset`**: CRC = initial value, RX errors (stuff_err, overrun) cleared.
 - **`pau crc_append`**: queues the CRC (MSB first).
 - **`pau tx_abort`**: drops the queue, TX off, pins back to the latch now.
 - **`pau crc_feed, n`**: the CRC takes the last n bits shifted into the ISR (for bits that do not
