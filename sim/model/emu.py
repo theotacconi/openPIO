@@ -14,11 +14,11 @@ from typing import Sequence
 
 import asm
 from asm import (
-    CS_GPIO, CS_INBASE, CS_IRQ, CS_PAU, CS_PEER, CS_STATUS, CS_XBIT, CS_YBIT,
+    CS_GPIO, CS_INBASE, CS_IRQ, CS_PEER, CS_STATUS, CS_XBIT, CS_YBIT,
     COND_RESET, CT_FIFO, CT_IRQ, CT_PAU, CT_WAIT, IMEM_WORDS,
     JC_ALWAYS, JC_NEVER, JC_XDEC, JC_YDEC,
-    OP_ALU, OP_CTRL, OP_IN, OP_JMP, OP_OUT, OP_SET,
-    R_ISR, R_NULL, R_OSR, R_PINDIRS, R_PINS, R_SPECIAL, R_X, R_Y,
+    OP_ALU, OP_CTRL, OP_IN, OP_JMP, OP_OUT,
+    R_ISR, R_OSR, R_PINDIRS, R_PINS, R_SPECIAL, R_X, R_Y,
     disassemble,
 )
 
@@ -134,10 +134,7 @@ class StateMachine:
         bus: PinBus | None = None,
         index: int = 0,
         buffer: bool = False,
-        instructions: Sequence[int] | None = None,
     ) -> None:
-        if program is None and instructions is not None:
-            program = instructions
         self.memory: list[int] = [0] * IMEM_WORDS
         self.index = index
         self._own_bus = bus is None
@@ -190,37 +187,9 @@ class StateMachine:
     # ------------------------------------------------------------------ configuration
 
     @property
-    def X(self) -> int:
-        return self.x
-
-    @X.setter
-    def X(self, val: int) -> None:
-        self.x = val & 0xFFFF
-
-    @property
-    def Y(self) -> int:
-        return self.y
-
-    @Y.setter
-    def Y(self, val: int) -> None:
-        self.y = val & 0xFFFF
-
-    @property
-    def PC(self) -> int:
-        return self.pc
-
-    @PC.setter
-    def PC(self, val: int) -> None:
-        self.pc = val % IMEM_WORDS
-
-    @property
     def gpio_out(self) -> int:
         """Pin output latch as this SM sees it."""
         return self.bus.view(self.index, 0)
-
-    @gpio_out.setter
-    def gpio_out(self, val: int) -> None:
-        self.bus.out = val & 0xFF
 
     @property
     def pindirs(self) -> int:
@@ -272,11 +241,6 @@ class StateMachine:
     def pins(self) -> int:
         """Pin values driven (standalone SM): latch, PAU TX, open drain."""
         return pad_outputs(self.bus, [self])[0]
-
-    @property
-    def pin_oe(self) -> int:
-        """Pin output enables (standalone SM)."""
-        return pad_outputs(self.bus, [self])[1]
 
     def load_program(self, program: Sequence[int], origin: int = 0) -> None:
         """Load instruction words and the configuration an asm.Program sets (its cfg; start, X
@@ -977,24 +941,9 @@ class StateMachine:
                 f"0x{self.x:04x} | 0x{self.y:04x} | 0x{self.osr:04x} | 0x{self.isr:04x} | "
                 f"  0x{self.gpio_in:02x} |    0x{self.pins:02x} | {'1' if self.stalled else '0':^5}")
 
-    def get_trace_row(self, cycle: int | None = None) -> str:
-        """Most recent trace row (or the current state)."""
-        if self.history:
-            return self.history[-1]
-        instr = disassemble(self.memory[self.pc], self.side_set_count, self.side_set_opt)
-        return self._format_trace_row(self.pc, instr)
-
     def get_trace_table(self, last_n: int = 15) -> str:
         """Compact rolling window trace table."""
         return "\n".join([HEADER, SEPARATOR] + list(self.history)[-last_n:])
-
-    def run(self, max_cycles: int = 1000) -> int:
-        """Run until stalled or max_cycles reached. Returns cycles run."""
-        for _ in range(max_cycles):
-            self.step()
-            if self.stalled:
-                break
-        return self.cycle_count
 
 
 def main() -> None:
