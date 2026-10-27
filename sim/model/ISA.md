@@ -392,6 +392,7 @@ Every clock, in this order (emu.py and chip.py follow it; the RTL must match it)
 
 1. **Inputs.** `gpio_in` is the pins as they were two clocks before: every input passes a
    2-flip-flop synchronizer (host SPI pins too).
+   A host access (an SPI word just completed, HOST.md) acts before the SMs.
 2. **Each enabled SM** (in index order, but they act as in parallel):
    1. The prescaler decides whether this clock is a strobe. On other clocks nothing else of
       the SM changes.
@@ -403,7 +404,8 @@ Every clock, in this order (emu.py and chip.py follow it; the RTL must match it)
    4. The four condition values are kept for the WAIT edges of the next strobe.
 3. **Pin latches.** The writes of the clock are applied, SM by SM in index order and each SM's
    in program order: the highest SM wins a pin, an instruction wins over its own side-set.
-4. **FIFO SRAMs** move one word each (every SM, enabled or not).
+4. **FIFO data paths** (every SM, enabled or not): SRAM reads land, bypasses move, each SRAM
+   port serves one request (FIFOs).
 
 An SM with CTRL EN = 0 is frozen: prescaler, PAU, conditions, delays and stalls keep their
 state; its FIFO SRAM still moves words and the host can still use its FIFOs. Pin outputs are
