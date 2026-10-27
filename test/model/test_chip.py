@@ -180,6 +180,51 @@ class MultiSm(unittest.TestCase):
         self.assertTrue(chip.sms[1].irq_flags[0])
         self.assertEqual(chip.reg_read(0, 0x24), 0b10)          # IRQ_SUM: only SM 1
 
+    def test_wait_on_a_peer_flag(self):
+        chip = Chip(2)
+        load(chip, 0, assemble("wait 1 peer_irq 5\nirq 0\nend: jmp end"))
+        chip.reg_write(0, CTRL, 0b01)
+        chip.step(5)
+        self.assertEqual(chip.reg_read(0, PC), 0, "waiting")
+        chip.reg_write(1, IRQ, 1 << 13)            # host sets flag 5 of SM 1
+        chip.step(3)
+        self.assertTrue(chip.sms[0].irq_flags[0])
+
+    def test_push_peer_to_a_full_fifo(self):
+        """The peer's TX FIFO (132 words) full: PUSH PEER stalls; NOBLOCK drops the word."""
+        chip = Chip(2)
+        for n, push in ((0, "push peer"), (1, "push peer noblock")):
+            load(chip, n, assemble(f"set x, {n + 1}\nmov isr, x\n{push}\nirq 0\nend: jmp end"))
+        for n in (0, 1):
+            for w in range(132):
+                chip.tx_push(n, w)
+        chip.reg_write(0, CTRL, 0b11)
+        chip.step(10)
+        self.assertEqual((chip.reg_read(0, PC), chip.sms[0].stalled), (2, True), "SM 0 stalls")
+        self.assertEqual((chip.sms[1].irq_flags[0], chip.sms[1].isr), (True, 0), "SM 1 drops it")
+        chip.sms[1].tx_fifo.popleft()               # SM 1 takes a word: room for SM 0's
+        chip.step(10)
+        self.assertTrue(chip.sms[0].irq_flags[0])
+        self.assertEqual(chip.reg_read(1, FIFO_LEVEL) & 0xFF, 132)
+
+    def test_pull_ifempty_waits_for_the_threshold(self):
+        chip = Chip(2)
+        load(chip, 0, assemble("""
+            .pull_thresh 8
+                pull block
+                out x, 4
+                pull ifempty      ; 4 bits used of 8: keeps the OSR
+                out y, 4
+                pull ifempty      ; 8 used: loads the next word
+                out isr, 16
+            end:
+                jmp end
+        """))
+        chip.spi(header(OP_TX_PUSH, 0), [0x0021, 0xBEEF])
+        chip.reg_write(0, CTRL, 1)
+        chip.step(10)
+        self.assertEqual((chip.sms[0].x, chip.sms[0].y, chip.sms[0].isr), (1, 2, 0xBEEF))
+
     def test_debug_write_and_step(self):
         chip = Chip(2)
         load(chip, 0, assemble("""

@@ -206,6 +206,78 @@ class Loopback(unittest.TestCase):
         self.check("bmc", False, 1)
 
 
+class PauErrors(unittest.TestCase):
+    """RX errors and TX abort, with a plain NRZ transmitter wired into the receiver."""
+
+    TX = """
+        .pau enc=nrz baud=2
+            set pins, 1
+            set pindirs, 1
+            set pau_ctl, tx
+        loop:
+            out pins, 16 auto
+            jmp loop
+    """
+
+    def loop(self, rx_src: str, words: list[int], clocks: int = 700) -> StateMachine:
+        tx, rx = StateMachine(assemble(self.TX)), StateMachine(assemble(rx_src))
+        words = list(words)
+        for _ in range(clocks):
+            if words and len(tx.tx_fifo) < tx.fifo_depth:
+                tx.tx_fifo.append(words.pop(0))
+            tx.step()
+            rx.gpio_in = tx.pins & 1
+            rx.step()
+        return rx
+
+    def test_stuff_error(self):
+        """LSB first: five 1s then the stuffed 0 are right, six 1s are not (bits 1..6 of a word,
+        zeros around; checked inside the 32 bits of 4 strobes)."""
+        src = """
+            .pau enc=nrz baud=2 stuff=5
+                set pau_ctl, rx|stuff
+            end:
+                jmp end
+        """
+        self.assertEqual(self.loop(src, [0x003E, 0], 120)._pau_status(6), 0, "stuffed 0 found")
+        self.assertEqual(self.loop(src, [0x007E, 0], 120)._pau_status(6), 1, "sixth 1")
+
+    def test_overrun(self):
+        """Nobody reads the 32-bit queue: the 33rd bit time sets the sticky overrun."""
+        src = """
+            .pau enc=nrz baud=2
+                set pau_ctl, rx
+            end:
+                jmp end
+        """
+        rx = self.loop(src, [0xAAAA, 0xAAAA], 120)
+        self.assertEqual((len(rx.rx_queue) < 32, rx._pau_status(7)), (True, 0))
+        rx = self.loop(src, [0xAAAA, 0xAAAA], 300)
+        self.assertEqual((len(rx.rx_queue), rx._pau_status(7)), (32, 1))
+
+    def test_tx_abort(self):
+        sm = StateMachine(assemble("""
+            .pau enc=nrz baud=4
+                set pins, 1
+                set pindirs, 1
+                set pau_ctl, tx
+                out pins, 16          ; 0x0000: the line goes low
+                out pins, 16
+                nop [7]
+                pau tx_abort
+            end:
+                jmp end
+        """))
+        sm.tx_fifo.extend([0, 0])
+        for _ in range(8):
+            sm.step()
+        self.assertEqual((sm.pins & 1, len(sm.tx_queue) > 16), (0, True), "sending")
+        for _ in range(9):
+            sm.step()
+        self.assertEqual((sm.pins & 1, sm.tx_queue, sm.pau_ctl & 1, sm._pau_status(0)),
+                         (1, type(sm.tx_queue)(), 0, 1), "queue gone, TX off, pin back to its latch")
+
+
 class Isa(unittest.TestCase):
     """Non-PAU ISA v2 features."""
 
