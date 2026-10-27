@@ -101,10 +101,15 @@ class Spi(unittest.TestCase):
                 bench = Bench()
                 master, end = spi_master(mode, [0xA5, 0x3C, 0xFF])
                 bench.add(master)
-                slave = bench.add(SpiSlave(0, 1, 2, mode=mode, reply=[0x5A, 0xC3, 0x00]))
+                slave = bench.add(SpiSlave(0, 1, 2, mode=mode, reply=[0x5A, 0xC3, 0x81]))
                 bench.run(end + 10)
                 self.assertEqual(slave.words, [0xA5, 0x3C, 0xFF])
                 self.assertEqual(slave.errors, [])
+                # what a master sees on MISO at the sampling edges (leading for CPHA 0)
+                sample_level = (1 - (mode >> 1)) if (mode & 1) == 0 else mode >> 1
+                bits = [bench.trace[t] >> 2 & 1 for t, lv in bench.edges(0) if lv == sample_level]
+                words = [sum(b << (7 - i) for i, b in enumerate(bits[k:k + 8])) for k in (0, 8, 16)]
+                self.assertEqual(words, [0x5A, 0xC3, 0x81], "MISO")
 
     def test_setup_violation_is_seen(self):
         bench = Bench()

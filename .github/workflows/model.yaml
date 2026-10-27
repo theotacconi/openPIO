@@ -33,4 +33,4 @@ jobs:
           (cd test/shared && python3 test_devices.py)
 
       - name: Protocol programs
-        run: for t in agents/*/test_*.py; do python3 "$t" || exit 1; done
+        run: for t in programs/*/test_*.py agents/*/test_*.py; do python3 "$t" || exit 1; done

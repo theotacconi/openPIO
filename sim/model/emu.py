@@ -97,7 +97,7 @@ def pad_outputs(bus: PinBus, sms: Sequence["StateMachine"]) -> tuple[int, int]:
     for sm in sms:
         out = sm.pau_override(out)
     od = bus.od_mask
-    return out & ~od & 0xFF, ((oe & ~od) | (~out & od)) & 0xFF
+    return out & ~od & 0xFF, oe & ~(out & od) & 0xFF        # open drain: enabled and 0 pulls low
 
 
 class StateMachine:

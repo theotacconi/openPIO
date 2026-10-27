@@ -1,0 +1,76 @@
+#!/usr/bin/env python3
+"""UART programs judged on the pins by the reference UART devices (test/shared/devices.py):
+random bytes, back to back, at integer and fractional clock dividers."""
+import random
+import sys
+import unittest
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parents[1] / "test" / "shared"))
+from bench import Bench                                  # noqa: E402
+from devices import UartRx, UartTx                       # noqa: E402
+
+
+class UartTxTest(unittest.TestCase):
+
+    def check(self, clkdiv_int, clkdiv_frac, max_skew):
+        data = [random.Random(clkdiv_int).randrange(256) for _ in range(30)]
+        bench = Bench(pullups=1)                         # UART lines idle high
+        bench.load(0, (HERE / "uart_tx.asm").read_text(), set_base=0, set_count=1, out_base=0,
+                   clkdiv_cfg_int=clkdiv_int, clkdiv_cfg_frac=clkdiv_frac)
+        bit = 8 * (clkdiv_int + clkdiv_frac / 256)
+        rx = bench.add(UartRx(0, round(bit)))
+        bench.send(0, data)
+        bench.start(1)
+        bench.run(int(bit * 10 * (len(data) + 2)))
+        self.assertEqual(rx.frames, data)
+        self.assertEqual(bench.errors(), [])
+        self.assertLessEqual(rx.skew, max_skew)
+        first, last = bench.edges(0)[0][0], bench.edges(0)[-1][0]
+        self.assertAlmostEqual((last - first) / bit, 10 * len(data) - 1, delta=1,
+                               msg="back to back: exactly 10 bits a byte")
+
+    def test_integer_divider(self):
+        self.check(3, 0, 0)
+
+    def test_fractional_divider(self):
+        self.check(2, 128, 1)                        # 20 clocks a bit on average: +-1 clock jitter
+
+
+class UartRxTest(unittest.TestCase):
+
+    def run_rx(self, clkdiv, data, gap=0.0, stop_low=frozenset(), tx_bit=None):
+        bench = Bench(pullups=1 << 3)
+        bench.load(0, (HERE / "uart_rx.asm").read_text(), in_base=3, clkdiv_cfg_int=clkdiv)
+        tx = bench.add(UartTx(3, tx_bit or 8 * clkdiv, data, start=20, gap=gap, stop_low=stop_low))
+        bench.start(1)
+        bench.run(tx.end + 40)
+        return bench, [w >> 8 for w in bench.received[0]]
+
+    def test_back_to_back(self):
+        data = [random.Random(7).randrange(256) for _ in range(30)]
+        for clkdiv in (1, 4):
+            with self.subTest(clkdiv=clkdiv):
+                bench, got = self.run_rx(clkdiv, data)
+                self.assertEqual(got, data)
+                self.assertFalse(bench.chip.sms[0].irq_flags[0])
+
+    def test_baud_tolerance(self):
+        """A transmitter 3 % fast or slow: sampling in the middle of each bit still reads it."""
+        data = [random.Random(9).randrange(256) for _ in range(20)]
+        for tx_bit in (31, 33):                       # receiver: 32 clocks a bit
+            with self.subTest(tx_bit=tx_bit):
+                bench, got = self.run_rx(4, data, gap=0.5, tx_bit=tx_bit)
+                self.assertEqual(got, data)
+                self.assertFalse(bench.chip.sms[0].irq_flags[0])
+
+    def test_framing_error(self):
+        data = [0x11, 0x22, 0x33, 0x44]
+        bench, got = self.run_rx(1, data, gap=1, stop_low={1})
+        self.assertEqual(got, [0x11, 0x33, 0x44], "the frame with a low stop bit is dropped")
+        self.assertTrue(bench.chip.sms[0].irq_flags[0])
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -137,12 +137,14 @@ class MultiSm(unittest.TestCase):
 
     def test_open_drain_is_per_pin(self):
         chip = Chip(2)
-        chip.load(0, assemble("set pins, 2\nend: jmp end"), set_count=2)
-        chip.reg_write(0, GPIO, 0x03)              # pins 0, 1 open drain
+        chip.load(0, assemble("set pins, 2\nset pindirs, 3\nend: jmp end"), set_count=2)
+        chip.reg_write(0, GPIO, 0x07)              # pins 0, 1, 2 open drain
         chip.reg_write(0, CTRL, 1)
         chip.step()
+        self.assertEqual(chip.pins[1] & 7, 0, "latch 0 but not enabled: nothing driven")
+        chip.step()
         out, oe = chip.pins
-        self.assertEqual((out & 3, oe & 3), (0, 0b01), "pin 0 driven low, pin 1 floats")
+        self.assertEqual((out & 7, oe & 7), (0, 0b001), "pin 0 pulled low, pin 1 floats, pin 2 off")
 
     def test_status_word(self):
         chip = Chip(2)

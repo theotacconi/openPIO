@@ -325,8 +325,9 @@ are queued it does nothing and issues again every strobe.
   highest-numbered SM wins. The PAU TX of an SM drives its pins over the latch, also within
   PIN_MASK and with the same priority. An instruction sees the latches as they were at the
   start of the clock, with the writes it made itself (side-set) applied.
-- **Open drain** (chip, HOST.md GPIO): a pin in the open-drain mask is driven low when its latch
-  bit is 0 and floats when it is 1, whatever its direction bit.
+- **Open drain** (chip, HOST.md GPIO): a pin in the open-drain mask never drives high: it is
+  pulled low when its direction bit is 1 and its latch bit 0, and floats otherwise. Writing 1 to
+  the latch releases the line, 0 pulls it low once the program has enabled the pin.
 - **Start**: the host enables, resets or single-steps any set of SMs with one write (HOST.md
   CTRL), so SMs can start on the same clock.
 

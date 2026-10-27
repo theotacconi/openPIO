@@ -101,13 +101,19 @@ class SpiSlave(Device):
 
     Each word is 2 * bits SCK edges, the first one leading (away from CPOL). CPHA 0: data sampled
     on leading edges, changed on trailing ones (the first bit is out before the first edge);
-    CPHA 1: changed on leading edges, sampled on trailing ones. Checks: SCK at CPOL before every
-    word, MOSI stable on the clock before and the clock after each sampling edge."""
+    CPHA 1: changed on leading edges, sampled on trailing ones. With `cs`, the slave listens only
+    while CS_N is low, and a word cut by CS_N rising is dropped. Checks: SCK at CPOL before every
+    word (and when CS_N falls), MOSI stable for `setup` clocks before each sampling edge and on
+    the clock after it."""
 
     def __init__(self, sck: int, mosi: int, miso: int, mode: int = 0, bits: int = 8,
-                 reply: list[int] = (), msb_first: bool = True) -> None:
+                 reply: list[int] = (), msb_first: bool = True, cs: int | None = None,
+                 setup: int = 1) -> None:
         super().__init__()
-        self.sck, self.mosi, self.miso = sck, mosi, miso
+        self.setup = setup
+        self._mosi_since = 0                             # clock of the last MOSI change
+        self.sck, self.mosi, self.miso, self.cs = sck, mosi, miso, cs
+        self._prev_cs = 1
         self.cpol, self.cpha, self.bits, self.msb_first = mode >> 1, mode & 1, bits, msb_first
         self.reply = list(reply)
         self.words: list[int] = []
@@ -130,16 +136,29 @@ class SpiSlave(Device):
 
     def tick(self, t: int, levels: int) -> None:
         sck, mosi = _bit(levels, self.sck), _bit(levels, self.mosi)
+        if mosi != self._prev_mosi:
+            self._mosi_since = t
         if self._hold is not None and mosi != self._hold:
             self.error(t, "MOSI changed on the clock after a sampling edge (hold)")
         self._hold = None
+        if self.cs is not None:
+            cs = _bit(levels, self.cs)
+            if cs and not self._prev_cs and self._edge:
+                self.error(t, "CS_N rose inside a word")
+            if not cs and self._prev_cs and sck != self.cpol:
+                self.error(t, f"SCK not at CPOL = {self.cpol} when CS_N falls")
+            self._prev_cs = cs
+            if cs:
+                self._edge, self._shift = 0, 0
+                self._prev_sck, self._prev_mosi = sck, mosi
+                return
         if self._prev_sck is not None and sck != self._prev_sck:
             leading = self._prev_sck == self.cpol
             if self._edge == 0 and not leading:
                 self.error(t, f"SCK not at CPOL = {self.cpol} before a word")
             if leading != bool(self.cpha):              # sampling edge
-                if mosi != self._prev_mosi:
-                    self.error(t, "MOSI changed on the sampling edge (setup)")
+                if t - self._mosi_since < self.setup:
+                    self.error(t, f"MOSI stable {t - self._mosi_since} clocks before the sampling edge (setup {self.setup})")
                 self._hold = mosi
                 n = self._edge // 2
                 self._shift = (self._shift << 1 | mosi) if self.msb_first else self._shift | mosi << n
@@ -148,12 +167,9 @@ class SpiSlave(Device):
                     self._load()
                 self._present()
             self._edge += 1
-            if self._edge == 2 * self.bits:
-                self.words.append(self._shift)
+            if self._edge == 2 * self.bits:             # CPHA 0: the last (trailing) edge
+                self.words.append(self._shift)          # already put out the next word's first bit
                 self._edge, self._shift = 0, 0
-                if self.cpha == 0:
-                    self._load()
-                    self._present()
         self._prev_sck, self._prev_mosi = sck, mosi
 
 
