@@ -995,3 +995,235 @@ class Ps2Device(Device):
         while self._out and self._out[0][0] <= t + 1:
             self.drive = self._out.pop(0)[1]
         self._prev = (clk, dat)
+
+
+# ---------------------------------------------------------------------------------- WS2812
+
+class Ws2812Chain(Device):
+    """A chain of `n` WS2812B LEDs on `pin`, `ns` nanoseconds per clock. Datasheet timing, each
+    +-150 ns: a 0 is high 400 then low 850, a 1 high 800 then low 450; low for more than 50 us
+    latches. After a latch the first LED takes the first 24 bits, the next LED the next 24 (each
+    passes on what it does not take), G, R, B, MSB first. `frames` gets the colours (G, R, B)
+    of the chain at every latch."""
+
+    def __init__(self, pin: int, n: int, ns: float) -> None:
+        super().__init__()
+        self.pin, self.n, self.ns = pin, n, ns
+        self.frames: list[list[tuple[int, int, int]]] = []
+        self._leds = [(0, 0, 0)] * n
+        self._bits: list[int] = []
+        self._prev, self._rise, self._fall = 0, None, 0
+
+    def _check(self, t: int, what: str, clocks: int, nominal: int) -> None:
+        if abs(clocks * self.ns - nominal) > 150:
+            self.error(t, f"{what} {clocks * self.ns:.0f} ns, not {nominal} +- 150")
+
+    def tick(self, t: int, levels: int) -> None:
+        lv = _bit(levels, self.pin)
+        if lv and not self._prev:
+            if self._rise is not None and self._bits and (t - self._fall) * self.ns <= 50_000:
+                self._check(t, "low", t - self._fall, 850 if self._bits[-1] == 0 else 450)
+            self._rise = t
+        elif not lv and self._prev and self._rise is not None:
+            high = (t - self._rise) * self.ns
+            bit = int(high > 600)
+            self._check(t, "high", t - self._rise, 800 if bit else 400)
+            self._bits.append(bit)
+            self._fall = t
+        elif not lv and self._bits and (t - self._fall) * self.ns > 50_000:
+            words = [sum(b << (23 - i) for i, b in enumerate(self._bits[k:k + 24]))
+                     for k in range(0, min(len(self._bits), 24 * self.n) - 23, 24)]
+            for i, w in enumerate(words):
+                self._leds[i] = (w >> 16, w >> 8 & 0xFF, w & 0xFF)
+            self.frames.append(list(self._leds))
+            self._bits = []
+        self._prev = lv
+
+
+# ---------------------------------------------------------------------------------- I2S
+
+class I2sCodec(Device):
+    """I2S (Philips) codec, 16-bit samples, MSB first, LRCLK low = left. Its DAC samples `sdin`
+    on BCLK rising edges; a word starts one BCLK after LRCLK changes, so the bit sampled on the
+    edge where the change is seen is the LSB of the word before. Its ADC drives `sdout` the same
+    way, changing it after BCLK falling edges, with the samples of `send` [(left, right), ...]
+    (zeros after them). `received` gets (left, right) pairs. Checks: 16 bits per word, SDIN
+    stable for `setup` clocks before a rising edge."""
+
+    def __init__(self, bclk: int, lrclk: int, sdin: int, sdout: int, send=(), setup: int = 2):
+        super().__init__()
+        self.bclk, self.lrclk, self.sdin, self.sdout, self.setup = bclk, lrclk, sdin, sdout, setup
+        self.send = [s for pair in send for s in pair]
+        self.received: list[tuple[int, int]] = []
+        self._words: list[tuple[int, int]] = []          # (channel, value)
+        self._bits: list[int] | None = None
+        self._out: list[int] = []
+        self._lr: int | None = None
+        self._prev = (0, 0)
+        self._sd_since = 0
+        self.drive = {sdout: 0}
+
+    def tick(self, t: int, levels: int) -> None:
+        bclk, sd = _bit(levels, self.bclk), _bit(levels, self.sdin)
+        if sd != self._prev[1]:
+            self._sd_since = t
+        if bclk and not self._prev[0]:                   # rising edge: sample
+            lr = _bit(levels, self.lrclk)
+            if t - self._sd_since < self.setup and self._bits is not None:
+                self.error(t, "SDIN changed less than setup clocks before BCLK rose")
+            if self._bits is not None:
+                self._bits.append(sd)
+            if self._lr is not None and lr != self._lr:
+                if self._bits is not None:
+                    if len(self._bits) != 16:
+                        self.error(t, f"{len(self._bits)} bits in a word")
+                    self._word(1 - lr, sum(b << (len(self._bits) - 1 - i) for i, b in enumerate(self._bits)))
+                self._bits = []
+                value = self.send.pop(0) if self.send else 0
+                self._out = [value >> i & 1 for i in range(15, -1, -1)]
+            self._lr = lr
+        elif not bclk and self._prev[0] and self._out:   # falling edge: next ADC bit
+            self.drive = {self.sdout: self._out.pop(0)}
+        self._prev = (bclk, sd)
+
+    def _word(self, channel: int, value: int) -> None:
+        if channel == 1 and self._words and self._words[-1][0] == 0:
+            self.received.append((self._words.pop()[1], value))
+        elif channel == 0:
+            self._words = [(0, value)]
+
+
+# ---------------------------------------------------------------------------------- quadrature
+
+class QuadratureEncoder(Device):
+    """Incremental encoder on pins `a`, `b`: from clock `start`, one step every `period` clocks,
+    +1 or -1 from `steps`. +1 moves along (A, B) 00 -> 10 -> 11 -> 01 -> 00 (A leads), -1
+    back. `position` is the sum of the steps taken so far."""
+
+    GRAY = [(0, 0), (1, 0), (1, 1), (0, 1)]
+
+    def __init__(self, a: int, b: int, steps: list[int], period: int, start: int = 0) -> None:
+        super().__init__()
+        self.a, self.b = a, b
+        self.schedule = [(start + k * period, s) for k, s in enumerate(steps)]
+        self.end = start + len(steps) * period
+        self.position = 0
+        self.drive = {a: 0, b: 0}
+
+    def tick(self, t: int, levels: int) -> None:
+        while self.schedule and self.schedule[0][0] <= t + 1:
+            self.position += self.schedule.pop(0)[1]
+            a, b = self.GRAY[self.position % 4]
+            self.drive = {self.a: a, self.b: b}
+
+
+# ---------------------------------------------------------------------------------- NEC IR
+
+def nec_levels(frame) -> list[tuple[int, float]]:
+    """(level, microseconds) of an IR receiver's output (0 during a burst) for one NEC frame:
+    (address, command), or "repeat"."""
+    if frame == "repeat":
+        return [(0, 9000), (1, 2250), (0, 562.5)]
+    address, command = frame
+    data = [address, address ^ 0xFF, command, command ^ 0xFF]
+    out = [(0, 9000), (1, 4500)]
+    for byte in data:
+        for i in range(8):
+            out += [(0, 562.5), (1, 1687.5 if byte >> i & 1 else 562.5)]
+    return out + [(0, 562.5)]
+
+
+class NecRemote(Device):
+    """Output of an IR receiver module (active low, idle high) for NEC remote frames sent from
+    clock `start`, `gap` microseconds apart; `us` clocks per microsecond. A frame is
+    (address, command), "repeat", or ("glitch", length in us): a lone burst."""
+
+    def __init__(self, pin: int, frames: list, us: float = 1, start: int = 0, gap: float = 5000):
+        super().__init__()
+        self.pin = pin
+        self.schedule: list[tuple[int, int]] = []
+        t = start
+        for f in frames:
+            levels = [(0, f[1])] if f[0] == "glitch" else nec_levels(f)
+            for lv, length in levels:
+                self.schedule.append((round(t), lv))
+                t += length * us
+            self.schedule.append((round(t), 1))
+            t += gap * us
+        self.end = round(t)
+        self.drive = {pin: 1}
+
+    def tick(self, t: int, levels: int) -> None:
+        while self.schedule and self.schedule[0][0] <= t + 1:
+            self.drive = {self.pin: self.schedule.pop(0)[1]}
+
+
+# ---------------------------------------------------------------------------------- HDLC
+
+def crc16_x25(data: list[int]) -> int:
+    """CRC-16/X.25 (the HDLC FCS): reflected polynomial 0x1021, init and xorout 0xFFFF."""
+    crc = 0xFFFF
+    for byte in data:
+        crc ^= byte
+        for _ in range(8):
+            crc = crc >> 1 ^ 0x8408 if crc & 1 else crc >> 1
+    return crc ^ 0xFFFF
+
+
+class HdlcRx(Device):
+    """HDLC receiver on an NRZI line (a 0 is a transition, as AX.25), `bit` clocks a bit: every
+    edge re-aligns the sampling grid to the middle of the bit. Flags 0x7E delimit frames; a 0
+    after five 1s is removed; bytes LSB first; the last two bytes are the FCS (CRC-16/X.25, low
+    byte first). `frames` gets dicts data (without FCS) and fcs_ok. Checks: whole bytes, no
+    abort (seven 1s) inside a frame, edges on the bit grid inside a frame (between frames it
+    re-aligns, as a receiver's clock recovery does)."""
+
+    def __init__(self, pin: int, bit: int) -> None:
+        super().__init__()
+        self.pin, self.bit = pin, bit
+        self.frames: list[dict] = []
+        self._prev = self._last = 0
+        self._next: int | None = None
+        self._bits: list[int] | None = None              # None: hunting for a flag
+        self._ones = 0
+
+    def tick(self, t: int, levels: int) -> None:
+        lv = _bit(levels, self.pin)
+        if lv != self._prev:
+            if self._bits and (self._next - t) % self.bit != self.bit // 2:
+                self.error(t, "edge off the bit grid inside a frame")
+            if self._next is None:
+                self._last = self._prev
+            self._next = t + self.bit // 2
+        if t == self._next:
+            self._take(t, int(lv == self._last))
+            self._last = lv
+            self._next += self.bit
+        self._prev = lv
+
+    def _take(self, t: int, b: int) -> None:
+        if self._ones == 5 and not b:                    # stuffed 0
+            self._ones = 0
+            return
+        if self._ones == 6:
+            if not b:                                    # flag 01111110
+                if self._bits:
+                    self._frame(t, self._bits[:-6])
+                self._bits, self._ones = [], 0
+                return
+            if self._bits and len(self._bits) > 6:
+                self.error(t, "abort (seven 1s) inside a frame")
+            self._bits = None                            # idle: hunt
+            return
+        self._ones = self._ones + 1 if b else 0
+        if self._bits is not None and self._ones < 6:
+            self._bits.append(b)
+
+    def _frame(self, t: int, bits: list[int]) -> None:
+        if not bits:
+            return
+        if len(bits) % 8:
+            self.error(t, f"{len(bits)} bits: not whole bytes")
+        data = [sum(bits[i + k] << k for k in range(8)) for i in range(0, len(bits) - 7, 8)]
+        body, fcs = data[:-2], data[-2:]
+        self.frames.append({"data": body, "fcs_ok": len(fcs) == 2 and crc16_x25(body) == fcs[0] | fcs[1] << 8})

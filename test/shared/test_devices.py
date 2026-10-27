@@ -8,7 +8,8 @@ import random
 import unittest
 
 from bench import Bench, Device
-from devices import WiredAndBus, CanNode, I2cTarget, SpiSlave, UartRx, UartTx, can_crc15
+from devices import (WiredAndBus, CanNode, HdlcRx, I2cTarget, I2sCodec, SpiSlave, UartRx, UartTx,
+                     Ws2812Chain, can_crc15, crc16_x25)
 
 
 class Script(Device):
@@ -169,6 +170,94 @@ class Can(unittest.TestCase):
         self.assertEqual(c.frames, [{"id": 0x122, "data": [0xAA], "crc_ok": True},
                                     {"id": 0x123, "data": [0x11, 0xFF, 0x00], "crc_ok": True}])
         self.assertEqual((a.sent, b.sent), ([(0x123, True)], [(0x122, True)]), "both sent, acked")
+
+
+class Ws2812(unittest.TestCase):
+
+    def wave(self, bits, high=(8, 16), low=(17, 9)):
+        """Bits at 50 ns a clock: nominal 400 / 800 ns high, 850 / 450 ns low; then a latch."""
+        steps, t = [(0, {0: 0})], 10
+        for b in bits:
+            steps += [(t, {0: 1}), (t + high[b], {0: 0})]
+            t += high[b] + low[b]
+        return Script(steps), t + 1100
+
+    def test_two_leds_latch(self):
+        colours = [(0x12, 0x34, 0x56), (0xFF, 0x00, 0x81)]
+        bits = [c >> i & 1 for led in colours for c in led for i in range(7, -1, -1)]
+        bench = Bench()
+        script, end = self.wave(bits)
+        bench.add(script)
+        chain = bench.add(Ws2812Chain(0, 2, 50))
+        bench.run(end)
+        self.assertEqual((chain.frames, chain.errors), ([colours], []))
+
+    def test_high_out_of_tolerance(self):
+        bench = Bench()
+        script, end = self.wave([1] * 24, high=(8, 12))   # 600 ns: neither a 0 nor a 1
+        bench.add(script)
+        chain = bench.add(Ws2812Chain(0, 1, 50))
+        bench.run(end)
+        self.assertTrue(chain.errors)
+
+
+class Hdlc(unittest.TestCase):
+
+    def test_crc16_x25_check_value(self):
+        self.assertEqual(crc16_x25(list(b"123456789")), 0x906E)
+
+    def frame_bits(self, data, fcs):
+        bits, ones = [], 0
+        for b in [byte >> i & 1 for byte in data + [fcs & 0xFF, fcs >> 8] for i in range(8)]:
+            bits.append(b)
+            ones = ones + 1 if b else 0
+            if ones == 5:
+                bits.append(0)                            # zero insertion
+                ones = 0
+        flag = [0, 1, 1, 1, 1, 1, 1, 0]
+        return [1] * 8 + flag + bits + flag + [1] * 16
+
+    def run_line(self, bits, bit=8):
+        steps, level, t = [], 1, 5
+        for b in bits:                                    # NRZI: a 0 is a transition
+            level ^= 1 - b
+            steps.append((t, {0: level}))
+            t += bit
+        bench = Bench()
+        bench.add(Script(steps))
+        rx = bench.add(HdlcRx(0, bit))
+        bench.run(t + 10)
+        return rx
+
+    def test_frames(self):
+        data = [0x7E, 0xFF, 0x00, 0x1F]
+        rx = self.run_line(self.frame_bits(data, crc16_x25(data)) + self.frame_bits([0x55], 0x1234))
+        self.assertEqual(rx.errors, [])
+        self.assertEqual(rx.frames, [{"data": data, "fcs_ok": True}, {"data": [0x55], "fcs_ok": False}])
+
+
+class I2s(unittest.TestCase):
+
+    def test_ideal_master(self):
+        """BCLK 8 clocks, data out after falling edges, LRCLK one bit ahead of the MSB."""
+        sent, adc = [(0x8001, 0x1234), (0xFFFF, 0x0F0F)], [(0xA5A5, 0x0001), (0x7FFF, 0x8000)]
+        bits = [(lr, v >> i & 1) for left, right in sent for lr, v in ((0, left), (1, right))
+                for i in range(15, -1, -1)]
+        # bit slots (LRCLK, SD): LRCLK is the channel of the next bit; first an empty right word
+        slots = [(1, 0), (0, 0)] + [(bits[k + 1][0] if k + 1 < len(bits) else 0, bits[k][1])
+                                    for k in range(len(bits))]
+        steps, t = [(0, {0: 0, 1: 1, 2: 0})], 10          # BCLK 0, LRCLK 1, SD 2
+        for lr, sd in slots:
+            steps += [(t, {0: 0, 1: lr, 2: sd}), (t + 4, {0: 1})]
+            t += 8
+        bench = Bench()
+        bench.add(Script(steps))
+        codec = bench.add(I2sCodec(0, 1, 2, 3, send=adc))
+        bench.run(t + 10)
+        self.assertEqual((codec.received, codec.errors), (sent, []))
+        got = [bench.trace[r] >> 3 & 1 for r, lv in bench.edges(0) if lv == 1][2:66]
+        words = [sum(b << (15 - i) for i, b in enumerate(got[k:k + 16])) for k in range(0, 64, 16)]
+        self.assertEqual(words, [s for pair in adc for s in pair], "ADC on SDOUT at the rising edges")
 
 
 if __name__ == "__main__":
