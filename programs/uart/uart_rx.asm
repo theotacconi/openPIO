@@ -3,6 +3,7 @@
 ; 8 strobes per bit: baud = clk / (8 x CLKDIV). Cycles below count from the start edge.
 ; RX FIFO: one byte per word, bits 15:8 (ISR shifts right). A frame whose stop bit is low is
 ; dropped and raises IRQ 0.
+.in_pins 3               ; RX
 
     wait 1 in_base 0        ; an idle line first: a low line at start is not a start bit
 .wrap_target

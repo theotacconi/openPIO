@@ -7,6 +7,10 @@
 ; RX FIFO, one result a command: bits 15:8 the 8 bits seen on DQ, which feed the CRC8, and bit 0
 ; set when the CRC8 is then 0 (a block read with its CRC is right). After a reset, bit 15 is the
 ; presence (0: a device answered).
+.set_pins 4 1            ; DQ
+.in_pins 4
+.open_drain 4
+.pin_mask 4
 .crc width=8 poly=0x31
 
     set pins, 1

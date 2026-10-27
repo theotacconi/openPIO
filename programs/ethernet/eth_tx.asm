@@ -2,10 +2,12 @@
 ; 10BASE-T transmitter: TD+ = out_base = set_base, TD- = TD+ + 1 (set_count 2), Manchester with
 ; the PAU (2 strobes a half-bit: 10 Mbit/s with the chip clocked at 40 MHz, CLKDIV 1). The program
 ; sends preamble and SFD, the PAU the frame bits and the FCS (CRC-32); TP_IDL ends the frame.
-; Host configuration (SM stopped): Y = 0x5555, the preamble pattern.
 ; TX FIFO: N = number of 16-bit words after the SFD, then those words (destination address to
 ; payload, LSB first, even byte count). The host sets flag 0 once a frame is in the FIFO (it has
 ; 132 words: frames up to 260 bytes), the program clears it, sends the frame, sets flag 1.
+.out_pins 0              ; TD+
+.set_pins 0 2            ; TD+, TD-
+.y 0x5555                ; the preamble pattern
 .pau enc=manchester diff baud=2
 .crc width=32 poly=0x04C11DB7 init=ones xorout=1
 

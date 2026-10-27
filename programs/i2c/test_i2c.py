@@ -10,10 +10,9 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[1] / "test" / "shared"))
 sys.path.insert(0, str(HERE.parents[1] / "sim" / "model"))
 from bench import Bench, Device                          # noqa: E402
-from chip import GPIO, PIN_MASK                          # noqa: E402
 from devices import I2cTarget                            # noqa: E402
 
-SCL, SDA = 2, 3
+SCL, SDA = 2, 3  # pins as in the program
 
 
 def cmd(data=0, start=0, read=0, nack=0, stop=0):
@@ -22,11 +21,7 @@ def cmd(data=0, start=0, read=0, nack=0, stop=0):
 
 def setup(target=None, clkdiv=1):
     bench = Bench(pullups=1 << SCL | 1 << SDA)
-    bench.load(0, (HERE / "i2c_master.asm").read_text(), set_base=SDA, set_count=1, out_base=SDA,
-               in_base=SDA, sideset_base=SCL, shift_in_right=False, shift_out_right=False,
-               clkdiv_cfg_int=clkdiv)
-    bench.chip.reg_write(0, GPIO, 1 << SCL | 1 << SDA)            # open drain
-    bench.chip.reg_write(0, PIN_MASK, 1 << SCL | 1 << SDA)
+    bench.load(0, (HERE / "i2c_master.asm").read_text(), clkdiv_int=clkdiv)
     if target:
         bench.add(target)
     bench.start(1)

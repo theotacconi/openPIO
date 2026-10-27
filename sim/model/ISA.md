@@ -395,7 +395,8 @@ the latches with each driving PAU TX line over them, then open drain (Multiple s
 Independent of the instruction stream, written over SPI (HOST.md): wrap, side-set, pin bases,
 PIN_MASK, MISC (shift directions, push / pull thresholds, 0 = 16), CLKDIV, COND_CFG, PAU_MODE,
 CRC_CFG, CRC_POLY, CRC_RES. With the SM stopped the host can also write PC, X, Y, ISR, OSR and
-the shift counts.
+the shift counts. A program carries all of it as assembler directives (`sim/model/asm.py`);
+`sim/model/host.py` writes it over SPI.
 
 ## Constraints
 

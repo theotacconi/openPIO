@@ -9,7 +9,6 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[1] / "test" / "shared"))
 sys.path.insert(0, str(HERE.parents[1] / "sim" / "model"))
 from bench import Bench                                  # noqa: E402
-from chip import PIN_MASK                                # noqa: E402
 from devices import JtagTap                              # noqa: E402
 
 TDI, TMS, TCK, TDO = 0, 1, 2, 3
@@ -31,8 +30,7 @@ def run(cycles):
     """Run the cycles; returns TDO per cycle."""
     cycles = cycles + [(0, 0)] * (-len(cycles) % 8)      # pad in Run-Test/Idle
     bench = Bench()
-    bench.load(0, (HERE / "jtag.asm").read_text(), out_base=TDI, sideset_base=TCK, in_base=TDO)
-    bench.chip.reg_write(0, PIN_MASK, 1 << TDI | 1 << TMS | 1 << TCK)
+    bench.load(0, (HERE / "jtag.asm").read_text())
     tap = bench.add(JtagTap(TCK, TMS, TDI, TDO, IDCODE))
     bench.send(0, [sum((tms << 1 | tdi) << 2 * k for k, (tms, tdi) in enumerate(cycles[i:i + 8]))
                    for i in range(0, len(cycles), 8)])

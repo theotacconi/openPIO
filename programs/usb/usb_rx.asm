@@ -3,6 +3,7 @@
 ; Every byte of a packet goes to the RX FIFO (bits 15:8) as it arrives: SYNC, PID, payload, CRC.
 ; At the end of packet (SE0) IRQ 0 if the CRC16 of the payload is right, IRQ 1 if not (also for
 ; packets without a CRC16: tokens, handshakes).
+.in_pins 0               ; D-, D+
 .pau enc=nrzi diff stuff=6 baud=4
 .crc width=16 poly=0x8005 init=ones xorout=1 res=0x800D
 .push_thresh 8

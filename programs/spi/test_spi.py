@@ -11,7 +11,6 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[1] / "test" / "shared"))
 sys.path.insert(0, str(HERE.parents[1] / "sim" / "model"))
 from bench import Bench                                  # noqa: E402
-from chip import PIN_MASK, X, Y                          # noqa: E402
 from devices import SpiSlave                             # noqa: E402
 
 MOSI, SCK, CS, MISO = 0, 1, 2, 3
@@ -26,12 +25,7 @@ class SpiMaster(unittest.TestCase):
                 sent = [rng.randrange(256) for _ in range(20)]
                 reply = [rng.randrange(256) for _ in range(20)]
                 bench = Bench(pullups=1 << CS)              # CS_N pulled up on the board
-                bench.load(0, (HERE / "spi_master.asm").read_text(), out_base=MOSI, set_base=MOSI,
-                           set_count=3, sideset_base=CS, in_base=MISO, shift_in_right=False,
-                           shift_out_right=False, clkdiv_cfg_int=div)
-                bench.chip.reg_write(0, X, mode)
-                bench.chip.reg_write(0, Y, 1 << SCK)
-                bench.chip.reg_write(0, PIN_MASK, 1 << MOSI | 1 << SCK | 1 << CS)
+                bench.load(0, (HERE / "spi_master.asm").read_text(), x=mode, clkdiv_int=div)
                 # the program puts MOSI out 2 strobes before a sampling edge
                 slave = bench.add(SpiSlave(SCK, MOSI, MISO, mode=mode, reply=reply, cs=CS, setup=2 * div))
                 bench.send(0, [b << 8 for b in sent])

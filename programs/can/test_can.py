@@ -11,7 +11,7 @@ sys.path.insert(0, str(HERE.parents[1] / "test" / "shared"))
 from bench import Bench                                  # noqa: E402
 from devices import WiredAndBus, CanNode, can_bits            # noqa: E402
 
-TX, RX, BIT = 0, 1, 8
+TX, RX, BIT = 0, 1, 8  # pins as in the program
 
 
 def frame_words(ident, data):
@@ -23,8 +23,7 @@ def frame_words(ident, data):
 
 def tx_bench(nodes, frames):
     bench = Bench(pullups=1 << RX | 1 << TX)               # TXD pulled up, as on a transceiver
-    bench.load(0, (HERE / "can_tx.asm").read_text(), out_base=TX, set_base=TX, set_count=1,
-               in_base=RX, shift_out_right=False)
+    bench.load(0, (HERE / "can_tx.asm").read_text())
     bus = bench.add(WiredAndBus([TX], [RX], nodes))
     for f in frames:
         bench.send(0, frame_words(*f))
@@ -77,8 +76,7 @@ class CanRx(unittest.TestCase):
         frames = [(rng.randrange(2048), [rng.randrange(256) for _ in range(n)]) for n in (0, 3, 8)]
         sender = CanNode(BIT, send=frames, idle=0)             # waits for 11 idle bits
         bench = Bench(pullups=1 << RX | 1 << TX)
-        bench.load(0, (HERE / "can_rx.asm").read_text(), set_base=TX, set_count=1, in_base=RX,
-                   shift_in_right=False)
+        bench.load(0, (HERE / "can_rx.asm").read_text())
         bench.add(WiredAndBus([TX], [RX], [sender]))
         bench.start(1)
         irqs = []

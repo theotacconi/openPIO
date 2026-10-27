@@ -2,8 +2,10 @@
 ; 4b5b encoding in software, biphase mark (BMC) line code by the PAU: the USB Power Delivery
 ; physical layer. Pin: out_base = set_base. 8 strobes a bit (PAU half-bit 4).
 ; A 32-word jump table turns nibble n into its 5-bit symbol: OUT PC jumps to entry 2n.
-; Host: PC = start (SM stopped). TX FIFO: one nibble a word, as 2n in bits 4:0.
-; Symbols leave LSB first.
+; TX FIFO: one nibble a word, as 2n in bits 4:0. Symbols leave LSB first.
+.out_pins 0
+.set_pins 0 1
+.start start             ; after the table
 .pau enc=bmc baud=4
 
     set y, 0b11110        ; 0

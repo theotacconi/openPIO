@@ -12,7 +12,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[1] / "test" / "shared"))
 sys.path.insert(0, str(HERE.parents[1] / "sim" / "model"))
 from bench import Bench                                  # noqa: E402
-from chip import IRQ, IRQ_MASK, Y                       # noqa: E402
+from chip import IRQ, IRQ_MASK                           # noqa: E402
 from devices import ManchesterRx, bits_to_bytes          # noqa: E402
 
 TDP, TDN, BIT = 0, 1, 4
@@ -24,8 +24,7 @@ def frame_words(f):
 
 def setup(host_word_clocks=0):
     bench = Bench(host_word_clocks=host_word_clocks)
-    bench.load(0, (HERE / "eth_tx.asm").read_text(), out_base=TDP, set_base=TDP, set_count=2)
-    bench.chip.reg_write(0, Y, 0x5555)
+    bench.load(0, (HERE / "eth_tx.asm").read_text())
     bench.chip.reg_write(0, IRQ_MASK, 1 << 1)              # HOST_IRQ only for "frame sent"
     rx = bench.add(ManchesterRx(TDP, BIT))
     bench.start(1)

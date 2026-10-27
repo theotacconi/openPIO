@@ -3,6 +3,9 @@
 ; 8 strobes a bit (PAU half-bit 4); the PAU unstuffs and checks the CRC15.
 ; RX FIFO, per frame: SOF, ID, RTR, IDE, r0 (bits 14:0); DLC (bits 3:0); one data byte a word
 ; (bits 7:0). Then IRQ 0 and an ACK if the CRC is right, IRQ 1 if not.
+.set_pins 0 1            ; TX
+.in_pins 1               ; RX
+.shift_in left
 .pau enc=nrz stuff=5 stuff_mode=equal baud=4
 .crc width=15 poly=0x4599
 

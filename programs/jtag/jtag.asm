@@ -8,6 +8,10 @@
 ; TMS / TDI change with TCK low; TDO, changed by the target on the falling edge, is sampled at
 ; the end of the high phase: TCK to the pin, the target's TDO and the input synchronizer take
 ; 4 clocks, so a shorter cycle would read the previous bit.
+.out_pins 0              ; TDI, TMS
+.sideset_pins 2          ; TCK
+.in_pins 3               ; TDO
+.pin_mask 0, 1, 2
 .side_set 1
 .push_thresh 8
 

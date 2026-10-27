@@ -4,6 +4,8 @@
 ; (a 0 after six 1s, in its own bit time) and the CRC16; the program frames the packet.
 ; TX FIFO: SYNC (bits 7:0, 0x80) | PID (bits 15:8); payload length N; then N bytes (bits 7:0).
 ; IRQ 0 after each packet.
+.out_pins 0              ; D-, D+
+.set_pins 0 2
 .pau enc=nrzi diff stuff=6 baud=4
 .crc width=16 poly=0x8005 init=ones xorout=1 res=0x800D
 

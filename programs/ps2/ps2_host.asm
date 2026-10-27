@@ -6,6 +6,11 @@
 ; RX FIFO, a received frame: bits 15 stop, 14 parity, 13:6 data, 5 start; bit 0 set on a parity
 ;   error (odd parity, checked with CRC feed: a 1-bit CRC).
 ; TX FIFO: a byte to send (bits 7:0). RX FIFO then gets bit 15 = the device's ACK (0 = ACK).
+.set_pins 2 2            ; DATA, CLK
+.out_pins 2
+.in_pins 2
+.open_drain 2, 3
+.pin_mask 2, 3
 .crc width=1 poly=1
 
     set pins, 3             ; release CLK and DATA

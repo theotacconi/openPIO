@@ -5,7 +5,7 @@ or pull them; each pin resolves to one level, which is what the chip and the dev
 judge a program only by the levels on the pins and by the data it exchanges with the host.
 
     bench = Bench(pullups=0b11)
-    bench.load(0, source, set_base=0)
+    bench.load(0, source, set_base=0)      # the program's configuration, set_base overridden
     dev = bench.add(SomeDevice(...))
     bench.start(0b01)
     bench.run(1000, until=lambda: ...)
@@ -22,7 +22,8 @@ from typing import Callable, Sequence
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "sim" / "model"))
 from asm import assemble          # noqa: E402
-from chip import CTRL, Chip       # noqa: E402
+from chip import Chip             # noqa: E402
+from host import Host             # noqa: E402
 
 
 class Device:
@@ -47,6 +48,7 @@ class Bench:
         """host_word_clocks: clocks the host needs per FIFO word (an SPI host: about 100);
         0 = one word per clock."""
         self.chip = Chip(n_sm)
+        self.host = Host(self.chip)
         self.host_word_clocks = host_word_clocks
         self.pullups = pullups
         self.devices: list[Device] = []
@@ -59,10 +61,11 @@ class Bench:
     # ------------------------------------------------------------------ setup
 
     def load(self, sm: int, program, **cfg):
-        """Assemble (if text) and load a program into SM `sm`; cfg as chip.Chip.load."""
+        """Assemble (if text) and load a program into SM `sm` through the host's register
+        writes; cfg overrides the program's configuration (host.Host.load)."""
         if isinstance(program, str):
             program = assemble(program)
-        self.chip.load(sm, program, **cfg)
+        self.host.load(sm, program, **cfg)
         return program
 
     def add(self, device: Device) -> Device:
@@ -70,7 +73,7 @@ class Bench:
         return device
 
     def start(self, mask: int = 1) -> None:
-        self.chip.reg_write(0, CTRL, mask)
+        self.host.start(mask)
 
     def send(self, sm: int, words: Sequence[int]) -> None:
         """Queue words for the host to push into the TX FIFO as soon as there is room."""

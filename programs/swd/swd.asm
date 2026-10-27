@@ -8,6 +8,11 @@
 ;   then the data (2 words, LSB first). The program sends its even parity (CRC feed: a 1-bit CRC).
 ; RX FIFO: ACK (bits 15:13, OK = 0b001); for a read with ACK OK, data (2 words) and parity (bit 15).
 ; After a WAIT / FAULT ACK the data phase is skipped (write data is taken from the FIFO and dropped).
+.sideset_pins 0          ; SWCLK
+.set_pins 1 1            ; SWDIO
+.out_pins 1
+.in_pins 1
+.pin_mask 0, 1
 .side_set 1 opt
 .crc width=1 poly=1
 

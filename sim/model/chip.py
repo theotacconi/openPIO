@@ -2,9 +2,8 @@
 the host interface of HOST.md (registers, SPI commands with bursts).
 
     chip = Chip(n_sm=2)
-    chip.load(0, asm.assemble(source))      # IMEM + configuration of SM 0
-    chip.reg_write(0, CTRL, 0b01)           # run SM 0
-    chip.step()                             # one clock
+    chip.spi(header(OP_REG_WR, 0, CTRL), [0b01])    # run SM 0 (host.Host loads programs)
+    chip.step()                                     # one clock
 """
 
 from __future__ import annotations
@@ -94,23 +93,6 @@ class Chip:
     @property
     def uo_out(self) -> int:
         return (self.pins[0] & 0xFC) | self.host_irq << 1
-
-    # ------------------------------------------------------------------ loading
-
-    def load(self, n: int, program: Sequence[int], **cfg) -> StateMachine:
-        """Write a program and the configuration it carries (asm.Program) into SM n, as a host
-        would over SPI, then RESET it. Extra keyword arguments as StateMachine attributes."""
-        sm = self.sms[n]
-        for addr, word in enumerate(program):
-            self.imem_write(n, addr, word)
-        sm.load_program(program)
-        if getattr(program, "pin_slot", None) is not None and "jmp_pin" in cfg:
-            s = program.pin_slot
-            sm.cond_cfg[s] = (sm.cond_cfg[s] & 0xF0) | (cfg.pop("jmp_pin") & 7)
-        for key, val in cfg.items():
-            setattr(sm, key, val)
-        sm.reset()
-        return sm
 
     # ------------------------------------------------------------------ host registers
 

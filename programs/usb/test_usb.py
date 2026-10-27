@@ -26,7 +26,7 @@ class UsbTxTest(unittest.TestCase):
 
     def test_packets(self):
         bench = Bench()
-        bench.load(0, (HERE / "usb_tx.asm").read_text(), out_base=DM, set_base=DM, set_count=2)
+        bench.load(0, (HERE / "usb_tx.asm").read_text())
         rx = bench.add(UsbRx(DM, DP, BIT))
         sent = payloads(1)
         for i, p in enumerate(sent):
@@ -45,7 +45,7 @@ class UsbRxTest(unittest.TestCase):
         sent = payloads(2)
         packets = [(DATA0, p) for p in sent] + [(DATA0, [1, 2, 3], 0x1234)]   # last: bad CRC
         bench = Bench()
-        bench.load(0, (HERE / "usb_rx.asm").read_text(), in_base=DM)
+        bench.load(0, (HERE / "usb_rx.asm").read_text())
         tx = bench.add(UsbTx(DM, DP, BIT, packets, start=20, gap=8))
         bench.start(1)
         verdicts = []
@@ -66,8 +66,8 @@ class UsbRxTest(unittest.TestCase):
     def test_loopback(self):
         """The transmitter program into the receiver program, on two SMs."""
         bench = Bench()
-        bench.load(0, (HERE / "usb_tx.asm").read_text(), out_base=DM, set_base=DM, set_count=2)
-        bench.load(1, (HERE / "usb_rx.asm").read_text(), in_base=DM)
+        bench.load(0, (HERE / "usb_tx.asm").read_text())
+        bench.load(1, (HERE / "usb_rx.asm").read_text())
         p = [0xFF] * 6 + [0x00, 0x42]
         bench.send(0, [0x80 | DATA0 << 8, len(p)] + p)
         bench.start(0b11)

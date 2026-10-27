@@ -1,11 +1,18 @@
 .program spi_master
 ; SPI master, any of the 4 modes, 8 bits a word, MSB first, CS_N low around each word.
-; Host configuration (SM stopped): X = mode (bit 1 CPOL, bit 0 CPHA), Y = 1 << SCK pin.
+; X = mode (bit 1 CPOL, bit 0 CPHA), set by the host; Y = 1 << SCK pin.
 ; Pins: MOSI = out_base = set_base, SCK = set_base + 1, CS_N = set_base + 2 = sideset_base
 ;   (set_count 3), MISO = in_base. PIN_MASK: MOSI, SCK, CS_N.
-; MISC: shift left in and out (the thresholds of 8 come with the program).
 ; TX FIFO: byte in bits 15:8; RX FIFO: byte in bits 7:0. 6 strobes a bit: SCK = strobes / 6.
 ; SCK is toggled with XOR (xor pins, y), so CPOL is only the level it starts from.
+.out_pins 0              ; MOSI
+.set_pins 0 3            ; MOSI, SCK, CS_N
+.sideset_pins 2          ; CS_N
+.in_pins 3               ; MISO
+.pin_mask 0, 1, 2
+.shift_in left
+.shift_out left
+.y 2                     ; 1 << SCK
 .side_set 1 opt
 .pull_thresh 8
 .push_thresh 8

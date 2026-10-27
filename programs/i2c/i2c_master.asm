@@ -10,6 +10,14 @@
 ; releases both lines, raises IRQ 0 and waits until the host clears it.
 ; SDA changes only while SCL is low; SCL high waits for the line to really rise (clock
 ; stretching). A bit is about 11 strobes: SCL = strobes / 11.
+.set_pins 3 1            ; SDA
+.out_pins 3
+.in_pins 3
+.sideset_pins 2          ; SCL
+.open_drain 2, 3
+.pin_mask 2, 3
+.shift_in left
+.shift_out left
 .side_set 1 opt
 
     set pins, 1 side 1          ; release SDA and SCL in the latch first,

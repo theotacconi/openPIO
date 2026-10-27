@@ -1,7 +1,21 @@
 """asm.py - Assembler for the openPIO ISA v2 (ISA.md).
 
 Converts assembly text into 16-bit instruction words (max 64), plus the per-SM configuration
-the program needs (wrap, side-set, conditions, PAU, CRC, thresholds) as Program attributes.
+the program needs as Program.cfg: every register host.Host.load writes comes from the source.
+Configuration directives (a field not set keeps its reset value, HOST.md):
+
+    .side_set <n> [opt] [pindirs]   SIDESET count, opt, pindirs
+    .sideset_pins <pin>             SIDESET base
+    .in_pins / .out_pins <pin>      PINBASE in_base / out_base
+    .set_pins <pin> [<count>]       PINBASE set_base, set_count (1..5)
+    .pin_mask <pin>, <pin> ...      PIN_MASK
+    .open_drain <pin>, <pin> ...    GPIO open drain (chip-wide: the host adds these pins)
+    .shift_in / .shift_out left|right, .push_thresh / .pull_thresh <1..16>       MISC
+    .clkdiv <int> [<frac>]          CLKDIV
+    .cond0 .. .cond3 <condition>    COND_CFG (other conditions get a free slot)
+    .pau ..., .crc ...              PAU_MODE, CRC_CFG, CRC_POLY, CRC_RES
+    .wrap_target, .wrap             WRAP
+    .start <label>, .x <v>, .y <v>  PC, X, Y preset after RESET
 """
 
 from __future__ import annotations
@@ -101,36 +115,38 @@ def cond_text(c: int) -> str:
     return f"{'!' if c & 0x80 else ''}{REV_COND_SRC[src]} {idx_str}"
 
 
+# Configuration of an SM at reset (HOST.md), by Program field
+CONFIG_RESET = dict(
+    wrap_bottom=0, wrap_top=IMEM_WORDS - 1, side_set_count=0, side_set_opt=False,
+    side_set_pindirs=False, sideset_base=0, in_base=0, out_base=0, set_base=0, set_count=5,
+    pin_mask=0xFF, shift_in_right=True, shift_out_right=True, push_thresh=0, pull_thresh=0,
+    clkdiv_int=1, clkdiv_frac=0, cond_cfg=tuple(COND_RESET), pau_mode=0, crc_cfg=0, crc_poly=0,
+    crc_res=0, open_drain_mask=0, start=0, x=0, y=0)
+
+
 class Program(list[int]):
     """Assembled program: a list of 16-bit words with the configuration it needs.
 
-    cond_cfg: COND_CFG (4 condition bytes); pin_slot: slot used by `pin` (the v1 jmp_pin, whose
-    index a loader may override); pau_mode, crc_cfg, crc_poly, crc_res: PAU registers.
+    cfg: the CONFIG_RESET fields the source sets (wrap and cond_cfg always); start, x and y are
+    preset by the host after RESET. pin_slot: slot of the `pin` condition, whose pin a loader
+    may override (jmp_pin).
     """
 
-    def __init__(self, words: list[int], name: str = "program", **cfg) -> None:
+    def __init__(self, words: list[int], name: str = "program", pin_slot: int | None = None,
+                 **cfg) -> None:
         super().__init__(words)
         self.name = name
-        self.wrap_bottom = cfg.get("wrap_bottom", 0)
-        self.wrap_top = cfg.get("wrap_top", max(0, len(words) - 1))
-        self.wrap_target = self.wrap_bottom
-        self.wrap = self.wrap_top
-        self.side_set_count = cfg.get("side_set_count", 0)
-        self.side_set_opt = cfg.get("side_set_opt", False)
-        self.side_set_pindirs = cfg.get("side_set_pindirs", False)
-        self.open_drain_mask = cfg.get("open_drain_mask", 0) & 0xFF
-        self.clkdiv_int = cfg.get("clkdiv_int", 1)
-        self.clkdiv_frac = cfg.get("clkdiv_frac", 0) & 0xFF
-        self._has_explicit_open_drain = cfg.get("has_explicit_open_drain", False)
-        self._has_explicit_clkdiv = cfg.get("has_explicit_clkdiv", False)
-        self.cond_cfg = list(cfg.get("cond_cfg", COND_RESET))
-        self.pin_slot = cfg.get("pin_slot")
-        self.push_thresh = cfg.get("push_thresh", 0)
-        self.pull_thresh = cfg.get("pull_thresh", 0)
-        self.pau_mode = cfg.get("pau_mode", 0)
-        self.crc_cfg = cfg.get("crc_cfg", 0)
-        self.crc_poly = cfg.get("crc_poly", 0)
-        self.crc_res = cfg.get("crc_res", 0)
+        self.pin_slot = pin_slot
+        self.cfg = cfg
+
+    def config(self) -> dict:
+        """Every configuration field: the program's over the reset values."""
+        return {**CONFIG_RESET, **self.cfg}
+
+    def __getattr__(self, key: str):
+        if key in CONFIG_RESET:
+            return self.config()[key]
+        raise AttributeError(key)
 
     def to_bytes(self) -> bytes:
         """Return raw little-endian 16-bit words."""
@@ -293,6 +309,17 @@ def _parse_cond(tokens: list[str], line_num: int, text: str) -> tuple[int | None
     return cond_byte(inv, src, idx), 0, False
 
 
+def _pins(parts: list[str], line_num: int, text: str) -> int:
+    """A list of pins `0, 2, 5` as a mask."""
+    mask = 0
+    for p in "".join(parts).split(","):
+        pin = _parse_int(p, line_num, text)
+        if not 0 <= pin <= 7:
+            raise AssemblerError(f"Pin out of range (0-7): {pin}", line_num, text)
+        mask |= 1 << pin
+    return mask
+
+
 def _kv(parts: list[str], line_num: int, text: str) -> dict[str, str]:
     out = {}
     for p in parts:
@@ -311,6 +338,7 @@ def assemble(source_code: str) -> Program:
     labels: dict[str, int] = {}
     instructions: list[tuple[int, str, int]] = []
     current_addr = 0
+    start_label = None
 
     # Pass 1: directives, labels, instruction text
     for line_num, raw_line in enumerate(lines, 1):
@@ -331,22 +359,41 @@ def assemble(source_code: str) -> Program:
                 side_set_opt = any(p.lower() in ("opt", "optional") for p in parts[2:])
                 cfg["side_set_count"], cfg["side_set_opt"] = side_set_count, side_set_opt
                 cfg["side_set_pindirs"] = any(p.lower() in ("pindirs", "pindir") for p in parts[2:])
-            elif directive in (".open_drain", ".opendrain"):
+            elif directive in (".open_drain", ".pin_mask"):
                 if len(parts) < 2:
-                    raise AssemblerError(".open_drain requires mask or pin list", line_num, raw_line)
-                arg_str = "".join(parts[1:])
-                if "," in arg_str:
-                    mask = sum(1 << _parse_int(p, line_num, raw_line) for p in arg_str.split(",") if p)
-                else:
-                    mask = _parse_int(arg_str, line_num, raw_line)
-                cfg["open_drain_mask"], cfg["has_explicit_open_drain"] = mask & 0xFF, True
-            elif directive in (".clkdiv", ".prescaler"):
+                    raise AssemblerError(f"{directive} requires a pin list", line_num, raw_line)
+                cfg[directive[1:] + ("_mask" if directive == ".open_drain" else "")] = \
+                    _pins(parts[1:], line_num, raw_line)
+            elif directive in (".in_pins", ".out_pins", ".sideset_pins", ".set_pins"):
+                n = _parse_int(parts[1], line_num, raw_line) if len(parts) > 1 else -1
+                if not 0 <= n <= 7:
+                    raise AssemblerError(f"{directive} requires a base pin 0..7", line_num, raw_line)
+                cfg[{".in_pins": "in_base", ".out_pins": "out_base", ".sideset_pins": "sideset_base",
+                     ".set_pins": "set_base"}[directive]] = n
+                if directive == ".set_pins" and len(parts) > 2:
+                    cfg["set_count"] = _parse_int(parts[2], line_num, raw_line)
+                    if not 1 <= cfg["set_count"] <= 5:
+                        raise AssemblerError("SET pin count must be 1..5", line_num, raw_line)
+            elif directive in (".shift_in", ".shift_out"):
+                if len(parts) != 2 or parts[1].lower() not in ("left", "right"):
+                    raise AssemblerError(f"{directive} left|right", line_num, raw_line)
+                cfg[directive[1:] + "_right"] = parts[1].lower() == "right"
+            elif directive in (".x", ".y"):
+                if len(parts) != 2:
+                    raise AssemblerError(f"{directive} requires a value", line_num, raw_line)
+                cfg[directive[1:]] = _parse_int(parts[1], line_num, raw_line) & 0xFFFF
+            elif directive == ".start":
+                if len(parts) != 2:
+                    raise AssemblerError(".start requires a label", line_num, raw_line)
+                start_label = (parts[1].lower(), line_num, raw_line)
+            elif directive == ".clkdiv":
                 if len(parts) < 2:
-                    raise AssemblerError(f"{directive} requires divider argument", line_num, raw_line)
+                    raise AssemblerError(".clkdiv requires a divider", line_num, raw_line)
                 cfg["clkdiv_int"] = _parse_int(parts[1], line_num, raw_line)
+                if not 1 <= cfg["clkdiv_int"] <= 31:
+                    raise AssemblerError("CLKDIV integer part must be 1..31", line_num, raw_line)
                 if len(parts) > 2:
                     cfg["clkdiv_frac"] = _parse_int(parts[2], line_num, raw_line) & 0xFF
-                cfg["has_explicit_clkdiv"] = True
             elif directive in (".push_thresh", ".pull_thresh"):
                 n = _parse_int(parts[1], line_num, raw_line)
                 if not 1 <= n <= 16:
@@ -588,6 +635,10 @@ def assemble(source_code: str) -> Program:
         else:
             raise AssemblerError(f"Unknown instruction mnemonic: '{mnem}'", line_num, clean)
 
+    if start_label is not None:
+        if start_label[0] not in labels:
+            raise AssemblerError(f"Unknown label '{start_label[0]}'", *start_label[1:])
+        cfg["start"] = labels[start_label[0]]
     cfg.setdefault("wrap_bottom", 0)
     cfg.setdefault("wrap_top", max(0, current_addr - 1))
     return Program(words, name=prog_name, cond_cfg=conds.cfg, pin_slot=conds.pin_slot, **cfg)

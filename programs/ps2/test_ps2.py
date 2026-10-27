@@ -10,18 +10,14 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[1] / "test" / "shared"))
 sys.path.insert(0, str(HERE.parents[1] / "sim" / "model"))
 from bench import Bench                                  # noqa: E402
-from chip import GPIO, PIN_MASK                          # noqa: E402
 from devices import Ps2Device                            # noqa: E402
 
-DATA, CLK = 2, 3
+DATA, CLK = 2, 3  # pins as in the program
 
 
 def setup(device):
     bench = Bench(pullups=1 << DATA | 1 << CLK)
-    bench.load(0, (HERE / "ps2_host.asm").read_text(), in_base=DATA, out_base=DATA,
-               set_base=DATA, set_count=2)
-    bench.chip.reg_write(0, GPIO, 1 << DATA | 1 << CLK)
-    bench.chip.reg_write(0, PIN_MASK, 1 << DATA | 1 << CLK)
+    bench.load(0, (HERE / "ps2_host.asm").read_text())
     bench.add(device)
     bench.start(1)
     return bench

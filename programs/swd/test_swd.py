@@ -9,10 +9,9 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[1] / "test" / "shared"))
 sys.path.insert(0, str(HERE.parents[1] / "sim" / "model"))
 from bench import Bench                                  # noqa: E402
-from chip import PIN_MASK                                # noqa: E402
 from devices import SwdTarget                            # noqa: E402
 
-CLK, DIO = 0, 1
+CLK, DIO = 0, 1  # pins as in the program
 DPIDR = 0x0BC11477
 
 
@@ -30,9 +29,7 @@ class Swd(unittest.TestCase):
 
     def test_reads_and_writes(self):
         bench = Bench()
-        bench.load(0, (HERE / "swd.asm").read_text(), sideset_base=CLK, set_base=DIO, set_count=1,
-                   out_base=DIO, in_base=DIO)
-        bench.chip.reg_write(0, PIN_MASK, 1 << CLK | 1 << DIO)
+        bench.load(0, (HERE / "swd.asm").read_text())
         target = bench.add(SwdTarget(CLK, DIO, {(0, 0x0): DPIDR}))
         bench.send(0, [request(0, 1, 0x0)] + write(1, 0x4, 0xCAFE1234) + [request(1, 1, 0x4)]
                    + write(0, 0x8, 0x00000001) + [request(0, 1, 0x8)])

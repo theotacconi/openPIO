@@ -12,9 +12,14 @@ from asm import assemble                                             # noqa: E40
 from chip import (Chip, header, CTRL, GPIO, ID, IRQ, IRQ_MASK, PC, PINS, STATUS, WRAP, X, FIFO_LEVEL,  # noqa: E402
                   COND_CFG01, COND_CFG23, PINBASE, PIN_MASK, MISC, CLKDIV, SM_STATUS,
                   OP_IMEM_RD, OP_IMEM_WR, OP_REG_RD, OP_REG_WR, OP_RX_POP, OP_TX_PUSH)
+from host import Host                                                # noqa: E402
 
 
-class Host(unittest.TestCase):
+def load(chip, n, program, **cfg):
+    Host(chip).load(n, program, **cfg)
+
+
+class HostInterface(unittest.TestCase):
 
     def test_reset_values_and_id(self):
         chip = Chip(2)
@@ -37,7 +42,7 @@ class Host(unittest.TestCase):
 
     def test_fifo_depth_through_the_sram(self):
         chip = Chip(2)
-        chip.load(0, assemble("loop:\npull block\nmov isr, osr\npush block\njmp loop"))
+        load(chip, 0, assemble("loop:\npull block\nmov isr, osr\npush block\njmp loop"))
         accepted = [chip.tx_push(0, w) for w in range(134)]
         self.assertEqual(accepted, [True] * 132 + [False] * 2, "4 front + 128 SRAM words")
         self.assertEqual(chip.reg_read(0, FIFO_LEVEL), 132)
@@ -51,7 +56,7 @@ class Host(unittest.TestCase):
 
     def test_host_sets_a_flag_and_masks_the_irq_pin(self):
         chip = Chip(2)
-        chip.load(0, assemble("wait 1 irq 0\nirq clear 0\nirq 3\nend: jmp end"))
+        load(chip, 0, assemble("wait 1 irq 0\nirq clear 0\nirq 3\nend: jmp end"))
         chip.reg_write(0, IRQ_MASK, 1 << 3)               # only flag 3 reaches HOST_IRQ
         chip.reg_write(0, CTRL, 1)
         chip.step(5)
@@ -60,6 +65,37 @@ class Host(unittest.TestCase):
         self.assertEqual(chip.host_irq, 0, "flag 0 is masked off the pin")
         chip.step(5)
         self.assertEqual((chip.reg_read(0, IRQ), chip.host_irq), (1 << 3, 1))
+
+    def test_host_load_configures_through_registers(self):
+        chip = Chip(2)
+        chip.reg_write(0, CTRL, 0b11)             # both running: load stops SM 1 only
+        load(chip, 1, assemble("""
+            .in_pins 6
+            .out_pins 2
+            .set_pins 3 2
+            .side_set 1 opt
+            .sideset_pins 5
+            .pin_mask 2, 3, 4, 5
+            .open_drain 3
+            .shift_in left
+            .push_thresh 8
+            .clkdiv 3 128
+            .x 0x1234
+            .y 7
+            .start go
+                nop
+            go:
+            .wrap_target
+                jmp go
+            .wrap
+        """), out_base=1)                         # an override
+        self.assertEqual(chip.reg_read(0, CTRL), 0b01)
+        regs = chip.spi(header(OP_REG_RD, 1, WRAP), [0] * 6)[1:]
+        self.assertEqual(regs, [0x0101, 0x0509, 0x2316, 0x3C, 0x0802, 0x8003])   # WRAP .. CLKDIV
+        self.assertEqual(chip.spi(header(OP_REG_RD, 1, PC), [0] * 3)[1:], [1, 0x1234, 7])
+        self.assertEqual(chip.reg_read(0, GPIO), 1 << 3)
+        with self.assertRaises(TypeError):
+            load(chip, 1, assemble("nop"), in_bsae=1)
 
     def test_registers_written_only_while_stopped(self):
         chip = Chip(2)
@@ -73,16 +109,16 @@ class MultiSm(unittest.TestCase):
 
     def test_synchronized_start(self):
         chip = Chip(2)
-        chip.load(0, assemble("set pins, 1\nend: jmp end"), set_base=0, set_count=1)
-        chip.load(1, assemble("set pins, 1\nend: jmp end"), set_base=1, set_count=1)
+        load(chip, 0, assemble("set pins, 1\nend: jmp end"), set_base=0, set_count=1)
+        load(chip, 1, assemble("set pins, 1\nend: jmp end"), set_base=1, set_count=1)
         chip.reg_write(0, CTRL, 0b11)             # both on the same clock
         chip.step()
         self.assertEqual(chip.bus.out & 3, 3)
 
     def test_highest_sm_wins_and_pin_mask(self):
         chip = Chip(2)
-        chip.load(0, assemble("set pins, 1\nend: jmp end"), set_count=1)
-        chip.load(1, assemble("set pins, 0\nend: jmp end"), set_count=1)
+        load(chip, 0, assemble("set pins, 1\nend: jmp end"), set_count=1)
+        load(chip, 1, assemble("set pins, 0\nend: jmp end"), set_count=1)
         chip.reg_write(0, CTRL, 0b11)
         chip.step()
         self.assertEqual(chip.bus.out & 1, 0, "SM 1 wins pin 0")
@@ -95,7 +131,7 @@ class MultiSm(unittest.TestCase):
     def test_push_peer_bridge(self):
         """SM 0 doubles every word and pushes it to SM 1, which adds 1: no host in between."""
         chip = Chip(2)
-        chip.load(0, assemble("""
+        load(chip, 0, assemble("""
             .wrap_target
                 pull block
                 mov x, osr
@@ -104,7 +140,7 @@ class MultiSm(unittest.TestCase):
                 push peer
             .wrap
         """))
-        chip.load(1, assemble("""
+        load(chip, 1, assemble("""
             .wrap_target
                 pull block
                 set y, 1
@@ -122,14 +158,14 @@ class MultiSm(unittest.TestCase):
 
     def test_pull_peer_and_peer_irq(self):
         chip = Chip(2)
-        chip.load(0, assemble("""
+        load(chip, 0, assemble("""
                 pull peer          ; from SM 1's RX FIFO
                 mov x, osr
                 irq peer 2         ; flag 2 of SM 1
             end:
                 jmp end
         """))
-        chip.load(1, assemble("""
+        load(chip, 1, assemble("""
                 set x, 9
                 mov isr, x
                 push
@@ -146,7 +182,7 @@ class MultiSm(unittest.TestCase):
 
     def test_debug_write_and_step(self):
         chip = Chip(2)
-        chip.load(0, assemble("""
+        load(chip, 0, assemble("""
             start:
                 jmp x--, start
                 irq 0
@@ -163,7 +199,7 @@ class MultiSm(unittest.TestCase):
 
     def test_open_drain_is_per_pin(self):
         chip = Chip(2)
-        chip.load(0, assemble("set pins, 2\nset pindirs, 3\nend: jmp end"), set_count=2)
+        load(chip, 0, assemble("set pins, 2\nset pindirs, 3\nend: jmp end"), set_count=2)
         chip.reg_write(0, GPIO, 0x07)              # pins 0, 1, 2 open drain
         chip.reg_write(0, CTRL, 1)
         chip.step()
@@ -174,7 +210,7 @@ class MultiSm(unittest.TestCase):
 
     def test_status_word(self):
         chip = Chip(2)
-        chip.load(0, assemble("mov x, status\nend: jmp end"))
+        load(chip, 0, assemble("mov x, status\nend: jmp end"))
         chip.reg_write(0, CTRL, 1)
         chip.step()
         # SM: X == 0, Y == 0, X == Y, OSR empty, TX FIFO empty

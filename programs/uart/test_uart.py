@@ -18,8 +18,7 @@ class UartTxTest(unittest.TestCase):
     def check(self, clkdiv_int, clkdiv_frac, max_skew):
         data = [random.Random(clkdiv_int).randrange(256) for _ in range(30)]
         bench = Bench(pullups=1)                         # UART lines idle high
-        bench.load(0, (HERE / "uart_tx.asm").read_text(), set_base=0, set_count=1, out_base=0,
-                   clkdiv_cfg_int=clkdiv_int, clkdiv_cfg_frac=clkdiv_frac)
+        bench.load(0, (HERE / "uart_tx.asm").read_text(), clkdiv_int=clkdiv_int, clkdiv_frac=clkdiv_frac)
         bit = 8 * (clkdiv_int + clkdiv_frac / 256)
         rx = bench.add(UartRx(0, round(bit)))
         bench.send(0, data)
@@ -43,7 +42,7 @@ class UartRxTest(unittest.TestCase):
 
     def run_rx(self, clkdiv, data, gap=0.0, stop_low=frozenset(), tx_bit=None):
         bench = Bench(pullups=1 << 3)
-        bench.load(0, (HERE / "uart_rx.asm").read_text(), in_base=3, clkdiv_cfg_int=clkdiv)
+        bench.load(0, (HERE / "uart_rx.asm").read_text(), clkdiv_int=clkdiv)
         tx = bench.add(UartTx(3, tx_bit or 8 * clkdiv, data, start=20, gap=gap, stop_low=stop_low))
         bench.start(1)
         bench.run(tx.end + 40)

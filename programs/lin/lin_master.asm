@@ -6,6 +6,9 @@
 ;   word (bits 7:0); 0: a slave sends it and the program receives it.
 ; RX FIFO: the received bytes (bits 15:8). The host computes the checksum (a sum with carry).
 ; A byte is sent by a subroutine: return address in Y, back with OUT PC.
+.set_pins 0 1            ; TX
+.out_pins 0
+.in_pins 1               ; RX
 .pull_thresh 8
 
     set pins, 1             ; recessive

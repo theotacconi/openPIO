@@ -9,7 +9,6 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[1] / "test" / "shared"))
 sys.path.insert(0, str(HERE.parents[1] / "sim" / "model"))
 from bench import Bench                                  # noqa: E402
-from chip import GPIO, PIN_MASK                          # noqa: E402
 from devices import OneWireDevice, crc8_maxim            # noqa: E402
 
 DQ, RESET, CRC_RESET = 4, 0x8000, 0x4000
@@ -19,9 +18,7 @@ ROM = ROM + [crc8_maxim(ROM)]                            # family, serial, CRC8
 
 def run(device, commands):
     bench = Bench(pullups=1 << DQ)
-    bench.load(0, (HERE / "onewire.asm").read_text(), set_base=DQ, set_count=1, in_base=DQ)
-    bench.chip.reg_write(0, GPIO, 1 << DQ)
-    bench.chip.reg_write(0, PIN_MASK, 1 << DQ)
+    bench.load(0, (HERE / "onewire.asm").read_text())
     if device:
         bench.add(device)
     bench.send(0, commands)

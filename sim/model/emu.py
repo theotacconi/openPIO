@@ -279,24 +279,16 @@ class StateMachine:
         return pad_outputs(self.bus, [self])[1]
 
     def load_program(self, program: Sequence[int], origin: int = 0) -> None:
-        """Load instruction words and the configuration carried by an asm.Program."""
+        """Load instruction words and the configuration an asm.Program sets (its cfg; start, X
+        and Y are for the host to preset after RESET)."""
         for i, word in enumerate(program):
             if origin + i < IMEM_WORDS:
                 self.memory[origin + i] = word & 0xFFFF
-        if origin == 0:
-            self.wrap_bottom = getattr(program, "wrap_bottom", 0)
-            self.wrap_top = getattr(program, "wrap_top", max(0, len(program) - 1))
-        for attr in ("side_set_count", "side_set_opt", "side_set_pindirs", "push_thresh",
-                     "pull_thresh", "pau_mode", "crc_cfg", "crc_poly", "crc_res"):
-            if hasattr(program, attr):
-                setattr(self, attr, getattr(program, attr))
-        if hasattr(program, "cond_cfg"):
-            self.cond_cfg = list(program.cond_cfg)
-        if getattr(program, "_has_explicit_open_drain", False) or getattr(program, "open_drain_mask", 0):
-            self.bus.od_mask = program.open_drain_mask & 0xFF
-        if getattr(program, "_has_explicit_clkdiv", False):
-            self.clkdiv_cfg_int = program.clkdiv_int or 1
-            self.clkdiv_cfg_frac = program.clkdiv_frac & 0xFF
+        names = {"clkdiv_int": "clkdiv_cfg_int", "clkdiv_frac": "clkdiv_cfg_frac"}
+        for key, val in getattr(program, "cfg", {}).items():
+            if key in ("start", "x", "y") or origin and key in ("wrap_bottom", "wrap_top"):
+                continue
+            setattr(self, names.get(key, key), list(val) if key == "cond_cfg" else val)
 
     def reset(self, pc: int = 0) -> None:
         """CTRL.RESET: SM registers, FIFOs, PAU; COND = COND_CFG, PAU_BAUD = PAU_MODE.BAUD."""

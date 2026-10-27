@@ -5,6 +5,10 @@
 ; at once. The host starts a frame on an idle bus.
 ; TX FIFO: N = bits from SOF to the end of the data field, then those bits MSB first, 16 a word.
 ; Result: IRQ 0 sent and acknowledged, IRQ 1 no ACK, IRQ 2 arbitration lost or bit error.
+.out_pins 0              ; TX
+.set_pins 0 1
+.in_pins 1               ; RX
+.shift_out left
 .pau enc=nrz stuff=5 stuff_mode=equal baud=4
 .crc width=15 poly=0x4599
 

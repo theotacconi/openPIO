@@ -10,7 +10,6 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[1] / "test" / "shared"))
 sys.path.insert(0, str(HERE.parents[1] / "sim" / "model"))
 from bench import Bench                                  # noqa: E402
-from chip import PC                                      # noqa: E402
 from devices import BmcRx                                # noqa: E402
 
 CODES = [0b11110, 0b01001, 0b10100, 0b10101, 0b01010, 0b01011, 0b01110, 0b01111,
@@ -23,8 +22,7 @@ class FourB5B(unittest.TestCase):
     def test_nibbles(self):
         nibbles = list(range(16)) + [random.Random(3).randrange(16) for _ in range(30)]
         bench = Bench()
-        program = bench.load(0, (HERE / "fourb5b_tx.asm").read_text(), out_base=PIN, set_base=PIN)
-        bench.chip.reg_write(0, PC, 32)                   # start: after the table
+        program = bench.load(0, (HERE / "fourb5b_tx.asm").read_text())
         rx = bench.add(BmcRx(PIN, BIT))
         bench.send(0, [2 * n for n in nibbles])
         bench.start(1)
