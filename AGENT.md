@@ -7,7 +7,7 @@
 * Prioritize hardware correctness, timing determinism, and silicon budget over software abstractions.
 * Preserve zero-bubble cycle execution: branch decisions and register writebacks must never introduce unmodeled pipeline latency or branch-penalty jitter.
 * Keep the hardware synthesizable strictly under Verilog-2001. Ensure clean, warning-free synthesis with both open-source Yosys/OpenLane (for Tiny Tapeout) and Gowin EDA (for Tang Nano 20K).
-* Strictly obey the Tiny Tapeout 6x4 tile envelope: preserve low flip-flop and gate counts (keep core registers + IMEM well within the ~1.5k DFF ceiling).
+* Strictly obey the Tiny Tapeout 6x4 tile envelope: preserve low flip-flop and gate counts. On the ASIC the IMEM is an IHP SRAM macro (`src/imem_sram.v`); measure the cell area of every addition (Yosys + CMOS5L Liberty) before committing to it.
 * Treat `sim/model/emu.py` and `sim/model/ISA.md` as the frozen Golden Architectural Reference. RTL must track emulator semantics with zero drift.
 * Maintain comprehensive co-simulation: every instruction and protocol routine must run against lockstep verification in cocotb.
 
@@ -15,11 +15,12 @@
 
 * Write clean, idiomatic, fully synthesizable Verilog-2001. No SystemVerilog constructs that break Yosys or open-source toolchains.
 * Zero combinatorial loops and zero unclocked latches. Every flip-flop must have an explicit, synchronous active-low reset (`rst_n`).
-  * **Exception:** the `src/imem.v` storage array (`mem[0:31]`) deliberately omits reset. This lets Gowin infer distributed RAM (RAM16SDP4) and keeps the ASIC array to plain non-reset DFFs (512 bits). The host must write every IMEM word it executes; `imem.rd_data` itself is reset.
+  * **Exception:** the IMEM storage deliberately omits reset: the `src/imem.v` array (`mem[0:31]`, so Gowin infers distributed RAM, RAM16SDP4) and the SRAM macro behind `src/imem_sram.v`. The host must write every IMEM word it executes; `imem.rd_data` itself reads 0 after reset in both.
 * Registered I/O boundary: no purely combinatorial paths from input pins (`gpio_in`) directly through the ALU to output pins (`gpio_out`) in the same machine cycle.
 * Do not introduce slop: avoid speculative wrapper glue, dead ports, fake parameterized features that will never be used, or workarounds that patch bugs in tests instead of fixing the root cause in the datapath.
 * Code comments must be terse, dense, and physically informative: annotate clock edges, setup/hold cycles, protocol bit phases, and non-obvious mux priorities directly in the RTL.
-* Do not introduce vendor-specific hard primitives (e.g., hard Gowin BRAM or IHP macros) into core modules. The core must infer standard standard-cell flip-flops and logic.
+* Do not introduce vendor-specific hard primitives (e.g., hard Gowin BRAM or IHP macros) into core modules. The core must infer standard-cell flip-flops and logic.
+  * **Exception:** the ASIC IMEM is the IHP SRAM macro `RM_IHPSG13_1P_64x16_c2`, instantiated only in `src/imem_sram.v` (module `imem`, same ports as `src/imem.v`) and listed in `info.yaml` instead of `imem.v`. `src/imem.v` stays the portable model for RTL simulation, formal, lockstep and the FPGA build; `test/Makefile` `IMEM=sram` and `GATES=yes` simulate the macro with IHP's behavioural model. Keep the two cycle-equivalent while `CTRL.EN = 1`.
 
 ## Verification & Golden Model Invariance
 
