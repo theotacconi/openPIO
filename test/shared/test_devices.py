@@ -9,7 +9,7 @@ import unittest
 
 from bench import Bench, Script
 from devices import (BmcRx, BmcTx, DaliBus, DaliGear, WiredAndBus, CanNode, HdlcRx, I2cTarget,
-                     I2sCodec, SpiSlave, UartRx, UartTx, Ws2812Chain, can_crc15, crc16_modbus,
+                     I2sCodec, SpiMaster, SpiSlave, UartRx, UartTx, Ws2812Chain, can_crc15, crc16_modbus,
                      crc16_x25)
 
 
@@ -95,6 +95,14 @@ class Spi(unittest.TestCase):
                 bits = [bench.trace[t] >> 2 & 1 for t, lv in bench.edges(0) if lv == sample_level]
                 words = [sum(b << (7 - i) for i, b in enumerate(bits[k:k + 8])) for k in (0, 8, 16)]
                 self.assertEqual(words, [0x5A, 0xC3, 0x81], "MISO")
+
+    def test_master_against_the_slave(self):
+        bench = Bench()
+        master = bench.add(SpiMaster(0, 1, 3, 2, [[0xA5, 0x3C], [0x7E]], half=4, start=5, lead=4, gap=8))
+        slave = bench.add(SpiSlave(0, 1, 3, reply=[0x11, 0x22, 0x33], cs=2))
+        bench.run(master.end + 5)
+        self.assertEqual((slave.words, master.received, bench.errors()),
+                         ([0xA5, 0x3C, 0x7E], [[0x11, 0x22], [0x33]], []))
 
     def test_setup_violation_is_seen(self):
         bench = Bench()
