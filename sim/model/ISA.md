@@ -1,5 +1,8 @@
 # openPIO ISA v2
 
+Frozen on 2026-10-28 (with HOST.md): from here it changes only for what the RTL finds, by the
+user's decision, in one commit with the model and the tests.
+
 ![openPIO architecture](../../docs/architecture.svg)
 
 Each state machine (SM) executes 16-bit instructions from its own 64-word instruction memory,
