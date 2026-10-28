@@ -245,13 +245,6 @@ class IrqFifo(unittest.TestCase):
         run(sm, 2)
         self.assertEqual(len(sm.rx_fifo), 1)
 
-    def test_peer_fifos(self):
-        sm = sm_of("push peer\npull peer" + HALT)
-        sm.isr = 0x1234
-        sm.peer_rx_fifo.append(0x5678)
-        run(sm, 2)
-        self.assertEqual((list(sm.peer_tx_fifo), sm.osr, list(sm.rx_fifo)), ([0x1234], 0x5678, []))
-
 
 class CrcFeed(unittest.TestCase):
 

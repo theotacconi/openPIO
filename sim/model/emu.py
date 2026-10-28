@@ -181,14 +181,9 @@ class StateMachine:
         self.peer: StateMachine | None = None
         self.gpio_in = 0
         self.irq_flags = [False] * 8
-        # The peer's IRQ flags and FIFOs; a chip links them to SM index ^ 1
+        # The peer's IRQ flags (a chip links SM index ^ 1)
         self.peer_irq_flags = [False] * 8                     # the peer's flags at the clock start
         self.peer_irq_writes: list[tuple[int, bool]] = []     # land at the clock end (end_clock)
-        self.peer_tx_word: int | None = None                  # PUSH PEER word, same
-        self._tx_pulled = self._rx_fresh = 0                  # own FIFO moves in this clock
-        self.host_pushing = self.host_popped = False          # a host access to the FIFOs now
-        self.peer_tx_fifo: deque[int] = deque(maxlen=fifo_depth)
-        self.peer_rx_fifo: deque[int] = deque(maxlen=fifo_depth)
         self.history: deque[str] = deque(maxlen=15)
 
         if program is not None:
@@ -333,14 +328,13 @@ class StateMachine:
         return self.fifo_depth + (BUFFER_WORDS + 1 if self.buffer else 0)
 
     def _tx_direct(self) -> bool:
-        """A TX word can go straight to the front: nothing older waits behind it. Words the SM
-        pulled in this clock still count: its peer sees the FIFO as at the clock start."""
+        """A TX word can go straight to the front: nothing older waits behind it."""
         return (not self.tx_back and self.tx_in is None and self.tx_flight is None
-                and len(self.tx_fifo) + self._tx_pulled < self.fifo_depth)
+                and len(self.tx_fifo) < self.fifo_depth)
 
     def tx_where(self) -> str | None:
-        """Where a TX word of the host or the peer goes, by the state at the clock start: the
-        front if nothing waits, else the IN register if it is free; else None (full)."""
+        """Where a host's TX word goes, by the state at the clock start: the front if nothing
+        waits, else the IN register if it is free; else None (full)."""
         if self._tx_direct():
             return "front"
         return "in" if self.buffer and self.tx_in is None else None
@@ -363,30 +357,22 @@ class StateMachine:
         return where is not None
 
     def rx_read(self) -> int | None:
-        """Read an RX word as the host or the peer does: the OUT register, else the front when
-        nothing waits in the SRAM; else None (empty for this read). Words the SM pushed in this
-        clock are not there yet for its peer."""
+        """Read an RX word as the host does: the OUT register, else the front when nothing waits
+        in the SRAM; else None (empty for this read)."""
         if self.rx_out is not None:
             word, self.rx_out = self.rx_out, None
             return word
-        if not self.rx_back and self.rx_flight is None and len(self.rx_fifo) > self._rx_fresh:
+        if not self.rx_back and self.rx_flight is None and self.rx_fifo:
             return self.rx_fifo.popleft()
         return None
 
     def end_clock(self) -> None:
         """End of a clock, after every SM: the writes to the peer's flags land, so SMs act in
         parallel (ISA.md, Multiple state machines)."""
-        self._tx_pulled = self._rx_fresh = 0
         target = self.peer.irq_flags if self.peer is not None else self.peer_irq_flags
         for idx, val in self.peer_irq_writes:
             target[idx] = val
         self.peer_irq_writes.clear()
-
-    def land_peer_word(self) -> None:
-        """After the FIFO moves of the clock: a PUSH PEER word lands in the peer's TX FIFO."""
-        if self.peer_tx_word is not None:
-            self.peer.tx_place(*self.peer_tx_word)
-            self.peer_tx_word = None
 
     @property
     def tx_level(self) -> int:
@@ -727,7 +713,6 @@ class StateMachine:
             self.end_clock()
             self.bus.commit()
             self.buffer_clock()
-            self.land_peer_word()
 
     def _clock(self) -> None:
         self.cycle_count += 1
@@ -786,11 +771,11 @@ class StateMachine:
                     done = True
             done = done or self._wait_met(info["pol"], info["edge"], info["slot"])
         elif self.stall_reason == "PULL":
-            word = self._pull_word(info["peer"])
+            word = self._pull_word()
             if word is not None:
                 self.osr, self.osr_count, done = word, 0, True
         elif self.stall_reason == "PUSH":
-            if self._push_word(info["peer"]):
+            if self._push_word():
                 self.isr = self.isr_count = 0
                 done = True
         elif self.stall_reason == "IRQ":
@@ -801,35 +786,15 @@ class StateMachine:
             self.stall_reason = ""
             self._finish(info["delay"], info["next_pc"])
 
-    def _pull_word(self, peer: bool) -> int | None:
-        """PULL source: the own TX front, or the peer's RX FIFO read as the host does."""
-        if not peer:
-            if not self.tx_fifo:
-                return None
-            self._tx_pulled += 1
-            return self.tx_fifo.popleft()
-        if self.peer is not None:
-            return None if self.peer.host_popped else self.peer.rx_read()
-        return self.peer_rx_fifo.popleft() if self.peer_rx_fifo else None
+    def _pull_word(self) -> int | None:
+        """PULL: the oldest word of the TX front, or None."""
+        return self.tx_fifo.popleft() if self.tx_fifo else None
 
-    def _push_word(self, peer: bool) -> bool:
-        """PUSH target: the own RX front, or the peer's TX FIFO written as the host does, at the
-        end of the clock if it had room at the start."""
-        if not peer:
-            if len(self.rx_fifo) >= self.fifo_depth:
-                return False
-            self.rx_fifo.append(self.isr)
-            self._rx_fresh += 1
-            return True
-        if self.peer is not None:
-            where = None if self.peer.host_pushing else self.peer.tx_where()
-            if where is None:
-                return False
-            self.peer_tx_word = (self.isr, where)
-            return True
-        if len(self.peer_tx_fifo) >= self.fifo_depth:
+    def _push_word(self) -> bool:
+        """PUSH: the ISR into the RX front, if it has room."""
+        if len(self.rx_fifo) >= self.fifo_depth:
             return False
-        self.peer_tx_fifo.append(self.isr)
+        self.rx_fifo.append(self.isr)
         return True
 
     def _stall(self, reason: str, **info) -> None:
@@ -892,10 +857,10 @@ class StateMachine:
                 self.isr = ((self.isr << count) | val) & 0xFFFF
             self.isr_count = min(16, self.isr_count + count)
             if auto and self.isr_count >= (self.push_thresh or 16):
-                if self._push_word(False):
+                if self._push_word():
                     self.isr = self.isr_count = 0
                 else:
-                    return self._stall("PUSH", peer=False, delay=delay, next_pc=next_pc)
+                    return self._stall("PUSH", delay=delay, next_pc=next_pc)
 
         elif opcode == OP_OUT:
             dest, auto = (args >> 5) & 7, (args >> 4) & 1
@@ -903,7 +868,7 @@ class StateMachine:
             mask = (1 << count) - 1
             pull_at = self.pull_thresh or 16
             if auto and self.osr_count >= pull_at:
-                if (word := self._pull_word(False)) is not None:
+                if (word := self._pull_word()) is not None:
                     self.osr, self.osr_count = word, 0
                 return self._stall("RETRY")
             if dest == R_PINS and self.pau_ctl & 1 and PAU_QUEUE_BITS - len(self.tx_queue) < count:
@@ -916,7 +881,7 @@ class StateMachine:
                 self.osr = (self.osr << count) & 0xFFFF
             self.osr_count = min(16, self.osr_count + count)
             if auto and self.osr_count >= pull_at and self.tx_fifo:
-                self.osr, self.osr_count = self._pull_word(False), 0
+                self.osr, self.osr_count = self._pull_word(), 0
             if dest == R_PINS and self.pau_ctl & 1:
                 order = range(count) if self.shift_out_right else range(count - 1, -1, -1)
                 for i in order if not self.tx_bit_err else ():
@@ -971,26 +936,26 @@ class StateMachine:
                     self.irq_flags[idx] = not clear
                 if wait and not clear:
                     return self._stall("IRQ", peer=peer, idx=idx, delay=delay, next_pc=next_pc)
-            elif ctype == CT_FIFO and not a & 3:
-                is_pull, block, ifcond, peer = a >> 5 & 1, a >> 4 & 1, a >> 3 & 1, a >> 2 & 1
+            elif ctype == CT_FIFO and not a & 7:
+                is_pull, block, ifcond = a >> 5 & 1, a >> 4 & 1, a >> 3 & 1
                 if is_pull:
                     if ifcond and self.osr_count < (self.pull_thresh or 16):
                         pass
-                    elif (word := self._pull_word(peer)) is not None:
+                    elif (word := self._pull_word()) is not None:
                         self.osr, self.osr_count = word, 0
                     elif not block:
                         self.osr, self.osr_count = self.x, 0
                     else:
-                        return self._stall("PULL", peer=peer, delay=delay, next_pc=next_pc)
+                        return self._stall("PULL", delay=delay, next_pc=next_pc)
                 else:
                     if ifcond and self.isr_count < (self.push_thresh or 16):
                         pass
-                    elif self._push_word(peer):
+                    elif self._push_word():
                         self.isr = self.isr_count = 0
                     elif not block:
                         self.isr = self.isr_count = 0
                     else:
-                        return self._stall("PUSH", peer=peer, delay=delay, next_pc=next_pc)
+                        return self._stall("PUSH", delay=delay, next_pc=next_pc)
             elif ctype == CT_WAIT and not a & 4:
                 pol, edge, t_en, slot = a >> 5 & 1, a >> 4 & 1, a >> 3 & 1, a & 3
                 if t_en:                                # TIMEOUT_VAL x DLYMUL strobes from now

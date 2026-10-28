@@ -8,7 +8,6 @@ emulator. Program size in instructions (of 64).
 
 | Protocol | Programs | Tests passed | What the tests check |
 |---|---|---|---|
-| bridge | programs of other rows | 1 / 1 | Two state machines as a protocol bridge: SM 0 receives UART bytes and pushes them straight into SM 1's TX FIFO (push peer), SM 1 sends them as an SPI master. No host in between. |
 | can | `can_rx.asm` (24), `can_tx.asm` (25) | 4 / 4 | CAN transmitter and receiver against reference CAN nodes on a wired-AND bus: frames, ACK, arbitration lost at the exact bit, CRC errors. |
 | dali | `dali_master.asm` (28) | 3 / 3 | DALI master against reference control gear on a DALI bus behind an inverting transceiver: forward frames at 1200 baud from a 50 MHz clock (CLKDIV 2604 + 43 / 256), Manchester on the PAU with INV; backward frames received by the PAU 5.5 ms and 10.5 ms after the forward frame (the settling window of IEC 62386-101), no answer, and two gear answering at once. |
 | ethernet | `eth_tx.asm` (28) | 2 / 2 | 10BASE-T transmitter judged by a reference Manchester receiver: preamble and SFD, frame bits, FCS against zlib.crc32, half-bit timing, TD- the complement of TD+, TP_IDL; a 250-byte frame loaded by an SPI-speed host into the 133-word FIFO, then started by a flag the host sets. |

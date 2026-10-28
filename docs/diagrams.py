@@ -186,8 +186,8 @@ def architecture():
     g.text(495, 818, "State machine 1", "smtitle")
     g.text(495, 842, "Identical to state machine 0. The two run side by side, on the same pins,")
     g.text(495, 862, "and can start on the same clock (4 state machines in a larger build).")
-    g.arrow([(740, 744), (740, 788)], "data", both=True)
-    g.text(752, 763, "peer link: pass data and", "ld"); g.text(752, 779, "flags directly", "ld")
+    g.arrow([(740, 744), (740, 788)], "ctl", both=True)
+    g.text(752, 763, "peer link: IRQ flags", "ld")
     g.arrow([(1005, 838), (1028, 838)]); g.arrow([(452, 838), (473, 838)], "ctl")
     g.arrow([(1160, 470), (1258, 470)], "data", both=True)
     g.text(1209, 457, "14 pins", "ld", "middle"); g.text(1209, 491, "uio, uo, ui", "small", "middle")
@@ -424,8 +424,8 @@ def isr():
     g.text(650, 230, "also: mov isr, … (ALU) · out isr, n", "small")
     g.text(650, 246, "a PUSH clears it", "small")
     g.add('<line x1="800" y1="160" x2="860" y2="160" class="data"/><line x1="860" y1="60" x2="860" y2="260" class="data"/>')
-    outs = [("RX FIFO: PUSH, to the host", True), ("the other machine's TX FIFO (PUSH peer)", True),
-            ("ALU, OSR (as a source)", False), ("PAU CRC (crc_feed n)", False)]
+    outs = [("RX FIFO: PUSH, to the host", True), ("ALU, OSR (as a source)", False),
+            ("PAU CRC (crc_feed n)", False)]
     for i, (s, _) in enumerate(outs):
         y = 70 + i * 60
         g.arrow([(860, y), (888, y)]); g.text(894, y + 4, s)

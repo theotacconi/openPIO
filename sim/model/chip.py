@@ -83,8 +83,6 @@ class Chip:
             self.bus.commit()
             for sm in self.sms:
                 sm.buffer_clock()
-            for sm in self.sms:
-                sm.land_peer_word()
             self.cycle += 1
 
     @property
@@ -279,11 +277,10 @@ class Chip:
         elif op == OP_IMEM_RD:
             value = self.imem_read(n, addr)
         elif op == OP_RX_POP:
-            value, sm.host_popped = self.rx_pop(n), True
+            value = self.rx_pop(n)
         elif op == OP_TX_PUSH:
-            where, sm.host_pushing = sm.tx_where(), True
+            where = sm.tx_where()
         self.step()
-        sm.host_popped = sm.host_pushing = False
         if op == OP_REG_WR:
             self.reg_write(n, addr, word)
         elif op == OP_IMEM_WR:

@@ -60,29 +60,26 @@ class HostInterface(unittest.TestCase):
         self.assertEqual(out, list(range(133)), "order kept across front, SRAM and registers")
 
     def test_random_traffic_keeps_order(self):
-        """Host writes SM 0 and reads SM 1 at random clocks; SM 0 forwards each word to SM 1
-        (push peer), SM 1 adds 1: every word arrives once, in order, through front, SRAM, IN
-        and OUT registers in both FIFOs of both SMs."""
+        """The host writes and reads SM 0 at random clocks, SM 0 adds 1 to every word: each
+        arrives once, in order, through front, SRAM, IN and OUT registers of both FIFOs."""
         import random
         for seed, clkdiv in ((1, 1), (2, 1), (3, 2)):
             rng = random.Random(seed)
             chip = Chip(2)
-            load(chip, 0, assemble(".wrap_target\npull block\nmov isr, osr\npush peer block\n.wrap"),
-                 clkdiv_int=clkdiv)
-            load(chip, 1, assemble(".y 1\n.wrap_target\npull block\nmov x, osr\nadd x, y\n"
+            load(chip, 0, assemble(".y 1\n.wrap_target\npull block\nmov x, osr\nadd x, y\n"
                                    "mov isr, x\npush block\n.wrap"), clkdiv_int=clkdiv)
-            chip.reg_write(0, CTRL, 0b11)
+            chip.reg_write(0, CTRL, 0b01)
             sent, got, levels = 0, [], set()
             for _ in range(6000):
                 if rng.random() < 0.5 and sent < 3000 and chip.tx_push(0, sent):
                     sent += 1
-                if rng.random() < 0.05 and (w := chip.sms[1].rx_read()) is not None:
+                if rng.random() < 0.05 and (w := chip.sms[0].rx_read()) is not None:
                     got.append(w)
                 chip.step()
-                levels.add((chip.sms[0].tx_level, chip.sms[1].tx_level, chip.sms[1].rx_level))
+                levels.add((chip.sms[0].tx_level, chip.sms[0].rx_level))
             self.assertEqual(got, list(range(1, len(got) + 1)), f"seed {seed}")
             self.assertGreater(len(got), 250)
-            self.assertEqual([max(x) for x in zip(*levels)], [133] * 3, "all three FIFOs filled up")
+            self.assertEqual([max(x) for x in zip(*levels)], [133] * 2, "both FIFOs filled up")
 
     def test_sram_port_serves_every_request_within_4_clocks(self):
         sm = Chip(2).sms[0]
@@ -199,7 +196,7 @@ class HostInterface(unittest.TestCase):
 
     def test_peers_act_in_parallel(self):
         """An SM sets its peer's flag 0 in clock 1 while the peer tests it: seen in clock 2, not
-        1, whichever SM writes. The same for a PUSH PEER word."""
+        1, whichever SM writes."""
         setter = "irq peer 0\nh: jmp h"
         tester = "jmp irq 0, 3\njmp irq 0, 5\nh: jmp h\nset x, 1\nh1: jmp h1\nset x, 2\nh2: jmp h2"
         for n in (0, 1):
@@ -209,18 +206,10 @@ class HostInterface(unittest.TestCase):
             chip.reg_write(0, CTRL, 0b11)
             chip.step(4)
             self.assertEqual(chip.sms[1 - n].x, 2, f"SM {n} -> SM {1 - n}: seen from the next clock")
-        chip = Chip(2)
-        load(chip, 0, assemble("set x, 7\nmov isr, x\npush peer\nh: jmp h"))
-        load(chip, 1, assemble("set x, 3\nnop\npull noblock\nmov y, osr\npull noblock\nh: jmp h"))
-        chip.reg_write(0, CTRL, 0b11)
-        chip.step(6)
-        self.assertEqual((chip.sms[1].y, chip.sms[1].osr), (3, 7),
-                         "pushed in clock 3: X (empty) for the PULL in clock 3, the word in clock 5")
 
     def test_host_access_in_one_clock(self):
         """A host write lands at the end of its clock: a PULL in that clock does not see the
-        word. With a host TX_PUSH, a PUSH PEER into the same FIFO is refused (and retried);
-        with a host RX_POP, a PULL PEER from the same FIFO finds it empty."""
+        word; a host RX_POP takes its word before the SMs."""
         chip = Chip(2)
         load(chip, 0, assemble("set x, 5\npull noblock\nmov y, osr\npull noblock\nh: jmp h"))
         chip.reg_write(0, CTRL, 1)
@@ -228,24 +217,10 @@ class HostInterface(unittest.TestCase):
         chip.host(OP_TX_PUSH, 0, word=0xABCD)                 # clock 2, the first PULL
         chip.step(2)
         self.assertEqual((chip.sms[0].y, chip.sms[0].osr), (5, 0xABCD))
-
-        chip = Chip(2)
-        load(chip, 0, assemble("set x, 7\nmov isr, x\npush peer\nh: jmp h"))
-        chip.reg_write(0, CTRL, 1)
-        chip.step(2)
-        chip.host(OP_TX_PUSH, 1, word=0x1111)                 # clock 3, the PUSH PEER
-        self.assertTrue(chip.sms[0].stalled, "refused: blocks")
-        chip.step()
-        self.assertEqual(list(chip.sms[1].tx_fifo), [0x1111, 7], "the host's word first")
-
-        chip = Chip(2)
-        load(chip, 0, assemble("set x, 3\nnop\nnop\nnop\npull peer noblock\nmov y, osr\nh: jmp h"))
         load(chip, 1, assemble("set x, 9\nmov isr, x\npush\nh: jmp h"))
-        chip.reg_write(0, CTRL, 0b11)
-        chip.step(4)
-        self.assertEqual(chip.host(OP_RX_POP, 1), 9, "clock 5: the host takes the word")
-        chip.step()
-        self.assertEqual(chip.sms[0].y, 3, "the PULL PEER in that clock found the FIFO empty")
+        chip.reg_write(0, CTRL, 0b10)
+        chip.step(3)
+        self.assertEqual(chip.host(OP_RX_POP, 1), 9, "pushed in clock 3, popped in clock 4")
 
     def test_clkdiv_16_8(self):
         chip = Chip(2)
@@ -291,56 +266,12 @@ class MultiSm(unittest.TestCase):
         chip.step()
         self.assertEqual(chip.bus.out & 1, 1, "PIN_MASK keeps SM 1 off pin 0")
 
-    def test_push_peer_bridge(self):
-        """SM 0 doubles every word and pushes it to SM 1, which adds 1: no host in between."""
+    def test_peer_irq(self):
         chip = Chip(2)
-        load(chip, 0, assemble("""
-            .wrap_target
-                pull block
-                mov x, osr
-                add x, x
-                mov isr, x
-                push peer
-            .wrap
-        """))
-        load(chip, 1, assemble("""
-            .wrap_target
-                pull block
-                set y, 1
-                mov x, osr
-                add x, y
-                mov isr, x
-                push
-            .wrap
-        """))
-        chip.reg_write(0, CTRL, 0b11)
-        for w in (1, 2, 3):
-            chip.tx_push(0, w)
-        chip.step(60)
-        self.assertEqual(chip.spi(header(OP_RX_POP, 1), [0] * 3)[1:], [3, 5, 7],
-                         "an SPI burst: every word ready at its start")
-
-    def test_pull_peer_and_peer_irq(self):
-        chip = Chip(2)
-        load(chip, 0, assemble("""
-                pull peer          ; from SM 1's RX FIFO
-                mov x, osr
-                irq peer 2         ; flag 2 of SM 1
-            end:
-                jmp end
-        """))
-        load(chip, 1, assemble("""
-                set x, 9
-                mov isr, x
-                push
-                wait 1 irq 2       ; its own flag, set by SM 0
-                irq 0
-            end:
-                jmp end
-        """))
+        load(chip, 0, assemble("irq peer 2         ; flag 2 of SM 1\nend: jmp end"))
+        load(chip, 1, assemble("wait 1 irq 2       ; its own flag, set by SM 0\nirq 0\nend: jmp end"))
         chip.reg_write(0, CTRL, 0b11)
         chip.step(20)
-        self.assertEqual(chip.sms[0].x, 9)
         self.assertTrue(chip.sms[1].irq_flags[0])
         self.assertEqual(chip.reg_read(0, IRQ_SUM), 0b10)      # only SM 1
 
@@ -353,24 +284,6 @@ class MultiSm(unittest.TestCase):
         chip.reg_write(1, IRQ, 1 << 13)            # host sets flag 5 of SM 1
         chip.step(3)
         self.assertTrue(chip.sms[0].irq_flags[0])
-
-    def test_push_peer_to_a_full_fifo(self):
-        """The peer's TX FIFO (133 words) full: PUSH PEER stalls; NOBLOCK drops the word."""
-        chip = Chip(2)
-        for n, push in ((0, "push peer"), (1, "push peer noblock")):
-            load(chip, n, assemble(f"set x, {n + 1}\nmov isr, x\n{push}\nirq 0\nend: jmp end"))
-        for w in range(133):
-            chip.tx_push(0, w)
-            chip.tx_push(1, w)
-            chip.step()
-        chip.reg_write(0, CTRL, 0b11)
-        chip.step(10)
-        self.assertEqual((chip.reg_read(0, PC), chip.sms[0].stalled), (2, True), "SM 0 stalls")
-        self.assertEqual((chip.sms[1].irq_flags[0], chip.sms[1].isr), (True, 0), "SM 1 drops it")
-        chip.sms[1].tx_fifo.popleft()               # SM 1 takes a word: room for SM 0's
-        chip.step(10)
-        self.assertTrue(chip.sms[0].irq_flags[0])
-        self.assertEqual(chip.reg_read(1, FIFO_LEVEL) & 0xFF, 133)
 
     def test_pull_ifempty_waits_for_the_threshold(self):
         chip = Chip(2)
