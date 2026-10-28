@@ -40,7 +40,7 @@ def _build(sources: list[str], top: str, params: dict) -> tuple[Path, list[dict]
         shutil.rmtree(out)
     out.mkdir(parents=True)
     verilator = os.environ.get("VERILATOR", "verilator")
-    args = [verilator, "--cc", "-O3", "--x-assign", "0", "--x-initial", "0", "--top-module", top,
+    args = [verilator, "--cc", "-O3", "-Wno-fatal", "--x-assign", "0", "--x-initial", "0", "--top-module", top,
             "--Mdir", str(out), *(f"-G{k}={v}" for k, v in params.items()),
             *(str(SRC / f) for f in sources)]
     subprocess.run(args, check=True, stdout=subprocess.DEVNULL)
@@ -71,7 +71,7 @@ void sim_set(void* p, int id, uint64_t v) {{
 }}
 }}
 """)
-    subprocess.run([verilator, "--cc", "--build", "-O3", "--x-assign", "0", "--x-initial", "0",
+    subprocess.run([verilator, "--cc", "--build", "-O3", "-Wno-fatal", "--x-assign", "0", "--x-initial", "0",
                     "--top-module", top, "--Mdir", str(out), *(f"-G{k}={v}" for k, v in params.items()),
                     "-CFLAGS", "-fPIC -O2", "-LDFLAGS", "-shared", "--exe", str(out / "shim.cpp"),
                     "-o", "libsim.so", *(str(SRC / f) for f in sources)],
