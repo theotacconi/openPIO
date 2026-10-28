@@ -113,10 +113,10 @@ module openpio_sm (
     wire        div_load = div_cnt == 16'd0;
     wire [7:0]  acc_n    = div_load ? acc_sum[7:0] : div_acc;
     wire        carry    = div_load ? acc_sum[8] : div_carry;
-    wire [16:0] per_n    = clkdiv + carry;
+    wire [16:0] per_n    = {1'b0, clkdiv} + {16'd0, carry};
     wire [15:0] cnt_n    = strobe_r ? 16'd0 : div_cnt + 16'd1;
     wire        carry_n  = acc_n > ~frac;                  // the carry of acc_n + frac
-    wire [16:0] per_nn   = (cnt_n == 16'd0) ? clkdiv + carry_n : per_n;
+    wire [16:0] per_nn   = (cnt_n == 16'd0) ? {1'b0, clkdiv} + {16'd0, carry_n} : per_n;
     wire        strobe_n = ~div_on | ({1'b0, cnt_n} + 17'd1 >= per_nn);
 
     wire stb = run & strobe_r;
