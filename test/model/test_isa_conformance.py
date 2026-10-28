@@ -323,6 +323,19 @@ class Wait(unittest.TestCase):
         self.assertEqual(sm.x, 1, "WAIT reuses the inverted slot with its own polarity")
 
 
+class Time(unittest.TestCase):
+
+    def test_in_time_counts_strobes(self):
+        """The third strobe reads 2; with CLKDIV 3, still strobes, not clocks."""
+        for clkdiv in (1, 3):
+            sm = StateMachine(assemble("nop\nnop\nin time, 16\npush noblock" + HALT), clkdiv_int=clkdiv)
+            for _ in range(4 * clkdiv):
+                sm.step()
+            self.assertEqual(list(sm.rx_fifo), [2])
+        sm.reset()
+        self.assertEqual(sm.time, 0, "RESET clears it")
+
+
 class Set(unittest.TestCase):
 
     def test_pins_and_pindirs_window(self):

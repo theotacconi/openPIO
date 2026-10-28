@@ -68,6 +68,7 @@ the header. Chip registers (`Addr` >= 0x20) ignore `SM`.
 | 0x1C | FIFO_LEVEL | R | words in the TX FIFO [7:0], in the RX FIFO [15:8] (0..133; ISA.md, FIFOs) |
 | 0x1D | IRQ_MASK | RW | what reaches HOST_IRQ: [7:0] these flags when set (0xFF), [8] RX FIFO not empty (0), [9] TX FIFO at most 64 words (0) |
 | 0x1E | CLKDIV_FRAC | RW | strobe divider, fraction [7:0] / 256 (0): a strobe every CLKDIV + CLKDIV_FRAC / 256 clocks on average; loaded on RESET |
+| 0x1F | TIME | R | IN TIME: strobes since RESET, 16 bits |
 
 RW*: written only while the SM is stopped (CTRL EN = 0); writes while it runs are ignored.
 

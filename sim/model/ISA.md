@@ -50,7 +50,7 @@ a write is discarded.
 | Code | Operand | IN src | OUT dest | ALU src | ALU dest |
 |---|---|---|---|---|---|
 | `000` | PINS | pins from `in_base`, or the PAU RX | pins from `out_base`, or the PAU TX | `gpio_in` | pin values |
-| `001` | PINDIRS | - | pindirs from `out_base` | pindirs | pindirs |
+| `001` | PINDIRS | TIME | pindirs from `out_base` | pindirs | pindirs |
 | `010` | X | X | X | X | X |
 | `011` | Y | Y | Y | Y | Y |
 | `100` | ISR | ISR | ISR (count = bits) | ISR | ISR (count = 0) |
@@ -58,7 +58,9 @@ a write is discarded.
 | `110` | NULL | zeros | discard | 0 | discard |
 | `111` | special | STATUS | PC (indirect jump) | STATUS | COND |
 
-ALU PINS / PINDIRS are all 16 pin positions, bit i = pin i (no base). An ALU write leaves the ISR
+IN TIME is a 16-bit count of the SM's strobes since CTRL.RESET (wrapping; the current strobe not
+yet counted): edge times, pulse widths and periods in strobes. ALU PINS / PINDIRS are all 16 pin
+positions, bit i = pin i (no base). An ALU write leaves the ISR
 empty and the OSR full (counts 0): `mov isr, null` drops a partial word, `mov isr, x` then PUSH
 sends X. STATUS (read-only) is the SM status in bits [7:0] and the PAU status in bits [15:8],
 indices 0..7 of the Conditions tables, bit i = index i.
@@ -485,6 +487,7 @@ the shift counts. A program carries all of it as assembler directives (`sim/mode
   clock (the v2 model first let SM 1 see SM 0's writes in the same clock). A host access takes
   one clock with them (the model first applied it between clocks). WAIT edges compare the
   values two strobes see (the model first kept them after the instruction).
+- IN source `001` is TIME (v2 first: reserved).
 - STUFF_MODE `01` (a 1 after LEN 0s) removed: no protocol uses it (AGENT.md, the PAU rule).
 - After CTRL.RESET the OSR is empty (`osr_count` = 16; v1: 0, a full OSR of zeros), the IRQ
   flags are clear and the CRC holds its initial value.

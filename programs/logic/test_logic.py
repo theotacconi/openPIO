@@ -3,7 +3,8 @@
 and the sample count; the samples are the 14 input pins, every 2 strobes without jitter
 (each one the pins of the same clock offset). Triggers: a pin rising, a pin falling (an
 inverted condition, pin 12 on ui_in), an IRQ flag the host sets, the other SM's IRQ flag (a
-capture started by the UART receiver's framing error)."""
+capture started by the UART receiver's framing error). Edge timestamps (IN TIME): every edge
+of a random waveform, the intervals exact at CLKDIV 1 and within a strobe at CLKDIV 3."""
 import random
 import sys
 import unittest
@@ -93,6 +94,33 @@ class LogicAnalyzer(unittest.TestCase):
         self.assertIn(first - flagged, range(1, 4), "sampling starts at once")
         self.assertEqual([w >> 3 & 1 for w in bench.received[1]], [bench.trace[t - 2] >> 3 & 1
                          for t in range(first - 1, first + 79, 2)], "the RX line, every 2 clocks")
+
+
+class EdgeTimes(unittest.TestCase):
+
+    def run_edges(self, clkdiv, seed):
+        rnd = random.Random(seed)
+        edges, t = [], 30
+        for _ in range(60):
+            t += rnd.randrange(2 * clkdiv, 40 * clkdiv)
+            edges.append(t)
+        bench = Bench()
+        bench.load(0, (HERE / "edges.asm").read_text(), clkdiv_int=clkdiv)
+        bench.add(Script([(0, {0: 0})] + [(e, {0: (k + 1) & 1}) for k, e in enumerate(edges)]))
+        bench.start(1)
+        bench.run(edges[-1] + 20 * clkdiv)
+        times = bench.received[0]
+        self.assertEqual(len(times), len(edges))
+        return [b - a for a, b in zip(edges, edges[1:])], [(b - a) & 0xFFFF for a, b in zip(times, times[1:])]
+
+    def test_exact_at_clkdiv_1(self):
+        clocks, strobes = self.run_edges(1, 6)
+        self.assertEqual(strobes, clocks)
+
+    def test_within_a_strobe_at_clkdiv_3(self):
+        clocks, strobes = self.run_edges(3, 7)
+        self.assertTrue(all(abs(3 * s - c) < 3 for s, c in zip(strobes, clocks)), "within a strobe")
+        self.assertLess(abs(3 * sum(strobes) - sum(clocks)), 3, "no drift")
 
 
 if __name__ == "__main__":
