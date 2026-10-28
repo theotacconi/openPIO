@@ -2,7 +2,8 @@
 """Logic analyzer: the host writes the trigger condition at run time (ALU destination COND)
 and the sample count; the samples are the 14 input pins, every 2 strobes without jitter
 (each one the pins of the same clock offset). Triggers: a pin rising, a pin falling (an
-inverted condition, pin 12 on ui_in), an IRQ flag the host sets."""
+inverted condition, pin 12 on ui_in), an IRQ flag the host sets, the other SM's IRQ flag (a
+capture started by the UART receiver's framing error)."""
 import random
 import sys
 import unittest
@@ -13,6 +14,7 @@ sys.path.insert(0, str(HERE.parents[1] / "test" / "shared"))
 sys.path.insert(0, str(HERE.parents[1] / "sim" / "model"))
 from asm import condition                                # noqa: E402
 from bench import Bench, Script                          # noqa: E402
+from devices import UartTx                               # noqa: E402
 
 PADS_IN = 0xF8FF                                         # pins with an input pad (HOST.md)
 
@@ -70,6 +72,27 @@ class LogicAnalyzer(unittest.TestCase):
         samples = run(levels, condition("irq 2"), 50, irq_at=150)
         taken = self.offset(samples, levels, 2) + 2           # inputs reach the SM 2 clocks late
         self.assertIn(taken - 150, range(0, 3), "the first sample within 2 clocks of the flag")
+
+    def test_peer_irq(self):
+        """SM 0 receives UART bytes and raises IRQ 0 at a framing error; SM 1 captures from
+        there, triggered by its peer's flag."""
+        bench = Bench(pullups=1 << 3)
+        bench.load(0, (HERE.parent / "uart" / "uart_rx.asm").read_text())      # RX = pin 3
+        bench.load(1, (HERE / "logic_analyzer.asm").read_text())
+        tx = bench.add(UartTx(3, 8, [0x11, 0x22, 0x33], start=20, gap=1, stop_low={1}))
+        bench.send(1, [condition("peer_irq 0"), 39])
+        bench.start(0b11)
+        flagged = first = None
+        while bench.t < tx.end + 100:
+            bench.run(1)
+            if flagged is None and bench.chip.sms[0].irq_flags[0]:
+                flagged = bench.t
+            if first is None and bench.received[1]:
+                first = bench.t
+        self.assertEqual(len(bench.received[1]), 40)
+        self.assertIn(first - flagged, range(1, 4), "sampling starts at once")
+        self.assertEqual([w >> 3 & 1 for w in bench.received[1]], [bench.trace[t - 2] >> 3 & 1
+                         for t in range(first - 1, first + 79, 2)], "the RX line, every 2 clocks")
 
 
 if __name__ == "__main__":
