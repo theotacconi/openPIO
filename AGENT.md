@@ -23,6 +23,7 @@
 * Every flip-flop has a synchronous active-low reset (`rst_n`), except memory arrays: the IMEM and the FIFO SRAM, and their flip-flop models, which must not be reset either. The host writes every IMEM word it executes.
 * Hard macros only behind a module with a portable flip-flop model of the same ports, cycle-equivalent while the SM runs (`imem_sram.v` / `imem.v`). The model is used by RTL simulation, formal, lockstep and the FPGA; `info.yaml` lists the macro version. Macros: IMEM `RM_IHPSG13_1P_64x16_c2`, FIFO data `RM_IHPSG13_1P_256x16_c2_bm_bist` (BIST and bit-mask pins tied off); CMOS5L uses the SG13G2 SRAM library. Each one goes in `src/config.json` (`MACROS`, `PDN_MACRO_CONNECTIONS`); `odb_stripes.py` powers every macro. No other vendor primitives.
 * The number of SMs is a parameter (the model allows 2 or 4); the chip has 2 unless 4 fit.
+* The PAU holds generic primitives only. A feature joins it when (1) it is generic: parameters, not a protocol's format; (2) two real protocols, or a family, use it; (3) the SM cannot do it in software at the speed those protocols need; (4) its measured area is small. Protocol-specific encodings (a field layout, a Gray code) stay in programs.
 * The ISA has 16 pin positions; the top level maps them to pads and reports the map in PADS_OUT / PADS_IN / PADS_BIDIR (HOST.md, Pins). The core never knows which pads exist.
 * No combinational path from an input pin to an output pin: inputs pass the 2-flip-flop synchronizer.
 * Timing lessons from the v1 hardening (CMOS5L slow corner, 20 ns):
