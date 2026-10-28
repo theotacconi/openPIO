@@ -109,8 +109,8 @@ class EdgeTimes(unittest.TestCase):
         bench.add(Script([(0, {0: 0})] + [(e, {0: (k + 1) & 1}) for k, e in enumerate(edges)]))
         bench.start(1)
         bench.run(edges[-1] + 20 * clkdiv)
-        times = bench.received[0]
-        self.assertEqual(len(times), len(edges))
+        level, *times = bench.received[0]
+        self.assertEqual((level & 1, len(times)), (0, len(edges)), "the level, then every edge")
         return [b - a for a, b in zip(edges, edges[1:])], [(b - a) & 0xFFFF for a, b in zip(times, times[1:])]
 
     def test_exact_at_clkdiv_1(self):
