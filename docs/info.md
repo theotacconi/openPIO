@@ -14,7 +14,7 @@ openPIO is a programmable I/O co-processor: two state machines (SMs), each a tin
 - **FIFOs:** 133-word TX (host to SM) and RX (SM to host) FIFOs per SM, in an SRAM.
 - **Two SMs** share the pins (per-SM pin mask), start on the same clock, and pass words and IRQ flags to each other without the host.
 
-Example programs (UART, SPI, I2C, USB low speed, 10BASE-T TX, CAN, LIN, HDLC, JTAG, SWD, 1-Wire, PS/2, I2S, WS2812B, NEC infrared, quadrature encoder, ...) are in `programs/`; `sim/model/asm.py` assembles them.
+Example programs (UART, Modbus RTU, SPI, I2C, USB low speed, USB Power Delivery BMC, 10BASE-T TX, CAN, LIN, DALI, HDLC, JTAG, SWD, 1-Wire, PS/2, I2S, WS2812B, NEC infrared, quadrature encoder, a logic analyzer, ...) are in `programs/`; `sim/model/asm.py` assembles them.
 
 ### SPI host interface
 
