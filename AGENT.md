@@ -65,7 +65,7 @@
 * `scripts/`: `dev.sh` (container), `area.sh` (CMOS5L cell area of a design), `tt_signoff.py` (checks a gds run's logs).
 * `.github/workflows/`: `model` (Python model and programs), `test` (cocotb on the RTL), `gds` (hardening, precheck, gate-level test, sign-off), `docs`.
 
-Status (2026-10-28): ISA v2 frozen after the slimming; the model, the 31 programs, the learner (async serial) and the docs are v2. `src/`, `test/test.py`, `test/lockstep/`, `test/formal/` and `fpga/` are still v1 and are ported together with the RTL; until then the `test` workflow fails on this branch.
+Status (2026-10-28): ISA v2 frozen after the slimming; the model, the 31 programs, the learner (async serial) and the docs are v2. RTL v2: `src/openpio_sm.v` and `src/pau.v` (one SM with its PAU and host registers) agree with `emu.py` in `test/lockstep/sm_fuzz.py`; next the FIFOs, the chip top and SPI. The rest of `src/`, `test/test.py`, `test/formal/` and `fpga/` are still v1; until they are ported the `test` workflow fails on this branch.
 
 ## Testing
 
@@ -79,7 +79,7 @@ Status (2026-10-28): ISA v2 frozen after the slimming; the model, the 31 program
 * A program is judged only by its pins and the data it exchanges with the host, by the reference devices, never by the emulator's internal state. A new spec feature comes with a program that uses it.
 * RTL (inside the container, `scripts/dev.sh`):
   1. Lint: `yosys -p "read_verilog <src/*.v but imem_sram.v>; hierarchy -check -top tt_um_theotacconi_openpio; proc; check -assert"` and `verilator --lint-only -Wall`: no latches, no multiple drivers, no warnings.
-  2. Lockstep against the model: `python3 test/lockstep/fuzz.py` (random programs and host traffic) and the program replays in `test/lockstep/`.
+  2. Lockstep against the model: `python3 test/lockstep/sm_fuzz.py` (one SM against `emu.py`: random configurations, random words and PAU traffic loops, every clock and every host register). A harness change is checked by mutating the RTL (`OPENPIO_SRC`): the fuzz must catch it.
   3. cocotb through the pins: `cd test && make -B` (and `IMEM=sram` when the IMEM or FIFO memories change).
   4. Formal: `sby -f test/formal/<proof>.sby` for every invariant or equivalence a timing fix relies on.
 * Sign-off: the `gds` workflow green (gds, precheck, gl_test, signoff, viewer) and the `tt_submission` artifact present. `scripts/tt_signoff.py` fails on any DRC / LVS / antenna / slew / capacitance error or negative slack in any corner.
