@@ -472,7 +472,10 @@ the shift counts. A program carries all of it as assembler directives (`sim/mode
   word and may set it again only after the last write. The hardware fetches the next instruction
   one clock ahead (synchronous IMEM read), so a word rewritten while the state machine runs can
   execute once with its old contents, whereas `emu.py` always reads the current memory.
-  Behaviour of IMEM writes with `CTRL.EN = 1` is undefined.
+  Behaviour of IMEM writes with `CTRL.EN = 1` is undefined. A stalled SM re-reads its
+  instruction from the IMEM: rewriting the word at its PC, then running it without a RESET, is
+  undefined too (`host.py` RESETs after loading). The host does not use the IMEM port of an SM
+  that is stepping.
 - **PAU receiver timing needs H >= 2** for Manchester and biphase mark (edge windows of H / 2).
 
 ## History
