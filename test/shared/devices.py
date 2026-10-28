@@ -67,14 +67,16 @@ class UartRx(Device):
 
 class UartTx(Device):
     """UART transmitter: sends `data` frames from clock `start`, each followed by `gap` idle bit
-    times. stop_low: send a 0 stop bit (framing error) for the frames whose index is in it."""
+    times (one number, or one per frame). stop_low: send a 0 stop bit (framing error) for the
+    frames whose index is in it."""
 
-    def __init__(self, pin: int, bit: int, data: list[int], start: int = 0, gap: float = 0,
-                 data_bits: int = 8, parity: str | None = None, stop_bits: int = 1,
-                 stop_low: set[int] = frozenset()) -> None:
+    def __init__(self, pin: int, bit: float, data: list[int], start: int = 0,
+                 gap: float | list[float] = 0, data_bits: int = 8, parity: str | None = None,
+                 stop_bits: int = 1, stop_low: set[int] = frozenset()) -> None:
         super().__init__()
         self.pin = pin
         self.schedule: list[tuple[int, int]] = []      # (clock, level)
+        gaps = gap if isinstance(gap, list) else [gap] * len(data)
         t = start
         for i, value in enumerate(data):
             bits = [0] + [value >> k & 1 for k in range(data_bits)]
@@ -82,16 +84,26 @@ class UartTx(Device):
                 bits.append((sum(bits[1:]) + (parity == "odd")) % 2)
             bits += [0 if i in stop_low else 1] * stop_bits
             for b in bits:
-                self.schedule.append((t, b))
+                self.schedule.append((round(t), b))
                 t += bit
-            self.schedule.append((t, 1))
-            t += round(gap * bit)
-        self.end = t
+            self.schedule.append((round(t), 1))
+            t += gaps[i] * bit
+        self.end = round(t)
         self.drive = {pin: 1}
 
     def tick(self, t: int, levels: int) -> None:
         while self.schedule and self.schedule[0][0] <= t + 1:
             self.drive[self.pin] = self.schedule.pop(0)[1]
+
+
+def crc16_modbus(data: list[int]) -> int:
+    """CRC-16/MODBUS: reflected polynomial 0x8005, init 0xFFFF; sent low byte first."""
+    crc = 0xFFFF
+    for byte in data:
+        crc ^= byte
+        for _ in range(8):
+            crc = crc >> 1 ^ 0xA001 if crc & 1 else crc >> 1
+    return crc
 
 
 # ---------------------------------------------------------------------------------- SPI
@@ -830,6 +842,34 @@ class BmcRx(Device):
         self._prev = lv
 
 
+class BmcTx(Device):
+    """Biphase mark transmitter: sends the `frames` (bit lists) from clock `start`, `gap` bit
+    times apart: a transition at every bit boundary, one more in the middle of a 1; between
+    frames the line holds its level. `bit` may be fractional (a fast or slow transmitter)."""
+
+    def __init__(self, pin: int, bit: float, frames: list[list[int]], start: int = 0,
+                 gap: float = 8) -> None:
+        super().__init__()
+        self.pin = pin
+        self.schedule: list[tuple[int, int]] = []
+        t, level = start, 0
+        for bits in frames:
+            for b in bits:
+                level ^= 1
+                self.schedule.append((round(t), level))
+                if b:
+                    level ^= 1
+                    self.schedule.append((round(t + bit / 2), level))
+                t += bit
+            t += gap * bit
+        self.end = round(t)
+        self.drive = {pin: 0}
+
+    def tick(self, t: int, levels: int) -> None:
+        while self.schedule and self.schedule[0][0] <= t + 1:
+            self.drive = {self.pin: self.schedule.pop(0)[1]}
+
+
 # ---------------------------------------------------------------------------------- LIN
 
 def lin_pid(ident: int) -> int:
@@ -1227,3 +1267,83 @@ class HdlcRx(Device):
         data = [sum(bits[i + k] << k for k in range(8)) for i in range(0, len(bits) - 7, 8)]
         body, fcs = data[:-2], data[-2:]
         self.frames.append({"data": body, "fcs_ok": len(fcs) == 2 and crc16_x25(body) == fcs[0] | fcs[1] << 8})
+
+
+# ---------------------------------------------------------------------------------- DALI
+
+class DaliGear:
+    """DALI control gear (IEC 62386-101; not a pin device: DaliBus clocks it with the bus level).
+    Manchester with half-bit `te` clocks, 1 = the bus rising in the middle of the bit, idle high.
+    A frame starts at a falling edge on the idle bus; each half of bit k is sampled in its middle;
+    two equal halves are the stop condition. Forward frames (start bit and 16 bits, MSB first) go
+    to `frames`; frames of 9 bits (backward frames of other gear) are ignored. A forward frame in
+    `answers` is answered `settle` clocks after its last bit with a backward frame: start bit and
+    8 bits. Checks: start bit 1, frame length, every edge within te / 8 of the half-bit grid."""
+
+    def __init__(self, te: int, answers: dict[int, int] = None, settle: int = 0) -> None:
+        self.te, self.answers, self.settle = te, dict(answers or {}), settle
+        self.tx = 1
+        self.frames: list[int] = []
+        self.errors: list[str] = []
+        self._prev = 1
+        self._t0: int | None = None
+        self._send: list[tuple[int, int]] = []           # (clock, level) of a backward frame
+
+    def step(self, t: int, bus: int) -> None:
+        if self._send:
+            while self._send and self._send[0][0] <= t + 1:
+                self.tx = self._send.pop(0)[1]
+            self._prev = 1
+            return
+        if self._t0 is None:
+            if self._prev and not bus:
+                self._t0, self._bits = t, []
+        else:
+            rel, te = t - self._t0, self.te
+            if bus != self._prev and min(rel % te, te - rel % te) > te // 8:
+                self.errors.append(f"t={t}: edge {rel % te} clocks off the half-bit grid")
+            k, phase = divmod(rel, 2 * te)
+            if phase == te // 2:
+                self._first = bus
+            elif phase == te + te // 2:
+                if bus != self._first:
+                    self._bits.append(bus)
+                else:
+                    self._frame(self._t0 + 2 * te * k)
+        self._prev = bus
+
+    def _frame(self, end: int) -> None:
+        bits, self._t0 = self._bits, None
+        if len(bits) == 9:
+            return
+        if len(bits) != 17 or bits[0] != 1:
+            self.errors.append(f"t={end}: frame of {len(bits)} bits, start bit {bits[:1]}")
+            return
+        frame = sum(b << (15 - i) for i, b in enumerate(bits[1:]))
+        self.frames.append(frame)
+        if frame in self.answers:
+            t = end + self.settle
+            for b in [1] + [self.answers[frame] >> i & 1 for i in range(7, -1, -1)]:
+                self._send += [(t, 1 - b), (t + self.te, b)]
+                t += 2 * self.te
+            self._send.append((t, 1))
+
+
+class DaliBus(Device):
+    """DALI bus through the master's inverting transceiver: pin `tx` high pulls the bus low,
+    pin `rx` reads the bus inverted. The gear (DaliGear) pull it low too; the bus is high
+    otherwise (the bus power supply)."""
+
+    def __init__(self, tx: int, rx: int, gear: list[DaliGear]) -> None:
+        super().__init__()
+        self.tx, self.rx, self.gear = tx, rx, gear
+        self.wave: list[int] = []
+        self.drive = {rx: 0}
+
+    def tick(self, t: int, levels: int) -> None:
+        bus = int(not _bit(levels, self.tx) and all(g.tx for g in self.gear))
+        self.wave.append(bus)
+        for g in self.gear:
+            g.step(t, bus)
+        self.drive = {self.rx: 1 - bus}
+        self.errors = [e for g in self.gear for e in g.errors]

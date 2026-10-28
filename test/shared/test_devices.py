@@ -8,8 +8,9 @@ import random
 import unittest
 
 from bench import Bench, Script
-from devices import (WiredAndBus, CanNode, HdlcRx, I2cTarget, I2sCodec, SpiSlave, UartRx, UartTx,
-                     Ws2812Chain, can_crc15, crc16_x25)
+from devices import (BmcRx, BmcTx, DaliBus, DaliGear, WiredAndBus, CanNode, HdlcRx, I2cTarget,
+                     I2sCodec, SpiSlave, UartRx, UartTx, Ws2812Chain, can_crc15, crc16_modbus,
+                     crc16_x25)
 
 
 def spi_master(mode, words, half=3, sck=0, mosi=1, bits=8, start=5):
@@ -241,6 +242,47 @@ class I2s(unittest.TestCase):
         got = [bench.trace[r] >> 3 & 1 for r, lv in bench.edges(0) if lv == 1][2:66]
         words = [sum(b << (15 - i) for i, b in enumerate(got[k:k + 16])) for k in range(0, 64, 16)]
         self.assertEqual(words, [s for pair in adc for s in pair], "ADC on SDOUT at the rising edges")
+
+
+class Modbus(unittest.TestCase):
+
+    def test_crc16_modbus_check_value(self):
+        self.assertEqual(crc16_modbus(list(b"123456789")), 0x4B37)
+
+
+class Bmc(unittest.TestCase):
+
+    def test_tx_to_rx(self):
+        frames = [[0, 1] * 8 + [1, 1, 0, 0, 1], [1, 0, 0, 1, 1, 1, 0]]
+        bench = Bench()
+        tx = bench.add(BmcTx(0, 16, frames, start=10))
+        rx = bench.add(BmcRx(0, 16))
+        bench.run(tx.end + 50)
+        self.assertEqual((rx.frames, rx.errors), (frames, []))
+
+
+class Dali(unittest.TestCase):
+
+    def test_ideal_master_and_answer(self):
+        """A forward frame from an ideal master (TX pin high = bus low), a query answered after
+        10 half-bits; the backward frame read back from the bus in the middle of each half."""
+        te, frame = 20, 0xA5C3
+        bits = [1] + [frame >> i & 1 for i in range(15, -1, -1)]
+        steps, t = [(0, {0: 0})], 30
+        for b in bits:                                    # bus low = pin high
+            steps += [(t, {0: b}), (t + te, {0: 1 - b})]
+            t += 2 * te
+        steps.append((t, {0: 0}))
+        gear = DaliGear(te, answers={frame: 0x5A}, settle=10 * te)
+        bench = Bench()
+        bench.add(Script(steps))
+        bus = bench.add(DaliBus(0, 1, [gear, DaliGear(te)]))
+        bench.run(t + 60 * te)
+        self.assertEqual((gear.frames, bench.errors()), ([frame], []))
+        t0 = t + 10 * te
+        halves = [bus.wave[t0 + te // 2 + k * te] for k in range(18)]
+        self.assertEqual(halves, [v for b in [1, 0, 1, 0, 1, 1, 0, 1, 0] for v in (1 - b, b)])
+        self.assertEqual([bench.trace[t] >> 1 & 1 for t in (5, t0 + te // 2)], [0, 1], "RX inverted")
 
 
 if __name__ == "__main__":
