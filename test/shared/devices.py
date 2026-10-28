@@ -185,6 +185,53 @@ class SpiSlave(Device):
         self._prev_sck, self._prev_mosi = sck, mosi
 
 
+class SpiMaster(Device):
+    """SPI master, mode 0, MSB first, 8-bit words: each transfer of `transfers` is CS_N low,
+    `lead` clocks, then per bit SCK `half` clocks low, `half` high (MOSI set as SCK falls, MISO
+    sampled as it rises), then CS_N high for `gap` clocks. A word may be (value, bits) to end the
+    transfer after its first bits. `received` gets each transfer's MISO words (whole ones).
+    Checks: MISO stable for `setup` clocks before each rising edge."""
+
+    def __init__(self, sck: int, mosi: int, miso: int, cs: int, transfers: list[list], half: int,
+                 start: int = 0, lead: int = 0, gap: int = 0, setup: int = 1) -> None:
+        super().__init__()
+        self.miso, self.setup = miso, setup
+        self.schedule: list[tuple[int, dict]] = []
+        self.samples: list[tuple[int, int, int]] = []    # (clock, transfer, word)
+        self.received: list[list[int]] = [[] for _ in transfers]
+        t = start
+        for n, words in enumerate(transfers):
+            self.schedule.append((t, {cs: 0}))
+            t += lead
+            for k, w in enumerate(words):
+                value, bits = w if isinstance(w, tuple) else (w, 8)
+                for i in range(7, 7 - bits, -1):
+                    self.schedule += [(t, {sck: 0, mosi: value >> i & 1}), (t + half, {sck: 1})]
+                    if bits == 8:
+                        self.samples.append((t + half, n, k))
+                    t += 2 * half
+            self.schedule += [(t, {sck: 0}), (t + half, {cs: 1})]
+            t += half + gap
+        self.end = t
+        self.drive = {cs: 1, sck: 0, mosi: 0}
+        self._miso, self._since = 0, 0
+
+    def tick(self, t: int, levels: int) -> None:
+        miso = _bit(levels, self.miso)
+        if miso != self._miso:
+            self._miso, self._since = miso, t
+        while self.samples and self.samples[0][0] == t:
+            _, n, k = self.samples.pop(0)
+            if t - self._since < self.setup:
+                self.error(t, f"MISO stable {t - self._since} clocks before SCK rose")
+            words = self.received[n]
+            if len(words) == k:
+                words.append(0)
+            words[k] = words[k] << 1 | miso
+        while self.schedule and self.schedule[0][0] <= t + 1:
+            self.drive.update(self.schedule.pop(0)[1])
+
+
 # ---------------------------------------------------------------------------------- I2C
 
 class I2cTarget(Device):

@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """SPI master (one program, 4 modes) judged by the reference SPI slave: random words both ways,
 CS_N around each word, SCK idle level, MOSI setup and hold around every sampling edge. At CLKDIV 1
-MISO arrives through the input synchronizer with the least margin."""
+MISO arrives through the input synchronizer with the least margin. SPI target driven by the
+reference SPI master at clk / 28: random words both ways in transfers of several words, the
+answer 0xFF when the host has none, MISO released while CS_N is high, a word cut by CS_N rising
+dropped, IRQ 0 when the RX FIFO overflows."""
 import random
 import sys
 import unittest
@@ -11,12 +14,12 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[1] / "test" / "shared"))
 sys.path.insert(0, str(HERE.parents[1] / "sim" / "model"))
 from bench import Bench                                  # noqa: E402
-from devices import SpiSlave                             # noqa: E402
+from devices import SpiMaster, SpiSlave                  # noqa: E402
 
 MOSI, SCK, CS, MISO = 0, 1, 2, 3
 
 
-class SpiMaster(unittest.TestCase):
+class SpiMasterTest(unittest.TestCase):
 
     def test_all_modes(self):
         rng = random.Random(3)
@@ -37,6 +40,41 @@ class SpiMaster(unittest.TestCase):
                 self.assertEqual(bench.wave(SCK)[-1], str(mode >> 1), "SCK back at CPOL")
                 cs_low = [n for lv, n in bench.runs(CS) if lv == 0]
                 self.assertEqual(len(cs_low), len(sent), "CS_N low once per word")
+
+
+class SpiTargetTest(unittest.TestCase):
+    SCK, MOSI, CS, MISO = 0, 1, 2, 3
+
+    def run_target(self, transfers, answers, host_word_clocks=0):
+        bench = Bench(pullups=1 << self.MISO, host_word_clocks=host_word_clocks)
+        bench.load(0, (HERE / "spi_target.asm").read_text())
+        master = bench.add(SpiMaster(self.SCK, self.MOSI, self.MISO, self.CS, transfers, half=14,
+                                     start=50, lead=14, gap=40))
+        bench.send(0, [a << 8 for a in answers])
+        bench.start(1)
+        bench.run(master.end + 50)
+        return bench, master
+
+    def test_transfers(self):
+        rng = random.Random(4)
+        transfers = [[rng.randrange(256) for _ in range(n)] for n in (1, 4, 9)]
+        answers = [rng.randrange(256) for _ in range(12)]
+        bench, master = self.run_target(transfers, answers)
+        self.assertEqual(bench.errors(), [])
+        self.assertEqual([w & 0xFF for w in bench.received[0]], sum(transfers, []), "MOSI")
+        self.assertEqual(sum(master.received, []), answers + [0xFF] * 2, "MISO; 0xFF once out")
+        released = [bench.chip.pins[1] >> self.MISO & 1 for _ in range(1)]
+        self.assertEqual(released, [0], "MISO released after the transfer")
+
+    def test_word_cut_by_cs(self):
+        bench, master = self.run_target([[0x12, (0x34, 5)], [0x56]], [0xA1, 0xA2, 0xA3])
+        self.assertEqual([w & 0xFF for w in bench.received[0]], [0x12, 0x56])
+        self.assertEqual(master.received, [[0xA1], [0xA3]], "the cut word's answer is used up")
+
+    def test_rx_fifo_overflow(self):
+        bench, master = self.run_target([[k & 0xFF for k in range(140)]], [], host_word_clocks=10 ** 9)
+        self.assertTrue(bench.chip.sms[0].irq_flags[0])
+        self.assertEqual(bench.chip.sms[0].rx_level, 133)
 
 
 if __name__ == "__main__":
