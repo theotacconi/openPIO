@@ -17,7 +17,7 @@ from emu import PIN_ALL, PinBus, StateMachine, pin_values
 STATUS, WRAP, SIDESET, PINBASE, PIN_MASK, MISC, CLKDIV, COND_CFG = range(8)
 COND_CFG01, COND_CFG23, PAU_MODE, CRC_CFG, CRC_POLY_LO, CRC_POLY_HI, CRC_RES_LO, CRC_RES_HI = range(8, 16)
 (IRQ, PC, X, Y, ISR, OSR, COUNTS, COND01, COND23, CRC_LO, CRC_HI, SM_STATUS, FIFO_LEVEL, IRQ_MASK,
- CLKDIV_FRAC) = range(16, 31)
+ CLKDIV_FRAC, TIME) = range(16, 32)
 # Chip registers
 CTRL, GPIO, PINS, PINS_OE, PINS_IN, IRQ_SUM, ID, PADS_OUT, PADS_IN, PADS_BIDIR = range(0x20, 0x2A)
 
@@ -157,6 +157,7 @@ class Chip:
             SM_STATUS: lambda: sm.status_word(),
             FIFO_LEVEL: lambda: sm.rx_level << 8 | sm.tx_level,
             IRQ_MASK: lambda: self.irq_mask[n],
+            TIME: lambda: sm.time,
         }
         return regs[addr]() & 0xFFFF if addr in regs else 0
 

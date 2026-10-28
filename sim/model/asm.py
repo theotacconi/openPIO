@@ -57,8 +57,8 @@ JC_ALWAYS, JC_NEVER, JC_XDEC, JC_YDEC = 0, 1, 2, 3   # 4..7 = COND0..COND3
 # Operand codes (IN source, OUT destination, ALU source / destination)
 R_PINS, R_PINDIRS, R_X, R_Y, R_ISR, R_OSR, R_NULL, R_SPECIAL = range(8)
 OPERAND_NAMES = ["pins", "pindirs", "x", "y", "isr", "osr", "null", "special"]
-IN_SRC = {"pins": R_PINS, "x": R_X, "y": R_Y, "isr": R_ISR, "osr": R_OSR, "null": R_NULL,
-          "status": R_SPECIAL}
+IN_SRC = {"pins": R_PINS, "time": R_PINDIRS, "x": R_X, "y": R_Y, "isr": R_ISR, "osr": R_OSR,
+          "null": R_NULL, "status": R_SPECIAL}
 OUT_DEST = {"pins": R_PINS, "pindirs": R_PINDIRS, "x": R_X, "y": R_Y, "isr": R_ISR,
             "null": R_NULL, "pc": R_SPECIAL}
 ALU_DEST = {"pins": R_PINS, "pindirs": R_PINDIRS, "x": R_X, "y": R_Y, "isr": R_ISR, "osr": R_OSR,

@@ -296,6 +296,7 @@ class StateMachine:
         self.dlymul = 1
         self.clkdiv_counter = self.clkdiv_accum = self._current_clkdiv_period = 0
         self.cycle_count = 0
+        self.time = 0                                   # TIME: strobes since RESET, 16 bits
         self.history.clear()
         # PAU
         self.pau_ctl = 0
@@ -714,6 +715,7 @@ class StateMachine:
 
     def _end_strobe(self, trace_pc: int) -> None:
         self.cond_prev = self._cond_seen
+        self.time = (self.time + 1) & 0xFFFF
         self.prev_gpio_in = self.gpio_in & PIN_ALL
         self.history.append(self._format_trace_row(trace_pc, self._current_instr_str))
 
@@ -880,8 +882,8 @@ class StateMachine:
                 val = sum(b << i for i, b in enumerate(bits))
             elif src == R_PINS:
                 val = (self.gpio_in >> (self.in_base & 15)) & mask
-            elif src == R_PINDIRS:
-                val = 0
+            elif src == R_PINDIRS:                      # TIME
+                val = self.time & mask
             else:
                 val = self._operand(src) & mask
             if self.shift_in_right:
