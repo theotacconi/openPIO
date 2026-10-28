@@ -10,10 +10,11 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[1] / "test" / "shared"))
+sys.path.insert(0, str(HERE.parents[1] / "sim" / "model"))
+from asm import condition                                # noqa: E402
 from bench import Bench, Script                          # noqa: E402
 
 PADS_IN = 0xF8FF                                         # pins with an input pad (HOST.md)
-GPIO, IRQ_FLAG, INV = 0x00, 0x20, 0x80                   # condition sources (ISA.md)
 
 
 def wave(n, seed, trigger_pin=None, rise=True, at=0):
@@ -54,19 +55,19 @@ class LogicAnalyzer(unittest.TestCase):
 
     def test_pin_rising(self):
         levels = wave(600, 1, trigger_pin=5, at=200)
-        samples = run(levels, GPIO | 5, 100)
+        samples = run(levels, condition("gpio 5"), 100)
         self.assertEqual(len(samples), 100)
         self.assertIn(self.offset(samples, levels, 2) - 200, range(0, 5), "within 4 clocks")
 
     def test_pin_falling_slower(self):
         levels = wave(1500, 2, trigger_pin=12, rise=False, at=300)
-        samples = run(levels, INV | GPIO | 12, 150, clkdiv=3)
+        samples = run(levels, condition("!gpio 12"), 150, clkdiv=3)
         self.assertEqual(len(samples), 150, "more than the FIFO holds: the host reads along")
         self.assertIn(self.offset(samples, levels, 6) - 300, range(0, 13))
 
     def test_irq_flag(self):
         levels = wave(500, 3)
-        samples = run(levels, IRQ_FLAG | 2, 50, irq_at=150)
+        samples = run(levels, condition("irq 2"), 50, irq_at=150)
         taken = self.offset(samples, levels, 2) + 2           # inputs reach the SM 2 clocks late
         self.assertIn(taken - 150, range(0, 3), "the first sample within 2 clocks of the flag")
 
