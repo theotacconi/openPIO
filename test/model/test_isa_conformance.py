@@ -310,6 +310,12 @@ class Wait(unittest.TestCase):
         run(sm, 1)
         self.assertEqual((sm.timeout_flag, sm.pc), (True, 3))
 
+    def test_edge_between_the_values_two_strobes_see(self):
+        """IRQ 0 is clear when `irq 0` runs and set when the WAIT runs: a rising edge."""
+        sm = sm_of("irq 0\nwait rise irq 0\nset x, 1" + HALT)
+        run(sm, 3)
+        self.assertEqual(sm.x, 1)
+
     def test_polarity_on_an_inverted_condition(self):
         sm = sm_of(".cond1 !gpio 2\njmp cond1, 3\nwait 1 gpio 2\nset x, 1" + HALT)
         sm.gpio_in = 1 << 2

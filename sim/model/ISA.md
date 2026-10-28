@@ -213,9 +213,9 @@ The condition is the selected signal, inverted when `Inv` = 1.
 | 10 | 0 | bit error (sticky): a monitored TX bit read back different | |
 | 11..15 | 0 | 0 | |
 
-**Edges.** Each strobe the SM keeps the four condition values; a WAIT edge compares them with
-the current ones. The first strobe after a slot is rewritten compares against the old
-definition's value.
+**Edges.** A WAIT edge is a change between the values two strobes in a row see (after the PAU
+step, before the instruction): each strobe keeps the four values it saw. The first strobe after
+a slot is rewritten compares against the old definition's value.
 
 **Registers.** Each SM has COND_CFG (written by the host) and COND (read by JMP and WAIT),
 4 x 8 bits each. Both are written one condition at a time with the same 16-bit word:
@@ -364,9 +364,12 @@ RX: PUSH -> front (4) -> SRAM ring -> OUT register, or the front (if nothing wai
 - **Readers** (host RX_POP, a peer's PULL PEER) take the OUT register's word; if it is empty, the
   oldest front word when the ring is empty and no word is moving to the OUT register; else
   nothing (RX_POP reads 0, PULL PEER sees an empty FIFO).
-- In a clock the host acts first, then the SMs, in parallel: a word an SM pushes into its RX
-  FIFO is there for its peer from the next clock, and a PUSH PEER word lands in the peer's TX
-  FIFO at the end of the clock (accepted if it had room at the start).
+- In a clock the SMs act in parallel, and with them a host access (Timing within a clock):
+  writers are accepted by the state at the clock start and their word lands at the end, after
+  the moves below (a word the host or the peer pushes is the SM's from the next clock); a word
+  an SM pushes into its RX FIFO is there for its peer from the next clock. A host access goes
+  first: in a clock with a host TX_PUSH, a PUSH PEER into that FIFO is refused, and with a host
+  RX_POP, which takes its word before the SMs, a PULL PEER from that FIFO finds it empty.
 - **At the end of each clock**:
   1. Words read from the SRAM in the clock before land in the TX front and the OUT register.
   2. Bypasses, without the SRAM: the IN word moves to the TX front when the ring is empty, no
@@ -412,7 +415,9 @@ Every clock, in this order (emu.py and chip.py follow it; the RTL must match it)
 
 1. **Inputs.** `gpio_in` is the pins as they were two clocks before: every input passes a
    2-flip-flop synchronizer (host SPI pins too).
-   A host access (an SPI word just completed, HOST.md) acts before the SMs.
+   A host access (an SPI word, HOST.md) takes one clock, in parallel with the SMs: its reads
+   take the state at the clock start, its writes land at the end, after the SMs' (the host's
+   write wins) and after the FIFO moves of step 4.
 2. **Each enabled SM**, in parallel (the peer's flags and FIFO words as at the clock start):
    1. The prescaler decides whether this clock is a strobe. On other clocks nothing else of
       the SM changes.
@@ -421,7 +426,7 @@ Every clock, in this order (emu.py and chip.py follow it; the RTL must match it)
    3. A delaying SM counts down; a stalled one re-evaluates its stall; else the instruction at PC
       issues: side-set first, then the instruction, which sees the PAU and condition state of
       step 2 and the pin latches with its own side-set applied.
-   4. The four condition values are kept for the WAIT edges of the next strobe.
+   4. The four condition values this strobe saw are kept for the WAIT edges of the next one.
 3. **Pin latches.** The writes of the clock are applied, SM by SM in index order and each SM's
    in program order: the highest SM wins a pin, an instruction wins over its own side-set.
 4. **FIFO data paths** (every SM, enabled or not): SRAM reads land, bypasses move, each SRAM
@@ -477,7 +482,9 @@ the shift counts. A program carries all of it as assembler directives (`sim/mode
 - ALU ISR leaves the ISR count at 0 (empty, as RP2040 `MOV ISR`), not 16: a program can drop a
   partial word without pushing it.
 - Peer SMs act in parallel: flags and FIFO words written to the peer are seen from the next
-  clock (the v2 model first let SM 1 see SM 0's writes in the same clock).
+  clock (the v2 model first let SM 1 see SM 0's writes in the same clock). A host access takes
+  one clock with them (the model first applied it between clocks). WAIT edges compare the
+  values two strobes see (the model first kept them after the instruction).
 - After CTRL.RESET the OSR is empty (`osr_count` = 16; v1: 0, a full OSR of zeros), the IRQ
   flags are clear and the CRC holds its initial value.
 - FIFOs of 133 words (4 front + 128 in a data SRAM per SM + an IN / OUT register; v1: 4).

@@ -10,7 +10,8 @@ ISA.md. Reference model: `sim/model/chip.py`.
 - Mode 0 (CPOL = 0, CPHA = 0), MSB first, sampled by the system clock: SCLK high and low phases
   of at least 3 `clk` cycles (SCLK <= `clk` / 6, 8.3 MHz at 50 MHz).
 - A transaction is CS_N low, a 16-bit header, then any number of 16-bit data words (a burst),
-  then CS_N high. A word is executed when its last bit is in.
+  then CS_N high. Each word is a host access of one clock (ISA.md, Timing within a clock): a
+  read word in its first clock, a write word in the clock after its last bit is in.
 
 ```
 header:  15  14  13 | 12  11 | 10 .. 6 | 5 .. 0
@@ -89,7 +90,7 @@ RW*: written only while the SM is stopped (CTRL EN = 0); writes while it runs ar
   COND = COND_CFG, DLYMUL = 1, CRC = its initial value, CLKDIV, CLKDIV_FRAC and PAU_BAUD
   reloaded.
   Configuration, IMEM and the pin latches (shared) are kept.
-- **STEP** (bit i, SM stopped): SM i runs until it has executed one strobe.
+- **STEP** (bit i, SM stopped): from the next clock SM i runs until it has executed one strobe.
 - A CTRL write sets EN to its bits [3:0] and applies RESET then STEP in the same clock: SMs
   enabled together start on the same clock.
 

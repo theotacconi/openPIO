@@ -2,8 +2,8 @@
 
 step() is one clock. On a strobe (every Nth clock, CLKDIV), in order: the PAU advances (TX line, RX
 sampling), then the SM delays, re-evaluates a stall, or executes the instruction at PC; at the
-end the condition values are kept for WAIT edges. Traces are concise fixed-width rows, one per
-strobe.
+end the condition values it saw are kept for WAIT edges. Traces are concise fixed-width rows,
+one per strobe.
 """
 
 from __future__ import annotations
@@ -189,6 +189,7 @@ class StateMachine:
         self.peer_irq_writes: list[tuple[int, bool]] = []     # land at the clock end (end_clock)
         self.peer_tx_word: int | None = None                  # PUSH PEER word, same
         self._tx_pulled = self._rx_fresh = 0                  # own FIFO moves in this clock
+        self.host_pushing = self.host_popped = False          # a host access to the FIFOs now
         self.peer_tx_fifo: deque[int] = deque(maxlen=fifo_depth)
         self.peer_rx_fifo: deque[int] = deque(maxlen=fifo_depth)
         self.history: deque[str] = deque(maxlen=15)
@@ -339,19 +340,29 @@ class StateMachine:
         return (not self.tx_back and self.tx_in is None and self.tx_flight is None
                 and len(self.tx_fifo) + self._tx_pulled < self.fifo_depth)
 
+    def tx_where(self) -> str | None:
+        """Where a TX word of the host or the peer goes, by the state at the clock start: the
+        front if nothing waits, else the IN register if it is free; else None (full)."""
+        if self._tx_direct():
+            return "front"
+        return "in" if self.buffer and self.tx_in is None else None
+
     def tx_room(self) -> bool:
-        return self._tx_direct() or self.buffer and self.tx_in is None
+        return self.tx_where() is not None
+
+    def tx_place(self, word: int, where: str) -> None:
+        """A word lands where tx_where() said, at the end of the clock (after the FIFO moves)."""
+        if where == "front":
+            self.tx_fifo.append(word & 0xFFFF)
+        else:
+            self.tx_in = word & 0xFFFF
 
     def tx_write(self, word: int) -> bool:
-        """Write a TX word as the host or the peer does: into the front if nothing waits, else
-        into the IN register if it is free; else refused (full for this write)."""
-        if self._tx_direct():
-            self.tx_fifo.append(word & 0xFFFF)
-        elif self.buffer and self.tx_in is None:
-            self.tx_in = word & 0xFFFF
-        else:
-            return False
-        return True
+        """Write a TX word between clocks (a test bench's host): refused when full."""
+        where = self.tx_where()
+        if where is not None:
+            self.tx_place(word, where)
+        return where is not None
 
     def rx_read(self) -> int | None:
         """Read an RX word as the host or the peer does: the OUT register, else the front when
@@ -365,15 +376,18 @@ class StateMachine:
         return None
 
     def end_clock(self) -> None:
-        """End of a clock, after every SM: the writes to the peer land (IRQ flags, a PUSH PEER
-        word), so SMs act in parallel (ISA.md, Multiple state machines)."""
+        """End of a clock, after every SM: the writes to the peer's flags land, so SMs act in
+        parallel (ISA.md, Multiple state machines)."""
         self._tx_pulled = self._rx_fresh = 0
         target = self.peer.irq_flags if self.peer is not None else self.peer_irq_flags
         for idx, val in self.peer_irq_writes:
             target[idx] = val
         self.peer_irq_writes.clear()
+
+    def land_peer_word(self) -> None:
+        """After the FIFO moves of the clock: a PUSH PEER word lands in the peer's TX FIFO."""
         if self.peer_tx_word is not None:
-            assert self.peer.tx_write(self.peer_tx_word), "room was seen at the clock start"
+            self.peer.tx_place(*self.peer_tx_word)
             self.peer_tx_word = None
 
     @property
@@ -702,7 +716,7 @@ class StateMachine:
     # ------------------------------------------------------------------ execution
 
     def _end_strobe(self, trace_pc: int) -> None:
-        self.cond_prev = [self._cond_value(s) for s in range(4)]
+        self.cond_prev = self._cond_seen
         self.prev_gpio_in = self.gpio_in & PIN_ALL
         self.history.append(self._format_trace_row(trace_pc, self._current_instr_str))
 
@@ -714,6 +728,7 @@ class StateMachine:
             self.end_clock()
             self.bus.commit()
             self.buffer_clock()
+            self.land_peer_word()
 
     def _clock(self) -> None:
         self.cycle_count += 1
@@ -734,6 +749,7 @@ class StateMachine:
         self.strobed = True
         self._pau_tx_strobe()
         self._pau_rx_strobe()
+        self._cond_seen = [self._cond_value(s) for s in range(4)]   # what this strobe sees
 
         if self.delay_counter > 0:
             self.delay_counter -= 1
@@ -794,7 +810,7 @@ class StateMachine:
             self._tx_pulled += 1
             return self.tx_fifo.popleft()
         if self.peer is not None:
-            return self.peer.rx_read()
+            return None if self.peer.host_popped else self.peer.rx_read()
         return self.peer_rx_fifo.popleft() if self.peer_rx_fifo else None
 
     def _push_word(self, peer: bool) -> bool:
@@ -807,9 +823,10 @@ class StateMachine:
             self._rx_fresh += 1
             return True
         if self.peer is not None:
-            if not self.peer.tx_room():
+            where = None if self.peer.host_pushing else self.peer.tx_where()
+            if where is None:
                 return False
-            self.peer_tx_word = self.isr
+            self.peer_tx_word = (self.isr, where)
             return True
         if len(self.peer_tx_fifo) >= self.fifo_depth:
             return False
