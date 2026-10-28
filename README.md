@@ -21,6 +21,7 @@ openPIO gives you programmable state machines backed by dedicated, toggleable mi
 - **Instruction set**: [sim/model/ISA.md](sim/model/ISA.md): instructions, programmable conditions, the PAU (Protocol Acceleration Unit: line codes, bit stuffing, CRC, clock recovery), FIFOs, timing within a clock.
 - **Host interface**: [sim/model/HOST.md](sim/model/HOST.md): SPI commands, registers, pins.
 - **Programs**: [programs/README.md](programs/README.md): 19 protocols, a logic analyzer and an edge timestamper, each judged on the pins by a reference device.
+- **Learning a protocol**: [sim/learn/learn.py](sim/learn/learn.py) finds a protocol's parameters from a recording of the wire and writes the openPIO programs that receive and send it.
 - **Datasheet**: [docs/info.md](docs/info.md) (Tiny Tapeout).
 
 > [!NOTE]

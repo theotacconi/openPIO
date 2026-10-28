@@ -6,6 +6,8 @@ on:
   push:
     paths:
       - 'sim/model/**'
+      - 'sim/learn/**'
+      - 'test/learn/**'
       - 'test/model/**'
       - 'test/shared/**'
       - 'programs/**'
@@ -28,6 +30,7 @@ jobs:
         run: |
           for t in test/model/test_*.py; do python3 "$t"; done
           (cd test/shared && python3 test_devices.py)
+          python3 test/learn/test_learn.py
 
       - name: Protocol programs and their table
         run: |
