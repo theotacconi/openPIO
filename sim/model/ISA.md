@@ -364,7 +364,9 @@ RX: PUSH -> front (4) -> SRAM ring -> OUT register, or the front (if nothing wai
 - **Readers** (host RX_POP, a peer's PULL PEER) take the OUT register's word; if it is empty, the
   oldest front word when the ring is empty and no word is moving to the OUT register; else
   nothing (RX_POP reads 0, PULL PEER sees an empty FIFO).
-- In a clock the host acts first, then the SMs (in index order).
+- In a clock the host acts first, then the SMs, in parallel: a word an SM pushes into its RX
+  FIFO is there for its peer from the next clock, and a PUSH PEER word lands in the peer's TX
+  FIFO at the end of the clock (accepted if it had room at the start).
 - **At the end of each clock**:
   1. Words read from the SRAM in the clock before land in the TX front and the OUT register.
   2. Bypasses, without the SRAM: the IN word moves to the TX front when the ring is empty, no
@@ -381,7 +383,9 @@ RX: PUSH -> front (4) -> SRAM ring -> OUT register, or the front (if nothing wai
 
 - **Peer**: SM i and SM i XOR 1 are peers (0 and 1, 2 and 3). Peer IRQ flags are the peer's own
   flags: `irq peer 3` sets flag 3 of the peer, a peer IRQ condition reads the peer's flags.
-  PUSH / PULL `Peer` reach the peer's FIFOs (see FIFOs).
+  PUSH / PULL `Peer` reach the peer's FIFOs (see FIFOs). Peers act in parallel: an SM reads its
+  peer's flags as they were at the start of the clock, and its writes to them land at the end
+  (after the peer's own write to the same flag in that clock).
 - **Pin positions**: the ISA has 16 pins, 0..15. An implementation connects each to pads (the
   chip's: HOST.md, Pins). A pin without an input pad reads 0, one without an output pad drives
   nothing; on an output-only pad the direction latch and open drain have no effect, the pad always
@@ -409,7 +413,7 @@ Every clock, in this order (emu.py and chip.py follow it; the RTL must match it)
 1. **Inputs.** `gpio_in` is the pins as they were two clocks before: every input passes a
    2-flip-flop synchronizer (host SPI pins too).
    A host access (an SPI word just completed, HOST.md) acts before the SMs.
-2. **Each enabled SM** (in index order, but they act as in parallel):
+2. **Each enabled SM**, in parallel (the peer's flags and FIFO words as at the clock start):
    1. The prescaler decides whether this clock is a strobe. On other clocks nothing else of
       the SM changes.
    2. The PAU transmitter advances (the line of this strobe), then the receiver samples
@@ -472,6 +476,8 @@ the shift counts. A program carries all of it as assembler directives (`sim/mode
 - Timing within a clock written down, with the 2-clock input synchronizer in the model.
 - ALU ISR leaves the ISR count at 0 (empty, as RP2040 `MOV ISR`), not 16: a program can drop a
   partial word without pushing it.
+- Peer SMs act in parallel: flags and FIFO words written to the peer are seen from the next
+  clock (the v2 model first let SM 1 see SM 0's writes in the same clock).
 - After CTRL.RESET the OSR is empty (`osr_count` = 16; v1: 0, a full OSR of zeros), the IRQ
   flags are clear and the CRC holds its initial value.
 - FIFOs of 133 words (4 front + 128 in a data SRAM per SM + an IN / OUT register; v1: 4).

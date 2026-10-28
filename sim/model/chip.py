@@ -49,7 +49,6 @@ class Chip:
                     for i in range(n_sm)]
         for sm in self.sms:
             sm.peer = self.sms[sm.index ^ 1]
-            sm.peer_irq_flags = sm.peer.irq_flags
         self.irq_mask = [0xFF] * n_sm
         self.spi_word_clocks = spi_word_clocks
         self.pads_out, self.pads_in, self.pads_bidir = pads
@@ -72,9 +71,12 @@ class Chip:
             self._sync = [self._sync[1], self.pin_in & self.pads_in]
             for sm in self.sms:
                 sm.gpio_in = gpio_in
+                sm.peer_irq_flags = list(sm.peer.irq_flags)     # as at the clock start
             for sm in self.sms:
                 if self.en >> sm.index & 1:
                     sm.step()
+            for sm in self.sms:
+                sm.end_clock()
             self.bus.commit()
             for sm in self.sms:
                 sm.buffer_clock()
@@ -245,7 +247,9 @@ class Chip:
         """STEP: clock SM until it has executed one strobe."""
         sm.gpio_in = self.gpio_in
         while True:
+            sm.peer_irq_flags = list(sm.peer.irq_flags)
             sm.step()
+            sm.end_clock()
             self.bus.commit()
             if sm.strobed:
                 return
