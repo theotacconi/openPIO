@@ -303,6 +303,15 @@ class Wait(unittest.TestCase):
         run(sm, 1)
         self.assertEqual((sm.timeout_flag, sm.pc), (True, 3))
 
+    def test_a_pin_changed(self):
+        """True in the strobe where `gpio_in` differs from the previous strobe's, then no more."""
+        sm = sm_of("wait 1 status pins_changed\nset x, 1\njmp status pins_changed, 0\nset y, 1" + HALT)
+        run(sm, 3)
+        self.assertEqual(sm.x, 0, "nothing changes: waiting")
+        sm.gpio_in = 1 << 12
+        run(sm, 4)                                   # WAIT ends, set x, jmp not taken, set y
+        self.assertEqual((sm.x, sm.y), (1, 1), "seen in one strobe, not in the next")
+
     def test_edge_between_the_values_two_strobes_see(self):
         """IRQ 0 is clear when `irq 0` runs and set when the WAIT runs: a rising edge."""
         sm = sm_of("irq 0\nwait rise irq 0\nset x, 1" + HALT)

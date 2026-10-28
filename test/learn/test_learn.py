@@ -86,6 +86,18 @@ class Learn(unittest.TestCase):
         p = infer_async(Capture.from_edges_program(bench.received[0]))
         self.check(p, fmt)
 
+    def test_from_the_chip_recording_of_all_pins(self):
+        """The same from programs/logic/record.asm: every pin recorded, the UART line taken."""
+        fmt, data = (7, "odd", 2, 0, 45), values((7,), 11)
+        bench = Bench(pullups=0)
+        bench.load(0, (ROOT / "programs/logic/record.asm").read_text())
+        tx = bench.add(transmitter(fmt, data, 11))
+        bench.run(4)
+        bench.start(1)
+        bench.run(tx.dev.end + 200)
+        p = infer_async(Capture.from_record_program(bench.received[0], PIN))
+        self.check(p, fmt)
+
     def test_generated_programs(self):
         """Learned from one transmission: the RX program receives another, the TX program
         sends values the reference receiver checks (format, parity, stop bits)."""

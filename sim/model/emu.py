@@ -620,7 +620,8 @@ class StateMachine:
             self.osr_count >= (self.pull_thresh or 16), self.isr_count >= (self.push_thresh or 16),
             self.tx_level == 0,
             self.rx_level >= self.capacity,
-        ][idx] if idx < 8 else 0)
+            self.gpio_in != self.prev_gpio_in,          # a pin changed since the last strobe
+        ][idx] if idx < 9 else 0)
 
     def status_word(self) -> int:
         """The STATUS operand: SM status [7:0], PAU status [15:8] (ISA.md)."""
