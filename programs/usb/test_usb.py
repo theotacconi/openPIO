@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """USB low-speed transmitter and receiver judged by the reference USB devices: NRZI, stuffing
-in its own bit time, CRC16 against CRC-16/USB, EOP timing, CRC errors."""
+in its own bit time, CRC16 against CRC-16/USB, EOP timing, CRC errors, a packet broken by SE1
+(an illegal line state) dropped and the next one received."""
 import random
 import sys
 import unittest
@@ -11,7 +12,7 @@ sys.path.insert(0, str(HERE.parents[1] / "test" / "shared"))
 sys.path.insert(0, str(HERE.parents[1] / "sim" / "model"))
 from bench import Bench                                  # noqa: E402
 from chip import IRQ                                     # noqa: E402
-from devices import UsbRx, UsbTx, crc16_usb              # noqa: E402
+from devices import SE1, UsbRx, UsbTx, crc16_usb, usb_states   # noqa: E402
 
 DM, DP, BIT = 0, 1, 8
 DATA0, DATA1 = 0xC3, 0x4B
@@ -62,6 +63,19 @@ class UsbRxTest(unittest.TestCase):
             expected = [0x80, pid] + p + [crc & 0xFF, crc >> 8]
             self.assertEqual(words[n:n + len(expected)], expected)
             n += len(expected)
+
+    def test_se1(self):
+        broken = usb_states(DATA0, [0x12, 0x34, 0x56])
+        broken[30:32] = [SE1, SE1]
+        bench = Bench()
+        bench.load(0, (HERE / "usb_rx.asm").read_text())
+        tx = bench.add(UsbTx(DM, DP, BIT, [broken, (DATA1, [0x9A])], start=20, gap=8))
+        bench.start(1)
+        bench.run(tx.end + 50)
+        self.assertEqual([f for f in bench.chip.sms[0].irq_flags[:3]], [True, False, True],
+                         "IRQ 2 for the SE1, IRQ 0 for the next packet")
+        self.assertEqual([w >> 8 for w in bench.received[0]][-5:], [0x80, DATA1, 0x9A] + [
+            crc16_usb([0x9A]) & 0xFF, crc16_usb([0x9A]) >> 8])
 
     def test_loopback(self):
         """The transmitter program into the receiver program, on two SMs."""

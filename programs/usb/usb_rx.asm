@@ -2,7 +2,8 @@
 ; USB low-speed receiver. Pins: D- = in_base, D+ = in_base + 1. 8 strobes a bit (PAU half-bit 4).
 ; Every byte of a packet goes to the RX FIFO (bits 15:8) as it arrives: SYNC, PID, payload, CRC.
 ; At the end of packet (SE0) IRQ 0 if the CRC16 of the payload is right, IRQ 1 if not (also for
-; packets without a CRC16: tokens, handshakes).
+; packets without a CRC16: tokens, handshakes). SE1 (both lines high, an illegal state) raises IRQ 2
+; and drops the packet up to its EOP.
 .in_pins 0               ; D-, D+
 .pau enc=nrzi diff stuff=6 baud=4
 .crc width=16 poly=0x8005 init=ones xorout=1 res=0x800D
@@ -18,10 +19,15 @@
     set pau_ctl, rx|stuff|crc
 bit:
     jmp pau rx_ready, take
+    jmp pau se1, illegal
     jmp !pau se0, bit       ; until SE0 (DIFF: it decodes no bit)
     jmp pau crc_ok, good
     irq 1
 .wrap
+illegal:
+    irq 2
+    wait 1 pau se0          ; the rest of the packet, to its EOP
+    jmp 0
 good:
     irq 0
     jmp 0
