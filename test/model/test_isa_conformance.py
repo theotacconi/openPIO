@@ -263,7 +263,7 @@ class CrcFeed(unittest.TestCase):
                 fb = (ref >> 7 & 1) ^ b
                 ref = (ref << 1) & 0xFF
                 ref ^= 0x31 if fb else 0
-            self.assertEqual(sm.crc, ref)
+            self.assertEqual(sm.crc >> 24, ref)                  # MSB-aligned
 
 
 class CrcOfTheWire(unittest.TestCase):
@@ -286,9 +286,9 @@ class CrcOfTheWire(unittest.TestCase):
         run(sm, 2)
         self.assertEqual((sm.crc, len(sm.tx_queue)), (0, 8), "queued, not yet sent")
         run(sm, 1)                                       # bit 0 (a 1) starts
-        self.assertEqual(sm.crc, self.crc8([1]))
+        self.assertEqual(sm.crc >> 24, self.crc8([1]))
         run(sm, 14)                                      # bit 7 starts on strobe 17
-        self.assertEqual(sm.crc, self.crc8([0xA5 >> i & 1 for i in range(8)]))
+        self.assertEqual(sm.crc >> 24, self.crc8([0xA5 >> i & 1 for i in range(8)]))
 
     def test_append_after_the_data_bits(self):
         sm = sm_of(self.PAU + "set pau_ctl, tx|crc\nout pins, 8\npau crc_append" + HALT)
@@ -297,7 +297,7 @@ class CrcOfTheWire(unittest.TestCase):
         self.assertEqual((sm.pc, len(sm.tx_queue)), (2, 1), "waits while data bits are queued")
         run(sm, 1)
         ref = self.crc8([0xA5 >> i & 1 for i in range(8)])
-        self.assertEqual((sm.pc, sm.crc), (3, ref))
+        self.assertEqual((sm.pc, sm.crc >> 24), (3, ref))
         self.assertEqual([q[0] for q in sm.tx_queue], [ref >> i & 1 for i in range(7, -1, -1)])
         self.assertFalse(any(q[3] for q in sm.tx_queue), "appended bits never feed the CRC")
 
@@ -332,6 +332,19 @@ class Wait(unittest.TestCase):
         sm.gpio_in = 1
         run(sm, 4)                                       # high since before the WAIT
         self.assertEqual(sm.x, 0, "already high: no rising edge")
+        sm.gpio_in = 0
+        run(sm, 1)
+        sm.gpio_in = 1
+        run(sm, 2)
+        self.assertEqual(sm.x, 1)
+
+    def test_no_edge_on_the_first_strobe_after_reset(self):
+        """The first strobe compares its values with themselves: a pin that rose since the
+        RESET is no edge; one that rises after the first strobe is."""
+        sm = sm_of("wait rise gpio 0\nset x, 1" + HALT)
+        sm.gpio_in = 1                                   # low at RESET, high at the first strobe
+        run(sm, 3)
+        self.assertEqual((sm.pc, sm.x), (0, 0))
         sm.gpio_in = 0
         run(sm, 1)
         sm.gpio_in = 1

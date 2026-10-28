@@ -6,7 +6,7 @@
 // inputs below "instruction" are valid only with stb) acts on *_s and gives the next state.
 //
 // Queues hold their oldest bit at index 0. A TX entry is a bit and the PAU_CTL flags it was
-// queued with (stuffing, monitor, CRC). The CRC is kept MSB-aligned (crc_a = CRC << 32 - width):
+// queued with (stuffing, monitor, CRC). The CRC and its registers are MSB-aligned (ISA.md, PAU):
 // a step is then the same for every width, crc_a[31] is the bit that leaves, and a CRC append
 // is crc_a bit-reversed. It takes at most one line bit (a TX bit as it starts, or an RX bit) and
 // one CRC feed bit a strobe: two steps of a 32-bit LFSR.
@@ -27,7 +27,7 @@ module pau (
     input  wire        sequal,       // stuffing after equal bits (else after 1s)
     input  wire [4:0]  baud_rst,     // PAU_BAUD after RESET
     input  wire [6:0]  crc_cfg,      // [4:0] width - 1, [5] init ones, [6] append complement
-    input  wire [31:0] crc_poly,
+    input  wire [31:0] crc_poly,     // MSB-aligned; bits below the width are ignored
     input  wire [31:0] crc_res,
     input  wire [3:0]  in_base,
     input  wire [15:0] gpio_in,
@@ -58,7 +58,7 @@ module pau (
     output wire [15:0] rx_bits_s,    // the oldest 16 bits of the RX queue, after step 2
     output wire        drive,        // TX drives pin out_base (+1 with DIFF): from flip-flops
     output wire        line,         // its level (INV applied)
-    output wire [31:0] crc           // CRC, right-aligned (CRC_LO / CRC_HI)
+    output wire [31:0] crc           // CRC_LO / CRC_HI, MSB-aligned
 );
 
     // ------------------------------------------------------------------ configuration
@@ -75,11 +75,11 @@ module pau (
     wire       se0    = ~pin_in & ~pin_in1;
     wire       se1    = pin_in & pin_in1;
 
-    // CRC, MSB-aligned: shifted left by 32 - width = ~crc_cfg[4:0]
+    // CRC, MSB-aligned: its bits are the top width, 32 - width = ~crc_cfg[4:0] below them
     wire [4:0]  csh    = ~crc_cfg[4:0];
     wire [31:0] cmask  = 32'hFFFF_FFFF << csh;
-    wire [31:0] cpoly  = crc_poly << csh;
-    wire [31:0] cres   = crc_res << csh;
+    wire [31:0] cpoly  = crc_poly & cmask;
+    wire [31:0] cres   = crc_res & cmask;
     wire [31:0] cinit  = crc_cfg[5] ? cmask : 32'd0;
 
     function [31:0] crc_step;
@@ -312,7 +312,7 @@ module pau (
     assign rx_bits_s = rq_b_s[15:0];
     assign drive     = drives;
     assign line      = t_line ^ inv;
-    assign crc       = crc_a >> csh;
+    assign crc       = crc_a;
 
     // ------------------------------------------------------------------ step 3 and registers
     wire [31:0] tx_mask  = ~(32'hFFFF_FFFF << tx_n) << tq_len_s[4:0];

@@ -233,7 +233,8 @@ The condition is the selected signal, inverted when `Inv` = 1.
 
 **Edges.** A WAIT edge is a change between the values two strobes in a row see (after the PAU
 step, before the instruction): each strobe keeps the four values it saw. The first strobe after
-a slot is rewritten compares against the old definition's value.
+a slot is rewritten compares against the old definition's value; the first strobe after
+CTRL.RESET compares its values with themselves (no edge).
 
 **Registers.** Each SM has COND_CFG (written by the host) and COND (read by JMP and WAIT),
 4 x 8 bits each. Both are written one condition at a time with the same 16-bit word:
@@ -291,6 +292,11 @@ Protocol parameters, written by the host (MODE also gives the reset value of PAU
 | | [6] | CRC append sends the complement |
 | CRC_POLY | 32 bits | polynomial, without the x^width term (two 16-bit registers) |
 | CRC_RES | 32 bits | value of a correct received frame, for the CRC == CRC_RES status |
+
+CRC_POLY, CRC_RES and the CRC (CRC_LO / CRC_HI) are MSB-aligned: a CRC of width w is bits
+31 .. 32 - w, the coefficient of x^(w-1) in bit 31 (the assembler's `.crc` takes the usual
+right-aligned values and shifts them). Bits below the width are ignored in CRC_POLY and
+CRC_RES. A step is then the same for every width: the bit leaving is bit 31.
 
 The program controls the PAU with SET PAU_BAUD, SET PAU_CTL and the PAU actions:
 
@@ -530,6 +536,9 @@ Found designing the RTL, or by the principles above:
   a pin changed since the previous strobe (a recording of every pin).
 - STUFF_MODE `01` (a 1 after LEN 0s) removed: no protocol uses it (AGENT.md, the PAU rule).
 - Every FIFO word passes the SRAM: no bypasses (they served SM-to-SM traffic).
+- CRC_POLY, CRC_RES and the CRC are MSB-aligned (v2 first: right-aligned, three 32-bit
+  shifters an SM). The first strobe after CTRL.RESET sees no WAIT edge (v2 first: an edge from
+  the conditions of the reset state, four more condition multiplexers an SM).
 - The CRC takes the data bits on the wire, a bit a strobe: a TX bit when it is sent, not when
   queued; CRC feed takes Count strobes; CRC append waits for the queued data bits (v2 first fed
   up to 16 bits in a strobe: a chain of 16 programmable 32-bit CRC steps, about 23k um2 an SM

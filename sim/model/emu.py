@@ -318,7 +318,7 @@ class StateMachine:
         self.rx_stuff = _Stuffer()
         self.rx_stuff_err = False
         self.rx_overrun = False
-        self.cond_prev = [self._cond_value(s) for s in range(4)]
+        self.cond_prev: list[int] | None = None        # the first strobe sees no WAIT edge
 
     # ------------------------------------------------------------------ FIFOs (host side)
 
@@ -422,14 +422,14 @@ class StateMachine:
 
     @property
     def _crc_mask(self) -> int:
-        return (1 << self._crc_width) - 1
+        """The CRC's bits: the top `width` of 32 (registers are MSB-aligned, ISA.md PAU)."""
+        return 0xFFFFFFFF << (32 - self._crc_width) & 0xFFFFFFFF
 
     def _crc_feed(self, bit: int) -> None:
-        w, mask = self._crc_width, self._crc_mask
-        fb = ((self.crc >> (w - 1)) & 1) ^ bit
-        self.crc = (self.crc << 1) & mask
+        fb = (self.crc >> 31 & 1) ^ bit
+        self.crc = (self.crc << 1) & 0xFFFFFFFF
         if fb:
-            self.crc ^= self.crc_poly & mask
+            self.crc ^= self.crc_poly & self._crc_mask
 
     def _stuff_cfg(self) -> tuple[bool, int, int]:
         on = bool(self.pau_ctl & 4)
@@ -654,7 +654,7 @@ class StateMachine:
         cur = self._cond_value(slot)
         if not edge:
             return cur == pol
-        return self.cond_prev[slot] == 1 - pol and cur == pol
+        return self.cond_prev is not None and self.cond_prev[slot] == 1 - pol and cur == pol
 
     # ------------------------------------------------------------------ pins
 
@@ -971,8 +971,8 @@ class StateMachine:
                         return self._stall("RETRY")
                     out = self.crc ^ (self._crc_mask if self.crc_cfg >> 6 & 1 else 0)
                     if not self.tx_bit_err:
-                        self.tx_queue.extend(((out >> i) & 1, bool(self.pau_ctl & 4), bool(self.pau_ctl & 16),
-                                              False) for i in range(self._crc_width - 1, -1, -1))
+                        self.tx_queue.extend((out >> (31 - i) & 1, bool(self.pau_ctl & 4), bool(self.pau_ctl & 16),
+                                              False) for i in range(self._crc_width))
 
         else:  # SET
             dest, val = (args >> 5) & 7, args & 0x1F

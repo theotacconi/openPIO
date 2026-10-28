@@ -49,25 +49,30 @@ class Crc(unittest.TestCase):
         run(sm, [b if lsb_first else b << 8 for b in data], 400)
         return sm
 
+    @staticmethod
+    def value(sm: StateMachine, width: int) -> int:
+        """The CRC register is MSB-aligned: the CRC is its top `width` bits."""
+        return sm.crc >> (32 - width)
+
     def test_usb_crc16(self):        # CRC-16/USB: refin/refout, init ones, xorout ones
         sm = self.crc_of(CHECK, "width=16 poly=0x8005 init=ones xorout=1", True)
-        self.assertEqual(rev(sm.crc ^ 0xFFFF, 16), 0xB4C8)
+        self.assertEqual(rev(self.value(sm, 16) ^ 0xFFFF, 16), 0xB4C8)
 
     def test_ethernet_crc32(self):   # CRC-32 (IEEE 802.3)
         sm = self.crc_of(CHECK, "width=32 poly=0x04C11DB7 init=ones xorout=1", True)
-        self.assertEqual(rev(sm.crc ^ 0xFFFFFFFF, 32), 0xCBF43926)
+        self.assertEqual(rev(self.value(sm, 32) ^ 0xFFFFFFFF, 32), 0xCBF43926)
 
     def test_can_crc15(self):        # CRC-15/CAN: MSB first, init 0
         sm = self.crc_of(CHECK, "width=15 poly=0x4599", False)
-        self.assertEqual(sm.crc, 0x059E)
+        self.assertEqual(self.value(sm, 15), 0x059E)
 
     def test_onewire_crc8(self):     # CRC-8/MAXIM-DOW: reflected, init 0
         sm = self.crc_of(CHECK, "width=8 poly=0x31", True)
-        self.assertEqual(rev(sm.crc, 8), 0xA1)
+        self.assertEqual(rev(self.value(sm, 8), 8), 0xA1)
 
     def test_parity(self):           # a 1-bit CRC with polynomial 1 is the even parity
         sm = self.crc_of(b"\x07", "width=1 poly=1", True)
-        self.assertEqual(sm.crc, 1)
+        self.assertEqual(self.value(sm, 1), 1)
 
 
 class LineCodes(unittest.TestCase):

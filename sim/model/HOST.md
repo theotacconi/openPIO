@@ -49,7 +49,7 @@ the header. Chip registers (`Addr` >= 0x20) ignore `SM`.
 | 0x09 | COND_CFG23 | R | slots 3, 2 (0xE400) |
 | 0x0A | PAU_MODE | RW | ISA.md, PAU (0) |
 | 0x0B | CRC_CFG | RW | ISA.md, PAU (0) |
-| 0x0C | CRC_POLY_LO | RW | CRC_POLY [15:0] |
+| 0x0C | CRC_POLY_LO | RW | CRC_POLY [15:0] (MSB-aligned, as CRC_RES) |
 | 0x0D | CRC_POLY_HI | RW | CRC_POLY [31:16] |
 | 0x0E | CRC_RES_LO | RW | CRC_RES [15:0] |
 | 0x0F | CRC_RES_HI | RW | CRC_RES [31:16] |
@@ -62,7 +62,7 @@ the header. Chip registers (`Addr` >= 0x20) ignore `SM`.
 | 0x16 | COUNTS | RW* | [4:0] isr_count, [12:8] osr_count |
 | 0x17 | COND01 | R | COND (live) slots 1, 0 |
 | 0x18 | COND23 | R | COND slots 3, 2 |
-| 0x19 | CRC_LO | R | CRC [15:0] |
+| 0x19 | CRC_LO | R | CRC [15:0] (MSB-aligned: ISA.md, PAU) |
 | 0x1A | CRC_HI | R | CRC [31:16] |
 | 0x1B | SM_STATUS | R | the STATUS operand (ISA.md): SM status [7:0], PAU status [15:8] |
 | 0x1C | FIFO_LEVEL | R | words in the TX FIFO [7:0], in the RX FIFO [15:8] (0..133; ISA.md, FIFOs) |
