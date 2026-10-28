@@ -11,15 +11,15 @@ project:
   top_module:  "tt_um_theotacconi_openpio"
 
   source_files:
-    - "tt_um_openpio.v"
-    - "spi_cfg_interface.v"
-    - "fifo.v"
-    - "openpio_core.v"
+    - "tt_um_theotacconi_openpio.v"
+    - "spi.v"
+    - "openpio.v"
+    - "openpio_sm.v"
     - "pau.v"
-    - "shifter.v"
-    - "alu.v"
-    - "imem_sram.v"     # IHP SRAM macro; imem.v is the RTL/FPGA model
-    - "sram_blackbox.v" # its ports, for lint and synthesis
+    - "fifo.v"
+    - "imem_sram.v"     # IHP SRAM macros; imem.v and fifo_ram.v are the RTL / FPGA models
+    - "fifo_ram_sram.v"
+    - "sram_blackbox.v" # their ports, for lint and synthesis
 
 pinout:
   ui[0]: "HOST_SCK"      # SPI slave clock, mode 0, <= clk/6

@@ -32,13 +32,16 @@
   "GRT_DESIGN_REPAIR_MAX_SLEW_PCT": 40,
   "GRT_DESIGN_REPAIR_MAX_WIRE_LENGTH": 300,
 
-  "//": "IMEM: IHP SRAM RM_IHPSG13_1P_64x16_c2 (236.80 x 64.36 um, src/imem_sram.v), views from the PDK.",
-  "//": "Bottom-left corner of the core, FS: its signal pins (bottom edge) face up, towards the logic.",
-  "//": "Recipe from UW-ASIC/TinyTracer (same flow and PDK commit), after kdp1965/ihp-um-janestreet-prism.",
+  "//": "Memories: per SM an IMEM, IHP SRAM RM_IHPSG13_1P_64x16_c2 (236.80 x 64.36 um, src/imem_sram.v),",
+  "//": "and a FIFO SRAM, RM_IHPSG13_1P_256x16_c2_bm_bist (236.80 x 118.78 um, src/fifo_ram_sram.v);",
+  "//": "views from the PDK (sg13cmos5l_sram is the SG13G2 SRAM library). In a row along the bottom of",
+  "//": "the core, 20 um channels between them, FS: their signal pins (bottom edge) face up, towards",
+  "//": "the logic. Recipe from UW-ASIC/TinyTracer, after kdp1965/ihp-um-janestreet-prism.",
   "MACROS": {
     "RM_IHPSG13_1P_64x16_c2": {
       "instances": {
-        "u_core.u_imem.u_sram": { "location": [3.36, 3.78], "orientation": "FS" }
+        "u_imem0.u_sram": { "location": [3.36, 3.78], "orientation": "FS" },
+        "u_imem1.u_sram": { "location": [776.64, 3.78], "orientation": "FS" }
       },
       "gds": ["pdk_dir::libs.ref/sg13cmos5l_sram/gds/RM_IHPSG13_1P_64x16_c2.gds"],
       "lef": ["pdk_dir::libs.ref/sg13cmos5l_sram/lef/RM_IHPSG13_1P_64x16_c2.lef"],
@@ -48,13 +51,33 @@
         "nom_fast_1p32V_m40C": ["pdk_dir::libs.ref/sg13cmos5l_sram/lib/RM_IHPSG13_1P_64x16_c2_fast_1p32V_m55C.lib"],
         "nom_slow_1p08V_125C": ["pdk_dir::libs.ref/sg13cmos5l_sram/lib/RM_IHPSG13_1P_64x16_c2_slow_1p08V_125C.lib"]
       }
+    },
+    "RM_IHPSG13_1P_256x16_c2_bm_bist": {
+      "instances": {
+        "u_ram0.u_sram": { "location": [260.16, 3.78], "orientation": "FS" },
+        "u_ram1.u_sram": { "location": [1033.44, 3.78], "orientation": "FS" }
+      },
+      "gds": ["pdk_dir::libs.ref/sg13cmos5l_sram/gds/RM_IHPSG13_1P_256x16_c2_bm_bist.gds"],
+      "lef": ["pdk_dir::libs.ref/sg13cmos5l_sram/lef/RM_IHPSG13_1P_256x16_c2_bm_bist.lef"],
+      "spice": ["pdk_dir::libs.ref/sg13cmos5l_sram/cdl/RM_IHPSG13_1P_256x16_c2_bm_bist.cdl"],
+      "lib": {
+        "nom_typ_1p20V_25C": ["pdk_dir::libs.ref/sg13cmos5l_sram/lib/RM_IHPSG13_1P_256x16_c2_bm_bist_typ_1p20V_25C.lib"],
+        "nom_fast_1p32V_m40C": ["pdk_dir::libs.ref/sg13cmos5l_sram/lib/RM_IHPSG13_1P_256x16_c2_bm_bist_fast_1p32V_m55C.lib"],
+        "nom_slow_1p08V_125C": ["pdk_dir::libs.ref/sg13cmos5l_sram/lib/RM_IHPSG13_1P_256x16_c2_bm_bist_slow_1p08V_125C.lib"]
+      }
     }
   },
 
   "//": "VDD! (periphery) and VDDARRAY! (bit cells) on VPWR, VSS! on VGND.",
   "PDN_MACRO_CONNECTIONS": [
-    "u_core.u_imem.u_sram VPWR VGND VDD! VSS!",
-    "u_core.u_imem.u_sram VPWR VGND VDDARRAY! VSS!"
+    "u_imem0.u_sram VPWR VGND VDD! VSS!",
+    "u_imem0.u_sram VPWR VGND VDDARRAY! VSS!",
+    "u_imem1.u_sram VPWR VGND VDD! VSS!",
+    "u_imem1.u_sram VPWR VGND VDDARRAY! VSS!",
+    "u_ram0.u_sram VPWR VGND VDD! VSS!",
+    "u_ram0.u_sram VPWR VGND VDDARRAY! VSS!",
+    "u_ram1.u_sram VPWR VGND VDD! VSS!",
+    "u_ram1.u_sram VPWR VGND VDDARRAY! VSS!"
   ],
 
   "//": "The tile PDN is Metal4 stripes only and the SRAM blocks Metal2-Metal4, so pdngen stops its",
