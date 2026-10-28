@@ -60,7 +60,7 @@
 * `test/test.py`, `test/tb.v`, `test/Makefile`: cocotb tests of the chip through its pins (RTL, SRAM model, gate level). `test/lockstep/`: the RTL as a Yosys netlist stepped against the model every clock. `test/formal/`: SymbiYosys proofs.
 * `fpga/tang_nano_20k/`: FPGA wrapper and build.
 * `docs/`: `info.md` (Tiny Tapeout datasheet, required by the docs and gds workflows), `diagrams.py` and the SVGs it generates.
-* `scripts/`: `dev.sh` (container), `tt_signoff.py` (checks a gds run's logs).
+* `scripts/`: `dev.sh` (container), `area.sh` (CMOS5L cell area of a design), `tt_signoff.py` (checks a gds run's logs).
 * `.github/workflows/`: `model` (Python model and programs), `test` (cocotb on the RTL), `gds` (hardening, precheck, gate-level test, sign-off), `docs`.
 
 Status (2026-10-28): ISA v2 frozen; the model, the 23 programs and the docs are v2. `src/`, `test/test.py`, `test/lockstep/`, `test/formal/` and `fpga/` are still v1 and are ported together with the RTL; until then the `test` workflow fails on this branch.
