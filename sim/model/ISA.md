@@ -3,7 +3,8 @@
 ![openPIO architecture](../../docs/architecture.svg)
 
 Each state machine (SM) executes 16-bit instructions from its own 64-word instruction memory,
-one instruction per strobe: CLKDIV (host, HOST.md) makes every Nth clock a strobe. The chip has an even number of SMs sharing the pins
+one instruction per strobe: CLKDIV (host, HOST.md; 16-bit integer, 8-bit fraction) makes every
+Nth clock a strobe. The chip has an even number of SMs sharing the pins
 (see Multiple state machines); the host interface is in HOST.md. Encoding rule: codes of similar
 or opposite operations differ only in their least significant bit.
 
@@ -458,8 +459,9 @@ the shift counts. A program carries all of it as assembler directives (`sim/mode
   stuffing and CRC (up to 32 bits; parity is a 1-bit CRC with polynomial 1). v1 had TX-only
   NRZI with a stuffing toggle that took a data bit's time slot (a defect) and a Manchester TX
   queue; IRQ no longer waits for the PAU (PAU_BUSY): WAIT on PAU status TX idle instead.
-- Delays count strobes times DLYMUL; CLKDIV only divides the strobe rate (v1: delays were scaled
-  by CLKDIV too, except after a WAIT / PUSH / PULL stall).
+- Delays and WAIT timeouts count strobes times DLYMUL; CLKDIV only divides the strobe rate (v1:
+  delays were scaled by CLKDIV too, except after a WAIT / PUSH / PULL stall). CLKDIV has a 16-bit
+  integer part (v1: 8 bits): 9600 baud at 8 strobes a bit from 50 MHz.
 - Timing within a clock written down, with the 2-clock input synchronizer in the model.
 - After CTRL.RESET the OSR is empty (`osr_count` = 16; v1: 0, a full OSR of zeros), the IRQ
   flags are clear and the CRC holds its initial value.

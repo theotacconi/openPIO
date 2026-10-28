@@ -42,7 +42,7 @@ the header. Chip registers (`Addr` >= 0x20) ignore `SM`.
 | 0x03 | PINBASE | RW | [3:0] in_base, [7:4] out_base, [11:8] set_base (0), [14:12] set_count (5) |
 | 0x04 | PIN_MASK | RW | [15:0] pins this SM may change (0xFFFF) |
 | 0x05 | MISC | RW | [0] ISR shift right (1), [1] OSR shift right (1), [11:8] push threshold (0 = 16), [15:12] pull threshold (0 = 16) |
-| 0x06 | CLKDIV | RW | strobe divider: [7:0] integer (1; 0 = 1), [15:8] fraction / 256 (0); loaded on RESET |
+| 0x06 | CLKDIV | RW | strobe divider, integer part [15:0] (1; 0 = 1); loaded on RESET |
 | 0x07 | COND_CFG | W | `{Slot[9:8], condition[7:0]}`, one condition per write (ISA.md, Conditions) |
 | 0x08 | COND_CFG01 | R | COND_CFG slots 1 [15:8], 0 [7:0] (0x6160) |
 | 0x09 | COND_CFG23 | R | slots 3, 2 (0xE400) |
@@ -66,6 +66,7 @@ the header. Chip registers (`Addr` >= 0x20) ignore `SM`.
 | 0x1B | SM_STATUS | R | the STATUS operand (ISA.md): SM status [7:0], PAU status [15:8] |
 | 0x1C | FIFO_LEVEL | R | words in the TX FIFO [7:0], in the RX FIFO [15:8] (0..133; ISA.md, FIFOs) |
 | 0x1D | IRQ_MASK | RW | what reaches HOST_IRQ: [7:0] these flags when set (0xFF), [8] RX FIFO not empty (0), [9] TX FIFO at most 64 words (0) |
+| 0x1E | CLKDIV_FRAC | RW | strobe divider, fraction [7:0] / 256 (0): a strobe every CLKDIV + CLKDIV_FRAC / 256 clocks on average; loaded on RESET |
 
 RW*: written only while the SM is stopped (CTRL EN = 0); writes while it runs are ignored.
 
@@ -85,7 +86,8 @@ RW*: written only while the SM is stopped (CTRL EN = 0); writes while it runs ar
 | 0x29 | PADS_BIDIR | R | pins whose output and input pads are one bidirectional line (0x00FF) |
 
 - **RESET** (bit i): SM i as CTRL.RESET in ISA.md: registers, IRQ flags, FIFOs, PAU, PC = 0,
-  COND = COND_CFG, DLYMUL = 1, CRC = its initial value, CLKDIV and PAU_BAUD reloaded.
+  COND = COND_CFG, DLYMUL = 1, CRC = its initial value, CLKDIV, CLKDIV_FRAC and PAU_BAUD
+  reloaded.
   Configuration, IMEM and the pin latches (shared) are kept.
 - **STEP** (bit i, SM stopped): SM i runs until it has executed one strobe.
 - A CTRL write sets EN to its bits [3:0] and applies RESET then STEP in the same clock: SMs

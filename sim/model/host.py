@@ -11,8 +11,8 @@ from __future__ import annotations
 from typing import Sequence
 
 from asm import CONFIG_RESET, Program
-from chip import (COND_CFG, CTRL, GPIO, OP_IMEM_WR, OP_REG_RD, OP_REG_WR, OP_RX_POP, OP_TX_PUSH,
-                  PADS_BIDIR, PAU_MODE, PC, WRAP, Chip, header)
+from chip import (CLKDIV_FRAC, COND_CFG, CTRL, GPIO, OP_IMEM_WR, OP_REG_RD, OP_REG_WR, OP_RX_POP,
+                  OP_TX_PUSH, PADS_BIDIR, PAU_MODE, PC, WRAP, Chip, header)
 
 
 class Host:
@@ -54,7 +54,8 @@ class Host:
                    c["pin_mask"],
                    (c["pull_thresh"] & 0xF) << 12 | (c["push_thresh"] & 0xF) << 8
                    | c["shift_out_right"] << 1 | c["shift_in_right"],
-                   c["clkdiv_frac"] << 8 | c["clkdiv_int"])
+                   c["clkdiv_int"])
+        self.write(n, CLKDIV_FRAC, c["clkdiv_frac"])
         for slot, byte in enumerate(cond):
             self.write(n, COND_CFG, slot << 8 | byte)
         self.write(n, PAU_MODE, c["pau_mode"], c["crc_cfg"], c["crc_poly"] & 0xFFFF,   # .. CRC_RES_HI

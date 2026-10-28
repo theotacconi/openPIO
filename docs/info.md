@@ -10,7 +10,7 @@ openPIO is a programmable I/O co-processor: two state machines (SMs), each a tin
 - **Datapath per SM:** 16-bit X and Y registers, input and output shift registers (ISR / OSR) with autopush / autopull, an 8-operation ALU (MOV, REV, AND, OR, XOR, XNOR, ADD, SUB). Each instruction has a 5-bit field shared between a delay and side-set pins.
 - **Instructions:** JMP on four programmable conditions (any pin, IRQ flag, register bit, SM or PAU status), WAIT on a level or an edge with an optional timeout, IN, OUT (also to the PC: jump tables), ALU, PUSH / PULL (also to and from the other SM), IRQ and SET.
 - **PAU (Protocol Acceleration Unit):** a serial transmitter and receiver with its own bit timing between OUT / IN PINS and the pins: NRZ, NRZI, Manchester and biphase mark line codes, programmable bit stuffing, a CRC of 1 to 32 bits, clock recovery and a line monitor that stops the transmitter at the first bit another node overrides (CAN, LIN, 1-Wire arbitration).
-- **Clocking:** an 8-bit integer + 8-bit fractional prescaler per SM; delays count strobes times a delay multiplier.
+- **Clocking:** a 16-bit integer + 8-bit fractional prescaler per SM (from 50 MHz down to 763 Hz); delays and timeouts count strobes times a delay multiplier.
 - **FIFOs:** 133-word TX (host to SM) and RX (SM to host) FIFOs per SM, in an SRAM.
 - **Two SMs** share the pins (per-SM pin mask), start on the same clock, and pass words and IRQ flags to each other without the host.
 

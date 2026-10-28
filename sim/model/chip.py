@@ -16,7 +16,8 @@ from emu import PIN_ALL, PinBus, StateMachine, pin_values
 # Registers of an SM (HOST.md)
 STATUS, WRAP, SIDESET, PINBASE, PIN_MASK, MISC, CLKDIV, COND_CFG = range(8)
 COND_CFG01, COND_CFG23, PAU_MODE, CRC_CFG, CRC_POLY_LO, CRC_POLY_HI, CRC_RES_LO, CRC_RES_HI = range(8, 16)
-IRQ, PC, X, Y, ISR, OSR, COUNTS, COND01, COND23, CRC_LO, CRC_HI, SM_STATUS, FIFO_LEVEL, IRQ_MASK = range(16, 30)
+(IRQ, PC, X, Y, ISR, OSR, COUNTS, COND01, COND23, CRC_LO, CRC_HI, SM_STATUS, FIFO_LEVEL, IRQ_MASK,
+ CLKDIV_FRAC) = range(16, 31)
 # Chip registers
 CTRL, GPIO, PINS, PINS_OE, PINS_IN, IRQ_SUM, ID, PADS_OUT, PADS_IN, PADS_BIDIR = range(0x20, 0x2A)
 
@@ -125,7 +126,8 @@ class Chip:
             PIN_MASK: lambda: sm.pin_mask,
             MISC: lambda: (sm.pull_thresh << 12 | sm.push_thresh << 8 | sm.shift_out_right << 1
                            | sm.shift_in_right),
-            CLKDIV: lambda: sm.clkdiv_cfg_frac << 8 | sm.clkdiv_cfg_int,
+            CLKDIV: lambda: sm.clkdiv_cfg_int,
+            CLKDIV_FRAC: lambda: sm.clkdiv_cfg_frac,
             COND_CFG01: lambda: c[1] << 8 | c[0],
             COND_CFG23: lambda: c[3] << 8 | c[2],
             PAU_MODE: lambda: sm.pau_mode,
@@ -171,7 +173,9 @@ class Chip:
             sm.shift_in_right, sm.shift_out_right = bool(val & 1), bool(val >> 1 & 1)
             sm.push_thresh, sm.pull_thresh = val >> 8 & 0xF, val >> 12 & 0xF
         elif addr == CLKDIV:
-            sm.clkdiv_cfg_int, sm.clkdiv_cfg_frac = (val & 0xFF) or 1, val >> 8
+            sm.clkdiv_cfg_int = val or 1
+        elif addr == CLKDIV_FRAC:
+            sm.clkdiv_cfg_frac = val & 0xFF
         elif addr == COND_CFG:
             sm.cond_cfg[val >> 8 & 3] = val & 0xFF
         elif addr == PAU_MODE:
