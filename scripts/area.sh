@@ -22,7 +22,7 @@ done
 cd "$root"
 "$root/scripts/dev.sh" yosys -q -p "read_verilog -noautowire $*; synth -flatten -top $top; \
     dfflibmap -liberty $typ; abc -liberty $typ; opt_clean; tee -o /dev/stdout stat -liberty $typ" \
-    | grep -E "cells|Chip area|sg13cmos5l_[a-z]+[0-9]*_[0-9]" | sed 's/^ *//'
+    | grep -E "cells|Chip area|sg13cmos5l_[a-z0-9]+_[0-9]" | sed 's/^ *//'
 abc="strash;ifraig;scorr;dc2;strash;dch,-f;map,-D,20000;topo;buffer,-p;upsize,-D,20000;dnsize,-D,20000;stime,-p"
 "$root/scripts/dev.sh" yosys -p "read_verilog -noautowire $*; synth -flatten -top $top; \
     dfflibmap -liberty $slow; abc -liberty $slow -script +$abc" \
