@@ -134,6 +134,20 @@ class LineCodes(unittest.TestCase):
         line = "".join(str(p & 1) for p in run(sm, [0b11111100000], 60))
         self.assertIn("00" * 5 + "11" + "11" * 4 + "00" + "11" * 2, line)
 
+    def test_stuffing_a_1_after_zeros(self):
+        """Mode 01, the mirror of USB's: after LEN 0s a stuffed 1."""
+        sm = StateMachine(assemble("""
+            .pau enc=nrz baud=1 stuff=4 stuff_mode=zeros
+                set pins, 1
+                set pau_ctl, tx|stuff
+                pull block
+                out pins, 9
+            end:
+                jmp end
+        """))
+        line = "".join(str(p & 1) for p in run(sm, [0b100000000], 60))
+        self.assertIn("11" + "00" * 4 + "11" + "00" * 4 + "11" + "11", line)
+
 
 class Loopback(unittest.TestCase):
     """A PAU transmitter wired into a PAU receiver: bytes, stuffing and CRC come back."""
@@ -174,8 +188,8 @@ class Loopback(unittest.TestCase):
             jmp end
     """
 
-    def check(self, enc: str, stuff: bool, first: int):
-        cfg = dict(enc=enc, stuff="stuff=6" if stuff else "", tx_stuff="|stuff" if stuff else "",
+    def check(self, enc: str, stuff: str, first: int):
+        cfg = dict(enc=enc, stuff=stuff, tx_stuff="|stuff" if stuff else "",
                    rx_stuff="|stuff" if stuff else "", idle=1 - first if enc in ("nrz", "nrzi") else 0)
         tx = StateMachine(assemble(self.TX.format(**cfg)))
         rx = StateMachine(assemble(self.RX.format(**cfg)))
@@ -194,16 +208,19 @@ class Loopback(unittest.TestCase):
         self.assertEqual(rx._pau_status(6), 0, f"{enc}: stuff error")
 
     def test_nrz(self):
-        self.check("nrz", False, 0)
+        self.check("nrz", "", 0)
 
     def test_nrzi_usb_stuffing(self):
-        self.check("nrzi", True, 0)
+        self.check("nrzi", "stuff=6", 0)
+
+    def test_nrz_stuffing_a_1_after_zeros(self):
+        self.check("nrz", "stuff=4 stuff_mode=zeros", 0)
 
     def test_manchester(self):
-        self.check("manchester", False, 1)
+        self.check("manchester", "", 1)
 
     def test_biphase_mark(self):
-        self.check("bmc", False, 1)
+        self.check("bmc", "", 1)
 
 
 class PauErrors(unittest.TestCase):
