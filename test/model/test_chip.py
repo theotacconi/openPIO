@@ -10,8 +10,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "sim" / "model"))
 from asm import assemble                                             # noqa: E402
 from chip import (Chip, header, CTRL, GPIO, ID, IRQ, IRQ_MASK, PC, PINS, STATUS, WRAP, X, FIFO_LEVEL,  # noqa: E402
-                  COND_CFG01, COND_CFG23, CRC_LO, IRQ_SUM, PINBASE, PIN_MASK, MISC, CLKDIV, SM_STATUS,
-                  PINS_IN, PINS_OE, PADS_BIDIR, PADS_IN, PADS_OUT,
+                  COND_CFG01, COND_CFG23, CRC_LO, IRQ_SUM, PINBASE, PIN_MASK, MISC, CLKDIV, CLKDIV_FRAC,
+                  SM_STATUS,                  PINS_IN, PINS_OE, PADS_BIDIR, PADS_IN, PADS_OUT,
                   OP_IMEM_RD, OP_IMEM_WR, OP_REG_RD, OP_REG_WR, OP_RX_POP, OP_TX_PUSH)
 from host import Host                                                # noqa: E402
 
@@ -150,7 +150,8 @@ class HostInterface(unittest.TestCase):
         """), out_base=1)                         # an override
         self.assertEqual(chip.reg_read(0, CTRL), 0b01)
         regs = chip.spi(header(OP_REG_RD, 1, WRAP), [0] * 6)[1:]
-        self.assertEqual(regs, [0x0101, 0x0509, 0x2316, 0x3C, 0x0802, 0x8003])   # WRAP .. CLKDIV
+        self.assertEqual(regs, [0x0101, 0x0509, 0x2316, 0x3C, 0x0802, 3])   # WRAP .. CLKDIV
+        self.assertEqual(chip.reg_read(1, CLKDIV_FRAC), 128)
         self.assertEqual(chip.spi(header(OP_REG_RD, 1, PC), [0] * 3)[1:], [1, 0x1234, 7])
         self.assertEqual(chip.reg_read(0, GPIO), 1 << 3)
         with self.assertRaises(TypeError):
@@ -194,16 +195,18 @@ class HostInterface(unittest.TestCase):
         chip.reg_write(0, CTRL, 1 << 4)                          # RESET SM 0
         self.assertEqual((chip.reg_read(0, IRQ), chip.sms[1].peer_irq_flags[7]), (0, False))
 
-    def test_clkdiv_up_to_255(self):
+    def test_clkdiv_16_8(self):
         chip = Chip(2)
-        load(chip, 0, assemble("loop:\nin null, 1\njmp loop"), clkdiv_int=200, clkdiv_frac=128)
-        self.assertEqual(chip.reg_read(0, CLKDIV), 0x80C8)
+        load(chip, 0, assemble("loop:\nin null, 1\njmp loop"), clkdiv_int=651, clkdiv_frac=128)
+        self.assertEqual((chip.reg_read(0, CLKDIV), chip.reg_read(0, CLKDIV_FRAC)), (651, 128))
         chip.reg_write(0, CTRL, 1)
         strobes = 0
-        for _ in range(2010):
+        for _ in range(6520):
             chip.step()
             strobes += chip.sms[0].strobed
-        self.assertEqual(strobes, 10, "one strobe every 200.5 clocks")
+        self.assertEqual(strobes, 10, "one strobe every 651.5 clocks (9600 baud x 8)")
+        chip.reg_write(0, CLKDIV, 0)
+        self.assertEqual(chip.reg_read(0, CLKDIV), 1, "0 = 1")
 
     def test_registers_written_only_while_stopped(self):
         chip = Chip(2)

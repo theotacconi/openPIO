@@ -158,7 +158,7 @@ class StateMachine:
         self.side_set_pindirs = side_set_pindirs
         if open_drain_mask:
             self.bus.od_mask = open_drain_mask & PIN_ALL
-        self.clkdiv_cfg_int = clkdiv_int if clkdiv_int > 0 else 1
+        self.clkdiv_cfg_int = clkdiv_int & 0xFFFF or 1
         self.clkdiv_cfg_frac = clkdiv_frac & 0xFF
         self.in_base, self.out_base, self.set_base = in_base, out_base, set_base
         self.set_count, self.sideset_base = set_count, sideset_base

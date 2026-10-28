@@ -68,7 +68,7 @@ class Errors(unittest.TestCase):
         "set count": ".set_pins 0 6",
         "shift direction": ".shift_in up",
         "threshold": ".push_thresh 17",
-        "clkdiv": ".clkdiv 256",
+        "clkdiv": ".clkdiv 65536",
         "start label": ".start nowhere\nnop",
         "pau encoding": ".pau enc=fm",
         "crc width": ".crc width=33 poly=1",
