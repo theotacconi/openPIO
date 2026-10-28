@@ -24,7 +24,7 @@ from typing import Callable, Sequence
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "sim" / "model"))
 from asm import assemble          # noqa: E402
-from chip import Chip             # noqa: E402
+from chip import OP_RX_POP, OP_TX_PUSH, Chip     # noqa: E402
 from host import Host             # noqa: E402
 
 
@@ -63,10 +63,12 @@ class Script(Device):
 class Bench:
     """Chip model + devices + host, clocked together."""
 
+    chip_class = Chip               # test/lockstep/ puts the RTL beside the model
+
     def __init__(self, n_sm: int = 2, pullups: int = 0, host_word_clocks: int = 0) -> None:
         """host_word_clocks: clocks the host needs per FIFO word (an SPI host: about 100);
         0 = one word per clock."""
-        self.chip = Chip(n_sm)
+        self.chip = self.chip_class(n_sm)
         self.host = Host(self.chip)
         self.host_word_clocks = host_word_clocks
         self.pullups = pullups
@@ -127,26 +129,39 @@ class Bench:
         return one | seen, one | chip_in
 
     def run(self, cycles: int, until: Callable[[], bool] | None = None) -> int:
-        """Run up to `cycles` clocks, stopping after the clock where until() is true."""
+        """Run up to `cycles` clocks, stopping after the clock where until() is true. The host
+        makes at most one access a clock (chip.host()): an RX_POP of a word the OUT register
+        holds, else a TX_PUSH where the IN register is free, the SMs taken in turn."""
         for n in range(cycles):
             host_turn = not self.host_word_clocks or self.t % self.host_word_clocks == 0
-            for sm, words in enumerate(self.to_send):
-                if host_turn and words and self.chip.tx_push(sm, words[0]):
-                    words.pop(0)
+            access = self._host_access() if host_turn else None
             lv, self.chip.pin_in = self.levels()
             self.trace.append(lv)
             for d in self.devices:
                 d.tick(self.t, lv)
-            self.chip.step()
-            for sm, s in enumerate(self.chip.sms):
-                while host_turn and (word := s.rx_read()) is not None:
-                    self.received[sm].append(word)
-                    if self.host_word_clocks:
-                        break
+            if access is None:
+                self.chip.step()
+            elif access[0] == OP_RX_POP:
+                self.received[access[1]].append(self.chip.host(*access))
+            else:
+                self.chip.host(*access)
+                self.to_send[access[1]].pop(0)
             self.t += 1
             if until is not None and until():
                 return n + 1
         return cycles
+
+    def _host_access(self) -> tuple[int, int, int, int] | None:
+        sms = self.chip.sms
+        for k in range(len(sms)):
+            sm = (self.t + k) % len(sms)
+            if sms[sm].rx_out is not None:
+                return OP_RX_POP, sm, 0, 0
+        for k in range(len(sms)):
+            sm = (self.t + k) % len(sms)
+            if self.to_send[sm] and sms[sm].tx_room():
+                return OP_TX_PUSH, sm, 0, self.to_send[sm][0]
+        return None
 
     # ------------------------------------------------------------------ measurements
 
