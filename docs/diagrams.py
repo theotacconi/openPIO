@@ -452,7 +452,7 @@ def fifo():
                 "word per clock; an IN or OUT register meets the host. When the memory part is empty, words "
                 "skip it.")
     g.text(40, 36, "TX FIFO: words to send  (133 = 1 IN register + 128 in memory + 4 front)", "group")
-    g.text(40, 104, "host (TX_PUSH)", "term"); g.text(40, 122, "or the other machine", "small")
+    g.text(40, 110, "host (TX_PUSH)", "term")
     g.arrow([(190, 110), (258, 110)])
     g.box(260, 85, 100, 50, "IN register", [])
     g.box(470, 60, 260, 300, "", [])
@@ -465,7 +465,6 @@ def fifo():
     g.arrow([(710, 155), (838, 110)])
     g.box(840, 85, 120, 50, "TX front", ["4 words"], cls="q")
     g.arrow([(960, 110), (1028, 110)]); g.text(1036, 105, "PULL, OUT … auto", "term"); g.text(1036, 123, "the machine", "small")
-    g.arrow([(310, 85), (310, 52), (900, 52), (900, 83)], "dash", "memory part empty: skip it", (600, 46))
     g.text(40, 400, "RX FIFO: words received  (133 = 4 front + 128 in memory + 1 OUT register)", "group")
     g.text(1036, 300, "PUSH, IN … auto", "term"); g.text(1036, 318, "the machine", "small")
     g.arrow([(1028, 305), (962, 305)])
@@ -473,12 +472,11 @@ def fifo():
     g.arrow([(838, 305), (712, 265)])
     g.arrow([(488, 265), (362, 305)])
     g.box(260, 280, 100, 50, "OUT register", [])
-    g.arrow([(258, 305), (192, 305)]); g.text(40, 300, "host (RX_POP)", "term"); g.text(40, 318, "or the other machine", "small")
-    g.arrow([(900, 332), (900, 372), (310, 372), (310, 333)], "dash", "memory part empty: skip it", (600, 390))
-    g.box(40, 430, 1160, 70, "", ["Why it matters: the host and the other machine never touch the memory directly, so the "
-                                  "machine never waits for them.", "A program moving more than about one word every "
-                                  "2 clocks can briefly wait for the memory."], gap=20)
-    g.legend(40, 520, 1160, [("data", "data"), ("dash", "shortcut when the memory part is empty")],
+    g.arrow([(258, 305), (192, 305)]); g.text(40, 305, "host (RX_POP)", "term")
+    g.box(40, 430, 1160, 70, "", ["One path for every word: the host never touches the memory directly, so the machine "
+                                  "never waits for it.", "A program moving more than about one word every 2 clocks can "
+                                  "briefly wait for the memory."], gap=20)
+    g.legend(40, 520, 1160, [("data", "data")],
              [("FIFO", "First In, First Out: a queue, words leave in the order they came"),
               ("SRAM", "Static RAM: the memory chip holding the long part of the queues"),
               ("TX / RX", "transmit (host → pins) / receive (pins → host)"),

@@ -33,8 +33,7 @@ text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 <defs><marker id="data" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="ah-data"/></marker><marker id="datas" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M10,0 L0,5 L10,10 z" class="ah-data"/></marker><marker id="ctl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="ah-ctl"/></marker><marker id="ctls" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M10,0 L0,5 L10,10 z" class="ah-ctl"/></marker><marker id="dash" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="ah-dash"/></marker><marker id="dashs" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M10,0 L0,5 L10,10 z" class="ah-dash"/></marker></defs>
 <rect x="0" y="0" width="1240" height="640" rx="18" class="bg"/>
 <text x="40" y="36" class="group" text-anchor="start">TX FIFO: words to send  (133 = 1 IN register + 128 in memory + 4 front)</text>
-<text x="40" y="104" class="term" text-anchor="start">host (TX_PUSH)</text>
-<text x="40" y="122" class="small" text-anchor="start">or the other machine</text>
+<text x="40" y="110" class="term" text-anchor="start">host (TX_PUSH)</text>
 <polyline points="190,110 258,110" class="data" marker-end="url(#data)"/>
 <rect x="260" y="85" width="100" height="50" rx="8" class="b"/>
 <text x="310.0" y="115.0" class="h" text-anchor="middle">IN register</text>
@@ -56,8 +55,6 @@ text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 <polyline points="960,110 1028,110" class="data" marker-end="url(#data)"/>
 <text x="1036" y="105" class="term" text-anchor="start">PULL, OUT … auto</text>
 <text x="1036" y="123" class="small" text-anchor="start">the machine</text>
-<polyline points="310,85 310,52 900,52 900,83" class="dash" marker-end="url(#dash)"/>
-<text x="600" y="46" class="ld" text-anchor="middle">memory part empty: skip it</text>
 <text x="40" y="400" class="group" text-anchor="start">RX FIFO: words received  (133 = 4 front + 128 in memory + 1 OUT register)</text>
 <text x="1036" y="300" class="term" text-anchor="start">PUSH, IN … auto</text>
 <text x="1036" y="318" class="small" text-anchor="start">the machine</text>
@@ -70,19 +67,14 @@ text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 <rect x="260" y="280" width="100" height="50" rx="8" class="b"/>
 <text x="310.0" y="310.0" class="h" text-anchor="middle">OUT register</text>
 <polyline points="258,305 192,305" class="data" marker-end="url(#data)"/>
-<text x="40" y="300" class="term" text-anchor="start">host (RX_POP)</text>
-<text x="40" y="318" class="small" text-anchor="start">or the other machine</text>
-<polyline points="900,332 900,372 310,372 310,333" class="dash" marker-end="url(#dash)"/>
-<text x="600" y="390" class="ld" text-anchor="middle">memory part empty: skip it</text>
+<text x="40" y="305" class="term" text-anchor="start">host (RX_POP)</text>
 <rect x="40" y="430" width="1160" height="70" rx="8" class="b"/>
-<text x="620.0" y="450.0" class="d" text-anchor="middle">Why it matters: the host and the other machine never touch the memory directly, so the machine never waits for them.</text>
+<text x="620.0" y="450.0" class="d" text-anchor="middle">One path for every word: the host never touches the memory directly, so the machine never waits for it.</text>
 <text x="620.0" y="470.0" class="d" text-anchor="middle">A program moving more than about one word every 2 clocks can briefly wait for the memory.</text>
 <rect x="40" y="520" width="1160" height="100" rx="8" class="legend"/>
 <text x="56" y="544" class="group" text-anchor="start">Legend</text>
 <polyline points="130,540 164,540" class="data" marker-end="url(#data)"/>
 <text x="174" y="544" class="def" text-anchor="start">data</text>
-<polyline points="232.8,540 266.8,540" class="dash" marker-end="url(#dash)"/>
-<text x="276.8" y="544" class="def" text-anchor="start">shortcut when the memory part is empty</text>
 <text x="56.0" y="574" class="def"><tspan class="term">FIFO</tspan>  First In, First Out: a queue, words leave in the order they came</text>
 <text x="56.0" y="595" class="def"><tspan class="term">SRAM</tspan>  Static RAM: the memory chip holding the long part of the queues</text>
 <text x="620.0" y="574" class="def"><tspan class="term">TX / RX</tspan>  transmit (host → pins) / receive (pins → host)</text>

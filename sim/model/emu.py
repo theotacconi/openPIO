@@ -327,17 +327,12 @@ class StateMachine:
         """Words a FIFO holds: the front, plus the SRAM ring and the IN / OUT register."""
         return self.fifo_depth + (BUFFER_WORDS + 1 if self.buffer else 0)
 
-    def _tx_direct(self) -> bool:
-        """A TX word can go straight to the front: nothing older waits behind it."""
-        return (not self.tx_back and self.tx_in is None and self.tx_flight is None
-                and len(self.tx_fifo) < self.fifo_depth)
-
     def tx_where(self) -> str | None:
-        """Where a host's TX word goes, by the state at the clock start: the front if nothing
-        waits, else the IN register if it is free; else None (full)."""
-        if self._tx_direct():
-            return "front"
-        return "in" if self.buffer and self.tx_in is None else None
+        """Where a host's TX word goes, by the state at the clock start: the IN register if it
+        is free (the front itself in a standalone SM, without SRAM); else None (full)."""
+        if self.buffer:
+            return "in" if self.tx_in is None else None
+        return "front" if len(self.tx_fifo) < self.fifo_depth else None
 
     def tx_room(self) -> bool:
         return self.tx_where() is not None
@@ -357,14 +352,12 @@ class StateMachine:
         return where is not None
 
     def rx_read(self) -> int | None:
-        """Read an RX word as the host does: the OUT register, else the front when nothing waits
-        in the SRAM; else None (empty for this read)."""
-        if self.rx_out is not None:
-            word, self.rx_out = self.rx_out, None
-            return word
-        if not self.rx_back and self.rx_flight is None and self.rx_fifo:
-            return self.rx_fifo.popleft()
-        return None
+        """Read an RX word as the host does: the OUT register's (the front's in a standalone SM),
+        or None (empty for this read)."""
+        if not self.buffer:
+            return self.rx_fifo.popleft() if self.rx_fifo else None
+        word, self.rx_out = self.rx_out, None
+        return word
 
     def end_clock(self) -> None:
         """End of a clock, after every SM: the writes to the peer's flags land, so SMs act in
@@ -385,8 +378,7 @@ class StateMachine:
                 + (self.rx_out is not None))
 
     def buffer_clock(self) -> None:
-        """End of a clock: SRAM reads land, the bypasses move, the SRAM port serves one request
-        (ISA.md, FIFOs)."""
+        """End of a clock: SRAM reads land, the SRAM port serves one request (ISA.md, FIFOs)."""
         if not self.buffer:
             return
         if self.tx_flight is not None:
@@ -394,11 +386,6 @@ class StateMachine:
             self.tx_flight = None
         if self.rx_flight is not None:
             self.rx_out, self.rx_flight = self.rx_flight, None
-        if self.tx_in is not None and self._tx_bypass():
-            self.tx_fifo.append(self.tx_in)
-            self.tx_in = None
-        if self.rx_out is None and not self.rx_back and self.rx_fifo:
-            self.rx_out = self.rx_fifo.popleft()
         ring_room = len(self.tx_back) < BUFFER_WORDS, len(self.rx_back) < BUFFER_WORDS
         pending = [
             bool(self.tx_back) and len(self.tx_fifo) < self.fifo_depth,     # TX refill
@@ -422,9 +409,6 @@ class StateMachine:
             self.rx_back.append(self.rx_fifo.popleft())
         else:
             self.rx_flight = self.rx_back.popleft()
-
-    def _tx_bypass(self) -> bool:
-        return not self.tx_back and self.tx_flight is None and len(self.tx_fifo) < self.fifo_depth
 
     # ------------------------------------------------------------------ PAU
 

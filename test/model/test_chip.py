@@ -45,9 +45,9 @@ class HostInterface(unittest.TestCase):
         chip = Chip(2)
         load(chip, 0, assemble("loop:\npull block\nmov isr, osr\npush block\njmp loop"))
         accepted = []
-        for w in range(135):                       # a word a clock: the IN register empties
+        for w in range(135):                       # within 4 clocks the IN register empties
             accepted.append(chip.tx_push(0, w))
-            chip.step()
+            chip.step(4)
         self.assertEqual(accepted, [True] * 133 + [False] * 2, "4 front + 128 SRAM + IN")
         self.assertEqual(chip.reg_read(0, FIFO_LEVEL), 133)
         self.assertEqual(chip.tx_push(0, 0), False, "full")
@@ -101,14 +101,12 @@ class HostInterface(unittest.TestCase):
         self.assertEqual(chip.spi(header(OP_IMEM_RD, 0, 1), [0])[1:], [0], "the port fetches")
 
     def test_writes_faster_than_the_sram_wait(self):
-        """Two writes in one clock: the second finds the IN register busy (the first went to the
-        front only while nothing waited)."""
+        """Two writes in one clock: the second finds the IN register busy."""
         chip = Chip(2)
-        for w in range(5):
-            self.assertTrue(chip.tx_push(0, w))    # 4 to the front, 1 to IN
-        self.assertFalse(chip.tx_push(0, 5), "IN busy this clock")
+        self.assertTrue(chip.tx_push(0, 0))
+        self.assertFalse(chip.tx_push(0, 1), "IN busy this clock")
         chip.step()
-        self.assertTrue(chip.tx_push(0, 5), "IN stored into the SRAM at the clock's end")
+        self.assertTrue(chip.tx_push(0, 1), "IN stored into the SRAM at the clock's end")
 
     def test_host_sets_a_flag_and_masks_the_irq_pin(self):
         chip = Chip(2)
@@ -180,7 +178,8 @@ class HostInterface(unittest.TestCase):
         self.assertEqual(chip.host_irq, 0)
         chip.sms[0].rx_fifo.append(7)
         self.assertEqual((chip.host_irq, chip.reg_read(0, IRQ_SUM)), (1, 1))
-        chip.rx_pop(0)
+        chip.step(4)                                    # front, SRAM, OUT register
+        self.assertEqual(chip.rx_pop(0), 7)
         self.assertEqual(chip.host_irq, 0, "drained: ends by itself")
 
     def test_reset_clears_flags_and_loads_the_crc_init(self):
@@ -208,19 +207,23 @@ class HostInterface(unittest.TestCase):
             self.assertEqual(chip.sms[1 - n].x, 2, f"SM {n} -> SM {1 - n}: seen from the next clock")
 
     def test_host_access_in_one_clock(self):
-        """A host write lands at the end of its clock: a PULL in that clock does not see the
-        word; a host RX_POP takes its word before the SMs."""
+        """A host word lands in the IN register at the end of its clock, then passes the SRAM:
+        a PULL in that clock finds the FIFO empty, the word is in the front 3 clocks later
+        (store, read, landing). A pushed word: stored and read in the clocks after its own."""
         chip = Chip(2)
-        load(chip, 0, assemble("set x, 5\npull noblock\nmov y, osr\npull noblock\nh: jmp h"))
+        load(chip, 0, assemble("set x, 5\npull noblock\nmov y, osr\npull block\nh: jmp h"))
         chip.reg_write(0, CTRL, 1)
         chip.step()
         chip.host(OP_TX_PUSH, 0, word=0xABCD)                 # clock 2, the first PULL
-        chip.step(2)
-        self.assertEqual((chip.sms[0].y, chip.sms[0].osr), (5, 0xABCD))
+        chip.step(3)
+        self.assertEqual((chip.sms[0].y, chip.sms[0].stalled), (5, True), "PULL waits")
+        chip.step()
+        self.assertEqual((chip.sms[0].osr, chip.sms[0].stalled), (0xABCD, False), "clock 6")
         load(chip, 1, assemble("set x, 9\nmov isr, x\npush\nh: jmp h"))
         chip.reg_write(0, CTRL, 0b10)
-        chip.step(3)
-        self.assertEqual(chip.host(OP_RX_POP, 1), 9, "pushed in clock 3, popped in clock 4")
+        chip.step(4)
+        self.assertEqual(chip.host(OP_RX_POP, 1), 0, "pushed in clock 3, in OUT at the end of 5")
+        self.assertEqual(chip.host(OP_RX_POP, 1), 9)
 
     def test_clkdiv_16_8(self):
         chip = Chip(2)
