@@ -510,7 +510,7 @@ def pau():
     g.arrow([(438, 250), (392, 250)])
     g.box(220, 220, 170, 60, "RX queue", ["32 bits waiting"], cls="q")
     g.arrow([(218, 250), (172, 250)]); g.text(40, 244, "IN pins, n", "term"); g.text(40, 262, "bits to the ISR", "small")
-    g.box(220, 330, 440, 80, "CRC: checksum, 1 to 32 bits", ["fed by the data bits sent or received, or by the ISR",
+    g.box(220, 330, 440, 80, "CRC: checksum, 1 to 32 bits", ["fed a bit a strobe: data bits sent or received, or the ISR",
                                                               "appends it when sending · checks it when receiving"])
     g.arrow([(415, 90), (415, 328)], "ctl"); g.arrow([(560, 287), (560, 328)], "ctl")
     g.box(710, 330, 230, 80, "Monitor", ["compares each bit sent with", "pin in_base: bit_err, stop"])

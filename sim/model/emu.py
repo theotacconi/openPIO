@@ -297,7 +297,7 @@ class StateMachine:
         self.pau_ctl = 0
         self.pau_baud = (self.pau_mode >> 10) & 0x1F
         self.crc = self._crc_mask if self.crc_cfg >> 5 & 1 else 0
-        self.tx_queue: deque[tuple[int, bool, bool]] = deque()   # (bit, stuffed, monitored)
+        self.tx_queue: deque[tuple[int, bool, bool, bool]] = deque()   # (bit, stuffed, monitored, CRC)
         self.tx_monitor = False                         # the bit on the line is monitored
         self.tx_bit_err = False
         self.tx_line = 0
@@ -463,7 +463,9 @@ class StateMachine:
             self.tx_stuff_pending = None
             self.tx_stuff.stuffed(b, mode)
         else:
-            b, stuffed, self.tx_monitor = self.tx_queue.popleft()
+            b, stuffed, self.tx_monitor, crc = self.tx_queue.popleft()
+            if crc:
+                self._crc_feed(b)                       # the CRC of the bits on the wire
             if stuffed:
                 self.tx_stuff.count(b, mode)
                 self.tx_stuff_pending = self.tx_stuff.due(mode, length)
@@ -526,7 +528,7 @@ class StateMachine:
                 if b == due:
                     return
                 self.rx_stuff_err = True                # a wrong one is kept
-        if self.pau_ctl & 8 and not self.pau_ctl & 1:
+        if self.pau_ctl & 8 and not self.tx_drives:
             self._crc_feed(b)
         if len(self.rx_queue) >= PAU_QUEUE_BITS:
             self.rx_overrun = True
@@ -763,6 +765,9 @@ class StateMachine:
             if self._push_word():
                 self.isr = self.isr_count = 0
                 done = True
+        elif self.stall_reason == "FEED":
+            self._crc_feed(self.isr >> info["bits"].pop(0) & 1)
+            done = not info["bits"]
         elif self.stall_reason == "IRQ":
             flags = self.peer_irq_flags if info["peer"] else self.irq_flags
             done = not flags[info["idx"]]
@@ -871,9 +876,8 @@ class StateMachine:
                 order = range(count) if self.shift_out_right else range(count - 1, -1, -1)
                 for i in order if not self.tx_bit_err else ():
                     b = (val >> i) & 1
-                    self.tx_queue.append((b, bool(self.pau_ctl & 4), bool(self.pau_ctl & 16)))
-                    if self.pau_ctl & 8:
-                        self._crc_feed(b)
+                    self.tx_queue.append((b, bool(self.pau_ctl & 4), bool(self.pau_ctl & 16),
+                                          bool(self.pau_ctl & 8)))
             elif dest == R_PINS:
                 self._write_pins(mask << (self.out_base & 15), val << (self.out_base & 15))
             elif dest == R_PINDIRS:
@@ -953,22 +957,22 @@ class StateMachine:
                 action = a >> 4
                 if action == 3:                         # CRC feed: last bits into the ISR, oldest first
                     n = (a & 0xF) or 16
-                    order = range(16 - n, 16) if self.shift_in_right else range(n - 1, -1, -1)
-                    for i in order:
-                        self._crc_feed(self.isr >> i & 1)
+                    order = list(range(16 - n, 16) if self.shift_in_right else range(n - 1, -1, -1))
+                    self._crc_feed(self.isr >> order[0] & 1)    # a bit a strobe
+                    if n > 1:
+                        return self._stall("FEED", bits=order[1:], delay=delay, next_pc=next_pc)
                 elif action == 0:                       # CRC reset: a new frame, no RX errors
                     self.crc = self._crc_mask if self.crc_cfg >> 5 & 1 else 0
                     self.rx_stuff_err = self.rx_overrun = False
                 elif action == 2:
                     self._tx_abort()
-                elif action == 1:
-                    w = self._crc_width
-                    if PAU_QUEUE_BITS - len(self.tx_queue) < w:
+                elif action == 1:                       # after the data bits: the CRC is complete
+                    if self.tx_queue:
                         return self._stall("RETRY")
                     out = self.crc ^ (self._crc_mask if self.crc_cfg >> 6 & 1 else 0)
                     if not self.tx_bit_err:
-                        self.tx_queue.extend(((out >> i) & 1, bool(self.pau_ctl & 4), bool(self.pau_ctl & 16))
-                                             for i in range(w - 1, -1, -1))
+                        self.tx_queue.extend(((out >> i) & 1, bool(self.pau_ctl & 4), bool(self.pau_ctl & 16),
+                                              False) for i in range(self._crc_width - 1, -1, -1))
 
         else:  # SET
             dest, val = (args >> 5) & 7, args & 0x1F

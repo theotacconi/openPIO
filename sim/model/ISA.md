@@ -270,7 +270,8 @@ CRC-16 0x1021; 10BASE-T: Manchester, DIFF, CRC-32).
 ```
  OUT PINS -> TX queue (32 bits) -> stuffing -> line encoder -> pin out_base (+1)
  IN PINS  <- RX queue (32 bits) <- destuffing <- decoder, clock recovery <- pin in_base (+1)
-                 CRC: data bits, before stuffing / after destuffing
+                 CRC: the data bits on the wire, a bit at a time (TX as sent, before
+                      stuffing; RX as decoded, after destuffing)
 ```
 
 ### Configuration
@@ -306,7 +307,9 @@ The program controls the PAU with SET PAU_BAUD, SET PAU_CTL and the PAU actions:
     the decoder for the first input edge.
   - [2] stuffing: TX bits queued while it is on are stuffed (a stuffed bit owed after the last
     of them is still sent); RX removes stuffed bits while it is on.
-  - [3] CRC: feed the CRC with the data bits of TX (when TX is on) or else of RX.
+  - [3] CRC: TX bits queued while it is on feed the CRC when the transmitter starts them; RX
+    bits feed it as they are decoded while it is on and the PAU TX does not drive (TX on or
+    draining), so the CRC takes at most one line bit a strobe.
   - [4] monitor: TX bits queued while it is on (and the stuffed bits after them) are compared,
     at the end of their first half, with the receive pin `in_base` (INV applied). On a
     difference the PAU sets the sticky bit error status and goes quiet: the pins return to
@@ -315,21 +318,23 @@ The program controls the PAU with SET PAU_BAUD, SET PAU_CTL and the PAU actions:
     clears the error. Wired-AND buses (CAN, LIN, 1-Wire) use it to stop at the first bit another
     node overrides, e.g. a lost arbitration, and check the status at the end of the frame.
 - **CRC reset**: CRC = initial value; the sticky RX errors (stuff error, overrun) clear: a new
-  frame starts. **CRC append**: queues the CRC (width bits, MSB first,
-  complemented if configured) to TX; while the queue has no room it issues again every strobe.
-  Appended bits do not feed the CRC and are stuffed like data.
+  frame starts. **CRC append**: while the TX queue holds bits it issues again every strobe;
+  once the transmitter has started the last of them, every data bit has fed the CRC, and the
+  append queues it (width bits, MSB first, complemented if configured). Appended bits do not
+  feed the CRC and are stuffed and monitored like data.
 - **TX abort**: discards the TX queue and the bit in progress; the pins return to `gpio_out`
   now and TX is off.
 - **CRC feed** Count: feeds the CRC with the last Count bits shifted into the ISR, oldest first
   (shift right: from bit 16 - Count up to bit 15; shift left: from bit Count - 1 down to bit 0),
-  whatever PAU_CTL[3]. It brings the CRC to protocols whose bits do not pass the PAU (1-Wire,
-  SWD parity: a 1-bit CRC with polynomial 1); `mov isr, osr` then a feed of 16 covers a word
-  about to be sent.
+  whatever PAU_CTL[3], one bit a strobe: it takes Count strobes (a stall), after the line bit
+  of each. It brings the CRC to protocols whose bits do not pass the PAU (1-Wire, SWD parity: a
+  1-bit CRC with polynomial 1); `mov isr, osr` then a feed of 16 covers a word about to be sent.
 
 ### Transmitter
 
 OUT PINS with TX on appends its `count` bits to the TX queue in time order; while the queue has
-no room for them it does nothing and issues again every strobe. With CRC on, the bits update the CRC as they are queued.
+no room for them it does nothing and issues again every strobe. Each queued bit keeps the
+stuffing, CRC and monitor flags of PAU_CTL when it was queued.
 Every bit time the transmitter takes the next queued bit, or a stuffed bit, and drives it:
 
 | ENC | Line during a bit b (before INV) |
@@ -365,7 +370,7 @@ bit restarts the count, as a stuffed bit does in TX (an HDLC flag, six 1s then a
 whole). NRZ and NRZI
 keep sampling an idle line: the program frames the data, e.g. it checks the CRC status right
 after taking the last bit of the frame. Bits then feed
-the CRC (CRC on, TX off) and enter the RX queue; a bit arriving at a full queue is dropped and
+the CRC (CRC on, the PAU TX not driving) and enter the RX queue; a bit arriving at a full queue is dropped and
 sets RX overrun. IN PINS with RX on takes `count` bits from the queue (oldest first in time order); while fewer
 are queued it does nothing and issues again every strobe.
 
@@ -522,3 +527,7 @@ Found designing the RTL, or by the principles above:
   a pin changed since the previous strobe (a recording of every pin).
 - STUFF_MODE `01` (a 1 after LEN 0s) removed: no protocol uses it (AGENT.md, the PAU rule).
 - Every FIFO word passes the SRAM: no bypasses (they served SM-to-SM traffic).
+- The CRC takes the data bits on the wire, a bit a strobe: a TX bit when it is sent, not when
+  queued; CRC feed takes Count strobes; CRC append waits for the queued data bits (v2 first fed
+  up to 16 bits in a strobe: a chain of 16 programmable 32-bit CRC steps, about 23k um2 an SM
+  and 11 ns after the IMEM's 5.3 ns, measured for the RTL).

@@ -30,8 +30,7 @@ byte:
     out pins, 8
 next:
     jmp x--, byte
-    set pau_ctl, tx|stuff       ; the FCS: stuffed, not fed to the CRC
-    pau crc_append
+    pau crc_append              ; the FCS after the data bits, stuffed (appended bits never feed the CRC)
     mov osr, y
     set pau_ctl, tx
     out pins, 8                 ; closing flag

@@ -74,7 +74,7 @@ text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 <text x="40" y="262" class="small" text-anchor="start">bits to the ISR</text>
 <rect x="220" y="330" width="440" height="80" rx="8" class="b"/>
 <text x="440.0" y="358.0" class="h" text-anchor="middle">CRC: checksum, 1 to 32 bits</text>
-<text x="440.0" y="375.0" class="d" text-anchor="middle">fed by the data bits sent or received, or by the ISR</text>
+<text x="440.0" y="375.0" class="d" text-anchor="middle">fed a bit a strobe: data bits sent or received, or the ISR</text>
 <text x="440.0" y="392.0" class="d" text-anchor="middle">appends it when sending · checks it when receiving</text>
 <polyline points="415,90 415,328" class="ctl" marker-end="url(#ctl)"/>
 <polyline points="560,287 560,328" class="ctl" marker-end="url(#ctl)"/>

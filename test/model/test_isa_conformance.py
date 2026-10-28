@@ -249,10 +249,14 @@ class IrqFifo(unittest.TestCase):
 class CrcFeed(unittest.TestCase):
 
     def test_feeds_the_last_isr_bits_oldest_first(self):
+        """A bit a strobe: crc_feed 8 takes 8 strobes."""
         for right, isr in ((True, 0xA500), (False, 0x00A5)):   # 0xA5 shifted in, both directions
             sm = sm_of(".crc width=8 poly=0x31\npau crc_feed, 8" + HALT, shift_in_right=right)
             sm.isr = isr
+            run(sm, 7)
+            self.assertEqual((sm.pc, sm.stalled), (0, True))
             run(sm, 1)
+            self.assertEqual((sm.pc, sm.stalled), (1, False))
             ref = 0                                   # serial CRC-8, 0xA5 in arrival order
             bits = [0xA5 >> i & 1 for i in range(8)] if right else [0xA5 >> i & 1 for i in range(7, -1, -1)]
             for b in bits:
@@ -260,6 +264,58 @@ class CrcFeed(unittest.TestCase):
                 ref = (ref << 1) & 0xFF
                 ref ^= 0x31 if fb else 0
             self.assertEqual(sm.crc, ref)
+
+
+class CrcOfTheWire(unittest.TestCase):
+    """The PAU CRC is fed with the data bits on the wire: a TX bit when it is sent (if it was
+    queued with CRC on), an RX bit when it is decoded (CRC on, the PAU TX not driving)."""
+
+    PAU = ".pau enc=nrz baud=1\n.crc width=8 poly=0x07\n"     # a bit every 2 strobes
+
+    @staticmethod
+    def crc8(bits):
+        ref = 0
+        for b in bits:
+            fb = (ref >> 7 & 1) ^ b
+            ref = (ref << 1) & 0xFF ^ (0x07 if fb else 0)
+        return ref
+
+    def test_tx_bits_feed_when_sent(self):
+        sm = sm_of(self.PAU + "set pau_ctl, tx|crc\nout pins, 8" + HALT)
+        sm.osr = 0xA5
+        run(sm, 2)
+        self.assertEqual((sm.crc, len(sm.tx_queue)), (0, 8), "queued, not yet sent")
+        run(sm, 1)                                       # bit 0 (a 1) starts
+        self.assertEqual(sm.crc, self.crc8([1]))
+        run(sm, 14)                                      # bit 7 starts on strobe 17
+        self.assertEqual(sm.crc, self.crc8([0xA5 >> i & 1 for i in range(8)]))
+
+    def test_append_after_the_data_bits(self):
+        sm = sm_of(self.PAU + "set pau_ctl, tx|crc\nout pins, 8\npau crc_append" + HALT)
+        sm.osr = 0xA5
+        run(sm, 16)
+        self.assertEqual((sm.pc, len(sm.tx_queue)), (2, 1), "waits while data bits are queued")
+        run(sm, 1)
+        ref = self.crc8([0xA5 >> i & 1 for i in range(8)])
+        self.assertEqual((sm.pc, sm.crc), (3, ref))
+        self.assertEqual([q[0] for q in sm.tx_queue], [ref >> i & 1 for i in range(7, -1, -1)])
+        self.assertFalse(any(q[3] for q in sm.tx_queue), "appended bits never feed the CRC")
+
+    def test_the_flag_of_a_bit_is_taken_when_queued(self):
+        sm = sm_of(self.PAU + "set pau_ctl, tx\nout pins, 8\nset pau_ctl, tx|crc" + HALT)
+        sm.osr = 0xA5
+        run(sm, 30)
+        self.assertEqual((len(sm.tx_queue), sm.crc), (0, 0))
+
+    def test_rx_does_not_feed_while_tx_drives(self):
+        sm = sm_of(self.PAU + "set pau_ctl, tx\nout pins, 8\nset pau_ctl, rx|crc" + HALT)
+        sm.osr = 0xA5
+        run(sm, 2)
+        while sm.tx_drives:                              # the TX pin looped back to RX
+            self.assertEqual(sm.crc, 0)
+            sm.gpio_in = sm.pins
+            sm.step()
+        self.assertGreater(len(sm.rx_queue), 4, "RX decoded the bits TX sent, without feeding them")
 
 
 class Wait(unittest.TestCase):
@@ -407,7 +463,7 @@ class Prescaler(unittest.TestCase):
 class Reserved(unittest.TestCase):
 
     def test_reserved_encodings_are_nops(self):
-        for word in (0xC0F0, 0xC041, 0xC0A4):            # PAU action 11, FIFO bits [1:0], WAIT bit 2
+        for word in (0xC0C1, 0xC041, 0xC0A4):            # CRC reset with a count, FIFO bits [1:0], WAIT bit 2
             with self.subTest(word=hex(word)):
                 sm = sm_of(f".word {word:#x}" + HALT)
                 sm.x, sm.isr, sm.osr = 1, 2, 3
