@@ -911,7 +911,7 @@ class StateMachine:
             elif dest == R_Y:
                 self.y = res
             elif dest == R_ISR:
-                self.isr, self.isr_count = res, 16
+                self.isr, self.isr_count = res, 0          # empty, as the OSR is full
             elif dest == R_OSR:
                 self.osr, self.osr_count = res, 0
             elif dest == R_SPECIAL:
