@@ -1,8 +1,8 @@
-"""Gate-level lockstep co-simulation of src/openpio_core.v against sim/model/emu.py.
+"""Gate-level lockstep co-simulation: the RTL of src/ as a flat netlist, stepped in Python.
 
-Yosys synthesizes the RTL to a flat netlist of $_AND_/$_OR_/$_XOR_/$_NOT_/$_MUX_
-and $_DFF_P_ cells; the netlist is compiled into straight-line Python and
-stepped one clock per emu StateMachine.step().
+Yosys synthesizes the RTL to $_AND_/$_OR_/$_XOR_/$_NOT_/$_MUX_ and $_DFF_P_ cells; the netlist is
+compiled into straight-line Python, so a test bench steps it one clock at a time beside the
+reference model (sim/model/) and compares them.
 
 Yosys: $YOSYS, else `yosys`, else `yowasp-yosys` (pip install yowasp-yosys).
 RTL: src/, or $OPENPIO_SRC (e.g. a mutated copy for harness sensitivity checks).
@@ -21,8 +21,6 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "sim" / "model"))
 
 SRC = Path(os.environ.get("OPENPIO_SRC", ROOT / "src"))
-SOURCES = ["alu.v", "shifter.v", "imem.v", "pau.v", "openpio_core.v",
-           "fifo.v", "spi_cfg_interface.v", "tt_um_openpio.v"]
 
 
 def find_yosys() -> str:
@@ -32,13 +30,13 @@ def find_yosys() -> str:
     raise RuntimeError("Yosys not found: set $YOSYS or pip install yowasp-yosys")
 
 
-def build(top: str = "openpio_core") -> dict:
-    """Lint (check -assert) and synthesize src/ to a gate-level JSON module."""
+def build(sources: list[str], top: str) -> dict:
+    """Lint (check -assert) and synthesize src/<sources> to a gate-level JSON module."""
     with tempfile.TemporaryDirectory() as tmp:
         # yowasp-yosys (WASM) only sees the working directory
-        for f in SOURCES:
+        for f in sources:
             shutil.copy(SRC / f, tmp)
-        script = (f"read_verilog -noautowire {' '.join(SOURCES)}; "
+        script = (f"read_verilog -noautowire {' '.join(sources)}; "
                   f"hierarchy -check -top {top}; proc; check -assert; "
                   f"synth -noabc -flatten -top {top}; dffunmap; opt_clean; write_json net.json")
         subprocess.run([find_yosys(), "-q", "-p", script], cwd=tmp, check=True,
@@ -139,100 +137,3 @@ class Core:
         self.net.comb(self.v)
         self.net.clk(self.v)
         self.net.comb(self.v)
-
-
-def _bits(flags) -> int:
-    return sum(1 << i for i, f in enumerate(flags) if f)
-
-
-class Lockstep:
-    """Bring up a Core from a fresh emu StateMachine, then mirror each step().
-
-    Host-side changes between steps (gpio_in, FIFO contents, cleared IRQ
-    flags) are read from the StateMachine and driven onto the core inputs.
-    """
-
-    def __init__(self, net: Netlist, sm) -> None:
-        self.c = c = Core(net)
-        self.sm = sm
-        for k in ("en", "imem_wr_en", "imem_wr_addr", "imem_wr_data", "gpio_in", "tx_empty",
-                  "tx_data", "rx_full", "irq_clr", "peer_irq_clr"):
-            c.set(k, 0)
-        cfg = dict(
-            cfg_wrap_bottom=sm.wrap_bottom, cfg_wrap_top=sm.wrap_top,
-            cfg_ss_count=sm.side_set_count, cfg_ss_opt=sm.side_set_opt,
-            cfg_ss_pindirs=sm.side_set_pindirs, cfg_ss_base=sm.sideset_base & 7,
-            cfg_in_base=sm.in_base & 7, cfg_out_base=sm.out_base & 7,
-            cfg_set_base=sm.set_base & 7, cfg_set_count=sm.set_count,
-            cfg_jmp_pin=sm.jmp_pin & 7, cfg_od_mask=sm.open_drain_mask,
-            cfg_in_shr=sm.shift_in_right, cfg_out_shr=sm.shift_out_right,
-            cfg_clkdiv_int=sm.clkdiv_int, cfg_clkdiv_frac=sm.clkdiv_frac)
-        for k, val in cfg.items():
-            c.set(k, val)
-        c.set("rst_n", 0); c.clock(); c.set("rst_n", 1)
-        for a in range(32):
-            c.set("imem_wr_en", 1); c.set("imem_wr_addr", a)
-            c.set("imem_wr_data", sm.memory[a]); c.clock()
-        c.set("imem_wr_en", 0); c.clock()          # en=0 cycle: rd_data <= mem[pc]
-        c.set("en", 1)
-        self.cycle = 0
-
-    def step(self, emu_step) -> list[str]:
-        """Run emu_step(sm) and one core clock; return mismatch descriptions."""
-        c, sm = self.c, self.sm
-        hw_irq, hw_pirq = c.get("irq_flags"), c.get("peer_irq_flags")
-        em_irq, em_pirq = _bits(sm.irq_flags), _bits(sm.peer_irq_flags)
-        if (em_irq & ~hw_irq) or (em_pirq & ~hw_pirq):
-            raise RuntimeError("host-set IRQ flags have no core input")
-        c.set("irq_clr", hw_irq & ~em_irq)
-        c.set("peer_irq_clr", hw_pirq & ~em_pirq)
-        c.set("gpio_in", sm.gpio_in & 0xFF)
-        c.set("tx_empty", not sm.tx_fifo)
-        c.set("tx_data", sm.tx_fifo[0] if sm.tx_fifo else 0)
-        c.set("rx_full", len(sm.rx_fifo) >= sm.fifo_depth)
-        c.eval()
-        tx_pop, rx_push, rx_data = c.get("tx_pop"), c.get("rx_push"), c.get("rx_data")
-        tx_len, rx_len = len(sm.tx_fifo), len(sm.rx_fifo)
-
-        emu_step(sm)
-        c.clock()
-        self.cycle += 1
-        return compare(c.get, sm, tx_pop, rx_push, rx_data, tx_len, rx_len)
-
-
-def compare(get, sm, tx_pop, rx_push, rx_data, tx_len, rx_len) -> list[str]:
-    """Core state after a clock vs emu after step(); get(name) reads a core port.
-
-    tx_pop / rx_push / rx_data are the core's FIFO handshake sampled before
-    the clock, tx_len / rx_len the emu FIFO lengths before step().
-    """
-    hp2 = 2 * (sm.pau_baud or 1)
-    em_push = len(sm.rx_fifo) > rx_len
-    checks = [
-        ("tx_pop", tx_pop, int(len(sm.tx_fifo) < tx_len)),
-        ("rx_push", rx_push, int(em_push)),
-        ("rx_data", rx_data if em_push else 0, sm.rx_fifo[-1] if em_push else 0),
-        ("pc", get("dbg_pc"), sm.pc),
-        ("x", get("dbg_x"), sm.x),
-        ("y", get("dbg_y"), sm.y),
-        ("isr", get("dbg_isr"), sm.isr),
-        ("osr", get("dbg_osr"), sm.osr),
-        ("isr_cnt", get("dbg_isr_cnt"), sm.isr_count),
-        ("osr_cnt", get("dbg_osr_cnt"), sm.osr_count),
-        ("stalled", get("dbg_stalled"), int(sm.stalled)),
-        ("delay", get("dbg_delay"), sm.delay_counter),
-        ("gpio_out", get("gpio_out"), sm.gpio_out),
-        ("pindirs", get("gpio_oe"), sm.pindirs),
-        ("irq", get("irq_flags"), _bits(sm.irq_flags)),
-        ("peer_irq", get("peer_irq_flags"), _bits(sm.peer_irq_flags)),
-        ("tmo_flag", get("dbg_timeout_flag"), int(sm.timeout_flag)),
-        ("tmo_cnt", get("dbg_timeout"), sm.timeout_counter),
-        ("tmo_val", get("dbg_timeout"), sm.timeout_val),
-        ("clkdiv", get("dbg_clkdiv"), sm.clkdiv_int),
-        ("pau_cfg", get("dbg_pau_cfg"), sm.pau_cfg),
-        ("pau_baud", get("dbg_pau_baud"), sm.pau_baud),
-        ("mtx_nsym", get("dbg_mtx_nsym"), -(-len(sm.pau_tx_queue) // hp2)),
-        ("nrzi_k", get("dbg_nrzi_k"), int(sm.pau_nrzi_state == 2)),
-        ("nrzi_ones", get("dbg_nrzi_ones"), min(sm.pau_ones_count, 7)),
-    ]
-    return [f"{n}: hw={h:#x} emu={e:#x}" for n, h, e in checks if h != e]
