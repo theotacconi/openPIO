@@ -20,14 +20,14 @@ Example programs (UART, Modbus RTU, SPI, I2C, USB low speed, USB Power Delivery 
 
 SPI mode 0, MSB first, sampled by the system clock: SCLK high and low phases of at least 3 `clk` cycles (SCLK <= `clk` / 6, 8.3 MHz at 50 MHz).
 
-A transaction is CS_N low, a 16-bit header `{Op[15:13], SM[12:11], 0[10:6], Addr[5:0]}`, any number of 16-bit data words, CS_N high. Addresses increment within a burst. MISO carries the read data during the data words of reads and the SM's STATUS register otherwise.
+A transaction is CS_N low, a 16-bit header `{Op[15:13], SM[12:11], 0[10:6], Addr[5:0]}`, any number of 16-bit data words, CS_N high. Addresses increment within a burst. MISO carries the read data during the data words of reads and the SM's STATUS register otherwise (during the header: the STATUS of the previous transaction's SM).
 
 | Op | Command | Each data word |
 |----|---------|----------------|
 | 010 | REG_WR | register `Addr` <= word |
 | 011 | REG_RD | MISO = register `Addr` |
 | 100 | TX_PUSH | TX FIFO <= word (dropped when full) |
-| 101 | RX_POP | MISO = RX FIFO head, popped (0 when empty) |
+| 101 | RX_POP | MISO = RX FIFO head, popped (0 when empty); `Addr` = words to pop, 1..63 (0 = 64) |
 | 110 | IMEM_WR | instruction `Addr` <= word (SM stopped) |
 | 111 | IMEM_RD | MISO = instruction `Addr` (SM stopped) |
 
@@ -65,7 +65,7 @@ Echo loop on SM 0 (`pull block`, `mov isr, osr`, `push block`): every TX word co
 0x4001  0x0200                 REG_WR WRAP: wrap_top = 2
 0x4020  0x0011                 REG_WR CTRL: reset and enable SM 0
 0x8000  0x1234                 TX_PUSH
-0xA000  0x0000                 RX_POP: MISO returns 0x1234
+0xA001  0x0000                 RX_POP of 1 word: MISO returns 0x1234
 ```
 
 ## External hardware
