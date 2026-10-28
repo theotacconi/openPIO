@@ -50,12 +50,14 @@ a write is discarded.
 | `001` | PINDIRS | - | pindirs from `out_base` | pindirs | pindirs |
 | `010` | X | X | X | X | X |
 | `011` | Y | Y | Y | Y | Y |
-| `100` | ISR | ISR | ISR (count = bits) | ISR | ISR (count = 16) |
+| `100` | ISR | ISR | ISR (count = bits) | ISR | ISR (count = 0) |
 | `101` | OSR | OSR | - | OSR | OSR (count = 0) |
 | `110` | NULL | zeros | discard | 0 | discard |
 | `111` | special | STATUS | PC (indirect jump) | STATUS | COND |
 
-ALU PINS / PINDIRS are all 16 pin positions, bit i = pin i (no base). STATUS (read-only) is the SM status in bits [7:0] and the PAU status in bits [15:8],
+ALU PINS / PINDIRS are all 16 pin positions, bit i = pin i (no base). An ALU write leaves the ISR
+empty and the OSR full (counts 0): `mov isr, null` drops a partial word, `mov isr, x` then PUSH
+sends X. STATUS (read-only) is the SM status in bits [7:0] and the PAU status in bits [15:8],
 indices 0..7 of the Conditions tables, bit i = index i.
 
 ## JMP `00A`
@@ -465,6 +467,8 @@ the shift counts. A program carries all of it as assembler directives (`sim/mode
   delays were scaled by CLKDIV too, except after a WAIT / PUSH / PULL stall). CLKDIV has a 16-bit
   integer part (v1: 8 bits): 9600 baud at 8 strobes a bit from 50 MHz.
 - Timing within a clock written down, with the 2-clock input synchronizer in the model.
+- ALU ISR leaves the ISR count at 0 (empty, as RP2040 `MOV ISR`), not 16: a program can drop a
+  partial word without pushing it.
 - After CTRL.RESET the OSR is empty (`osr_count` = 16; v1: 0, a full OSR of zeros), the IRQ
   flags are clear and the CRC holds its initial value.
 - FIFOs of 133 words (4 front + 128 in a data SRAM per SM + an IN / OUT register; v1: 4).

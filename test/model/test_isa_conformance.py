@@ -186,10 +186,13 @@ class Alu(unittest.TestCase):
         self.assertEqual(self.op("sub", 1, 2), 0xFFFF, "no borrow")
 
     def test_isr_osr_counts(self):
-        sm = sm_of("mov isr, x\nmov osr, x" + HALT)
+        """Both counts 0: the ISR empty, the OSR full."""
+        sm = sm_of("in null, 5\nmov isr, x\nmov osr, x\npush iffull noblock\npush noblock" + HALT)
         sm.x = 7
+        run(sm, 3)
+        self.assertEqual((sm.isr, sm.isr_count, sm.osr, sm.osr_count), (7, 0, 7, 0))
         run(sm, 2)
-        self.assertEqual((sm.isr, sm.isr_count, sm.osr, sm.osr_count), (7, 16, 7, 0))
+        self.assertEqual(list(sm.rx_fifo), [7], "IfCond: not full, not pushed; a plain PUSH sends it")
 
     def test_pins_pindirs_cond_null(self):
         sm = sm_of("mov pins, x\nmov pindirs, x\nmov y, pins\nmov cond, osr\nmov null, x" + HALT)
