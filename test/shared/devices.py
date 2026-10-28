@@ -186,29 +186,29 @@ class SpiSlave(Device):
 
 
 class SpiMaster(Device):
-    """SPI master, mode 0, MSB first, 8-bit words: each transfer of `transfers` is CS_N low,
+    """SPI master, mode 0, MSB first, `bits`-bit words: each transfer of `transfers` is CS_N low,
     `lead` clocks, then per bit SCK `half` clocks low, `half` high (MOSI set as SCK falls, MISO
     sampled as it rises), then CS_N high for `gap` clocks. A word may be (value, bits) to end the
     transfer after its first bits. `received` gets each transfer's MISO words (whole ones).
     Checks: MISO stable for `setup` clocks before each rising edge."""
 
     def __init__(self, sck: int, mosi: int, miso: int, cs: int, transfers: list[list], half: int,
-                 start: int = 0, lead: int = 0, gap: int = 0, setup: int = 1) -> None:
+                 start: int = 0, lead: int = 0, gap: int = 0, setup: int = 1, bits: int = 8) -> None:
         super().__init__()
         self.miso, self.setup = miso, setup
         self.schedule: list[tuple[int, dict]] = []
         self.samples: list[tuple[int, int, int]] = []    # (clock, transfer, word)
         self.received: list[list[int]] = [[] for _ in transfers]
         t = start
-        for n, words in enumerate(transfers):
+        for tr, words in enumerate(transfers):
             self.schedule.append((t, {cs: 0}))
             t += lead
             for k, w in enumerate(words):
-                value, bits = w if isinstance(w, tuple) else (w, 8)
-                for i in range(7, 7 - bits, -1):
+                value, n = w if isinstance(w, tuple) else (w, bits)
+                for i in range(bits - 1, bits - 1 - n, -1):
                     self.schedule += [(t, {sck: 0, mosi: value >> i & 1}), (t + half, {sck: 1})]
-                    if bits == 8:
-                        self.samples.append((t + half, n, k))
+                    if n == bits:
+                        self.samples.append((t + half, tr, k))
                     t += 2 * half
             self.schedule += [(t, {sck: 0}), (t + half, {cs: 1})]
             t += half + gap
