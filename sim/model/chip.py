@@ -95,6 +95,7 @@ class Chip:
         self.pads_out, self.pads_in, self.pads_bidir = pads
         self.en = 0
         self.stepping = 0               # CTRL STEP: SM i runs until it has executed a strobe
+        self.spi_sm = 0                 # the SM of the last SPI transaction (the header's MISO)
         self.pin_in = 0                 # levels at the input pads now, bit = pin
         self._sync = [0, 0]             # 2-flip-flop input synchronizer: gpio_in of 2 clocks ago
         self.cycle = 0
@@ -299,13 +300,21 @@ class Chip:
     def spi(self, hdr: int, words: Sequence[int] = ()) -> list[int]:
         """One SPI transaction (HOST.md): header then a burst of data words, each taking
         spi_word_clocks clocks. A read word is a host access in its first clock, a write one in
-        the clock after its last bit. Returns the MISO words: the header's, then one per data
+        the clock after its last bit; RX_POP pops `Addr` words (0 = 64), later ones read 0.
+        Returns the MISO words: the header's (the previous transaction's SM), then one per data
         word."""
         op, n, addr = hdr >> 13 & 7, hdr >> 11 & 3, hdr & 0x3F
         n = min(n, len(self.sms) - 1)
-        miso = [self._sm_status_reg(self.sms[n])]
+        miso = [self._sm_status_reg(self.sms[self.spi_sm])]
+        self.spi_sm = n
+        pops = (addr or 64) if op == OP_RX_POP else 0
         self.step(self.spi_word_clocks)
         for word in words:
+            if op == OP_RX_POP and not pops:
+                miso.append(0)
+                self.step(self.spi_word_clocks)
+                continue
+            pops -= op == OP_RX_POP
             if op in (OP_REG_RD, OP_RX_POP, OP_IMEM_RD):
                 miso.append(self.host(op, n, addr))
                 addr += op != OP_RX_POP

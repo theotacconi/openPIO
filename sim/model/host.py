@@ -75,4 +75,8 @@ class Host:
 
     def pop(self, n: int, count: int = 1) -> list[int]:
         """RX_POP burst (0 for each word the FIFO did not have)."""
-        return self.chip.spi(header(OP_RX_POP, n), [0] * count)[1:]
+        words: list[int] = []
+        while len(words) < count:                    # RX_POP pops `Addr` words, up to 64
+            k = min(count - len(words), 64)
+            words += self.chip.spi(header(OP_RX_POP, n, k & 63), [0] * k)[1:]
+        return words

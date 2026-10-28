@@ -25,13 +25,19 @@ header:  15  14  13 | 12  11 | 10 .. 6 | 5 .. 0
 | `010` | REG_WR | register `Addr` of SM `SM` <= word, then Addr + 1 |
 | `011` | REG_RD | MISO = register `Addr`, then Addr + 1 |
 | `100` | TX_PUSH | TX FIFO <= word (dropped when full; ISA.md, FIFOs) |
-| `101` | RX_POP | MISO = RX FIFO head, popped (0 when empty) |
+| `101` | RX_POP | MISO = RX FIFO head, popped (0 when empty); `Addr` = words to pop, 1..63 (0 = 64), words beyond them read 0 and pop nothing |
 | `110` | IMEM_WR | instruction `Addr` <= word, then Addr + 1 (SM stopped) |
 | `111` | IMEM_RD | MISO = instruction `Addr`, then Addr + 1 (SM stopped; 0 while it runs: the port fetches) |
 
 MISO carries the read data during the data words of REG_RD, RX_POP and IMEM_RD (the value is
-taken when the word starts) and the SM's STATUS register during every other word and during
-the header. Chip registers (`Addr` >= 0x20) ignore `SM`.
+taken when the word starts) and the SM's STATUS register during every other word. During the
+header MISO carries the STATUS of the previous transaction's SM (SM 0 after reset), taken when
+CS_N falls: the header's SM field arrives after MISO's top bits. Chip registers (`Addr` >= 0x20)
+ignore `SM`.
+
+A read word's MSB is on MISO before its first SCLK edge, so the slave reads a word as the
+previous one ends, before it knows whether the master clocks it: reads have no side effect
+except RX_POP, which pops only its `Addr` words, so a burst never loses one.
 
 ## Registers of an SM (`Addr` 0x00..0x1F)
 
