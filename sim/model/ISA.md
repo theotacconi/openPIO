@@ -5,11 +5,29 @@ user's decision, in one commit with the model and the tests.
 
 ![openPIO architecture](../../docs/architecture.svg)
 
-Each state machine (SM) executes 16-bit instructions from its own 64-word instruction memory,
-one instruction per strobe: CLKDIV (host, HOST.md; 16-bit integer, 8-bit fraction) makes every
-Nth clock a strobe. The chip has an even number of SMs sharing the pins
-(see Multiple state machines); the host interface is in HOST.md. Encoding rule: codes of similar
-or opposite operations differ only in their least significant bit.
+## Principles
+
+openPIO rests on two ideas; everything else is the least that serves them.
+
+1. **A deterministic state machine.** Each state machine (SM) executes one 16-bit instruction per
+   strobe from its own 64-word memory; CLKDIV (16-bit integer, 8-bit fraction) makes every Nth
+   clock a strobe. Every instruction takes a known number of strobes, and nothing on the SM's
+   path waits for anything it cannot see: no cache, no shared bus, inputs through a fixed
+   2-clock synchronizer. The timing of a program is a property of its text: it can be computed
+   and proved, not only measured.
+2. **A parametric line layer.** Between the SM and the pins, the PAU does the parts of serial
+   protocols an SM cannot do in software at speed: line codes, bit stuffing, CRCs, clock
+   recovery, monitoring a wired-AND bus. Each is a parameter, not a protocol (the admission rule
+   for a PAU feature is in AGENT.md), so a protocol of this family is a point in a small space:
+   it can be written, checked, and found from a recording.
+
+Around them: FIFOs to the host, pins shared by an even number of SMs, IRQ flags between them,
+and the host interface (HOST.md). Encoding rule: codes of similar or opposite operations differ
+only in their least significant bit.
+
+# 1. The state machine
+
+## Instruction format
 
 ```
  15  14  13 | 12  11  10   9   8 |  7   6   5   4   3   2   1   0
@@ -238,11 +256,16 @@ a slot is rewritten compares against the old definition's value.
 | COND2 | `0x00` | GPIO pin 0 (v1 `pin` with `jmp_pin` = 0) |
 | COND3 | `0xE4` | not OSR empty (v1 `!osre`) |
 
+# 2. The line layer
+
 ## PAU (Protocol Acceleration Unit)
 
 A serial transmitter and receiver between OUT / IN PINS and the pins, with its own bit timing,
-line coding, bit stuffing and CRC. The program feeds and drains bits; the PAU keeps the line
-timing exact.
+line coding, bit stuffing and CRC. The program feeds and drains bits and does the framing; the
+PAU keeps the line timing exact. Each part is a parameter, not a protocol: the table below is
+the whole space, and a protocol of the family is one point in it (USB: NRZI, stuffing `00` after
+6, CRC-16 0x8005; CAN: NRZ, stuffing `10` after 5, CRC-15 0x4599; HDLC: NRZI, `00` after 5,
+CRC-16 0x1021; 10BASE-T: Manchester, DIFF, CRC-32).
 
 ```
  OUT PINS -> TX queue (32 bits) -> stuffing -> line encoder -> pin out_base (+1)
@@ -346,6 +369,8 @@ the CRC (CRC on, TX off) and enter the RX queue; a bit arriving at a full queue 
 sets RX overrun. IN PINS with RX on takes `count` bits from the queue (oldest first in time order); while fewer
 are queued it does nothing and issues again every strobe.
 
+# 3. Around them
+
 ## FIFOs
 
 Each SM has a TX FIFO (host to SM) and an RX FIFO (SM to host) of 133 words, kept in order
@@ -445,7 +470,9 @@ the shift counts. A program carries all of it as assembler directives (`sim/mode
   Behaviour of IMEM writes with `CTRL.EN = 1` is undefined.
 - **PAU receiver timing needs H >= 2** for Manchester and biphase mark (edge windows of H / 2).
 
-## Changes from ISA v1
+## History
+
+### Changes from ISA v1
 
 - 64-word IMEM, 6-bit PC, wrap and OUT PC; JMP on opcodes `000` / `001`.
 - ALU on opcodes `100` / `101` with 8 operations (v1: MOV, XOR, ADD, REV on `101`).
@@ -463,28 +490,34 @@ the shift counts. A program carries all of it as assembler directives (`sim/mode
 - JMP conditions: `!x`, `!y`, `timeout`, `pin`, `!osre` become programmable (COND0..3, reset
   values as v1 except `timeout`); `never` added; Y-- `100` -> `011`. The MISC `jmp_pin` field is
   replaced by COND_CFG slot 2.
-- PAU v2: own bit timing, TX and RX, line monitor, CRC feed from the ISR, NRZ / NRZI / Manchester / biphase mark, programmable
-  stuffing and CRC (up to 32 bits; parity is a 1-bit CRC with polynomial 1). v1 had TX-only
+- PAU v2: own bit timing, TX and RX, line monitor, CRC feed from the ISR, NRZ / NRZI /
+  Manchester / biphase mark, programmable stuffing and CRC (up to 32 bits; parity is a 1-bit CRC with polynomial 1). v1 had TX-only
   NRZI with a stuffing toggle that took a data bit's time slot (a defect) and a Manchester TX
   queue; IRQ no longer waits for the PAU (PAU_BUSY): WAIT on PAU status TX idle instead.
 - Delays and WAIT timeouts count strobes times DLYMUL; CLKDIV only divides the strobe rate (v1:
   delays were scaled by CLKDIV too, except after a WAIT / PUSH / PULL stall). CLKDIV has a 16-bit
   integer part (v1: 8 bits): 9600 baud at 8 strobes a bit from 50 MHz.
 - Timing within a clock written down, with the 2-clock input synchronizer in the model.
-- ALU ISR leaves the ISR count at 0 (empty, as RP2040 `MOV ISR`), not 16: a program can drop a
-  partial word without pushing it.
-- Peer SMs act in parallel: flags written to the peer are seen from the next clock (the v2
-  model first let SM 1 see SM 0's writes in the same clock). No PUSH / PULL to the peer's FIFOs
-  (v2 had them: one program used them, at the price of FIFO arbitration between SMs). A host access takes
-  one clock with them (the model first applied it between clocks). WAIT edges compare the
-  values two strobes see (the model first kept them after the instruction).
-- IN source `001` is TIME, OUT destination `101` PAU_BAUD (v2 first: reserved).
-- STUFF_MODE `01` (a 1 after LEN 0s) removed: no protocol uses it (AGENT.md, the PAU rule).
 - After CTRL.RESET the OSR is empty (`osr_count` = 16; v1: 0, a full OSR of zeros), the IRQ
   flags are clear and the CRC holds its initial value.
-- FIFOs of 133 words (4 front + 128 in a data SRAM per SM + an IN / OUT register; v1: 4). Every
-  word passes the SRAM: the v2 model first had bypasses for SM-to-SM traffic, gone with it.
+- FIFOs of 133 words (4 front + 128 in a data SRAM per SM + an IN / OUT register; v1: 4).
 - STATUS as IN / ALU source `111`; several SMs with shared pins, PIN_MASK
   and chip-level open drain (v1: one SM, open drain rewrote its pindirs).
 - 16 pin positions mapped to the implementation's pads (v1: 8 pins; the chip's `ui_in[7:3]` were
   alternative inputs and `uo_out[7:2]` copies of pins 2..7, now pins 11..15 and 10..15).
+
+### Revisions of v2 (2026-10-28)
+
+Found designing the RTL, or by the principles above:
+
+- ALU ISR leaves the ISR count at 0 (empty, as RP2040 `MOV ISR`), not 16: a program can drop a
+  partial word without pushing it.
+- Peer SMs act in parallel: flags written to the peer are seen from the next clock (the v2
+  model first let SM 1 see SM 0's writes in the same clock). No PUSH / PULL to the peer's FIFOs
+  (one program used them, at the price of FIFO arbitration between SMs).
+- A host access takes one clock, in parallel with the SMs (the model first applied it between
+  clocks). WAIT edges compare the values two strobes see (the model first kept them after the
+  instruction).
+- IN source `001` is TIME, OUT destination `101` PAU_BAUD (v2 first: reserved).
+- STUFF_MODE `01` (a 1 after LEN 0s) removed: no protocol uses it (AGENT.md, the PAU rule).
+- Every FIFO word passes the SRAM: no bypasses (they served SM-to-SM traffic).
