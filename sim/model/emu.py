@@ -185,7 +185,10 @@ class StateMachine:
         self.gpio_in = 0
         self.irq_flags = [False] * 8
         # The peer's IRQ flags and FIFOs; a chip links them to SM index ^ 1
-        self.peer_irq_flags = [False] * 8
+        self.peer_irq_flags = [False] * 8                     # the peer's flags at the clock start
+        self.peer_irq_writes: list[tuple[int, bool]] = []     # land at the clock end (end_clock)
+        self.peer_tx_word: int | None = None                  # PUSH PEER word, same
+        self._tx_pulled = self._rx_fresh = 0                  # own FIFO moves in this clock
         self.peer_tx_fifo: deque[int] = deque(maxlen=fifo_depth)
         self.peer_rx_fifo: deque[int] = deque(maxlen=fifo_depth)
         self.history: deque[str] = deque(maxlen=15)
@@ -331,9 +334,10 @@ class StateMachine:
         return self.fifo_depth + (BUFFER_WORDS + 1 if self.buffer else 0)
 
     def _tx_direct(self) -> bool:
-        """A TX word can go straight to the front: nothing older waits behind it."""
+        """A TX word can go straight to the front: nothing older waits behind it. Words the SM
+        pulled in this clock still count: its peer sees the FIFO as at the clock start."""
         return (not self.tx_back and self.tx_in is None and self.tx_flight is None
-                and len(self.tx_fifo) < self.fifo_depth)
+                and len(self.tx_fifo) + self._tx_pulled < self.fifo_depth)
 
     def tx_room(self) -> bool:
         return self._tx_direct() or self.buffer and self.tx_in is None
@@ -351,13 +355,26 @@ class StateMachine:
 
     def rx_read(self) -> int | None:
         """Read an RX word as the host or the peer does: the OUT register, else the front when
-        nothing waits in the SRAM; else None (empty for this read)."""
+        nothing waits in the SRAM; else None (empty for this read). Words the SM pushed in this
+        clock are not there yet for its peer."""
         if self.rx_out is not None:
             word, self.rx_out = self.rx_out, None
             return word
-        if not self.rx_back and self.rx_flight is None and self.rx_fifo:
+        if not self.rx_back and self.rx_flight is None and len(self.rx_fifo) > self._rx_fresh:
             return self.rx_fifo.popleft()
         return None
+
+    def end_clock(self) -> None:
+        """End of a clock, after every SM: the writes to the peer land (IRQ flags, a PUSH PEER
+        word), so SMs act in parallel (ISA.md, Multiple state machines)."""
+        self._tx_pulled = self._rx_fresh = 0
+        target = self.peer.irq_flags if self.peer is not None else self.peer_irq_flags
+        for idx, val in self.peer_irq_writes:
+            target[idx] = val
+        self.peer_irq_writes.clear()
+        if self.peer_tx_word is not None:
+            assert self.peer.tx_write(self.peer_tx_word), "room was seen at the clock start"
+            self.peer_tx_word = None
 
     @property
     def tx_level(self) -> int:
@@ -694,6 +711,7 @@ class StateMachine:
         self.strobed = False
         self._clock()
         if self._own_bus:
+            self.end_clock()
             self.bus.commit()
             self.buffer_clock()
 
@@ -771,20 +789,28 @@ class StateMachine:
     def _pull_word(self, peer: bool) -> int | None:
         """PULL source: the own TX front, or the peer's RX FIFO read as the host does."""
         if not peer:
-            return self.tx_fifo.popleft() if self.tx_fifo else None
+            if not self.tx_fifo:
+                return None
+            self._tx_pulled += 1
+            return self.tx_fifo.popleft()
         if self.peer is not None:
             return self.peer.rx_read()
         return self.peer_rx_fifo.popleft() if self.peer_rx_fifo else None
 
     def _push_word(self, peer: bool) -> bool:
-        """PUSH target: the own RX front, or the peer's TX FIFO written as the host does."""
+        """PUSH target: the own RX front, or the peer's TX FIFO written as the host does, at the
+        end of the clock if it had room at the start."""
         if not peer:
             if len(self.rx_fifo) >= self.fifo_depth:
                 return False
             self.rx_fifo.append(self.isr)
+            self._rx_fresh += 1
             return True
         if self.peer is not None:
-            return self.peer.tx_write(self.isr)
+            if not self.peer.tx_room():
+                return False
+            self.peer_tx_word = self.isr
+            return True
         if len(self.peer_tx_fifo) >= self.fifo_depth:
             return False
         self.peer_tx_fifo.append(self.isr)
@@ -861,8 +887,8 @@ class StateMachine:
             mask = (1 << count) - 1
             pull_at = self.pull_thresh or 16
             if auto and self.osr_count >= pull_at:
-                if self.tx_fifo:
-                    self.osr, self.osr_count = self.tx_fifo.popleft(), 0
+                if (word := self._pull_word(False)) is not None:
+                    self.osr, self.osr_count = word, 0
                 return self._stall("RETRY")
             if dest == R_PINS and self.pau_ctl & 1 and PAU_QUEUE_BITS - len(self.tx_queue) < count:
                 return self._stall("RETRY")
@@ -874,7 +900,7 @@ class StateMachine:
                 self.osr = (self.osr << count) & 0xFFFF
             self.osr_count = min(16, self.osr_count + count)
             if auto and self.osr_count >= pull_at and self.tx_fifo:
-                self.osr, self.osr_count = self.tx_fifo.popleft(), 0
+                self.osr, self.osr_count = self._pull_word(False), 0
             if dest == R_PINS and self.pau_ctl & 1:
                 order = range(count) if self.shift_out_right else range(count - 1, -1, -1)
                 for i in order if not self.tx_bit_err else ():
@@ -921,8 +947,10 @@ class StateMachine:
             ctype, a = args >> 6, args & 0x3F
             if ctype == CT_IRQ:
                 clear, wait, peer, idx = a >> 5 & 1, a >> 4 & 1, a >> 3 & 1, a & 7
-                flags = self.peer_irq_flags if peer else self.irq_flags
-                flags[idx] = not clear
+                if peer:
+                    self.peer_irq_writes.append((idx, not clear))
+                else:
+                    self.irq_flags[idx] = not clear
                 if wait and not clear:
                     return self._stall("IRQ", peer=peer, idx=idx, delay=delay, next_pc=next_pc)
             elif ctype == CT_FIFO and not a & 3:

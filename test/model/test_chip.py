@@ -191,9 +191,31 @@ class HostInterface(unittest.TestCase):
         load(chip, 0, assemble(".crc width=16 poly=0x8005 init=ones\nend: jmp end"))
         self.assertEqual(chip.reg_read(0, CRC_LO), 0xFFFF, "CRC initial value after RESET")
         chip.reg_write(0, IRQ, 0x81 << 8)
+        chip.step()
         self.assertEqual(chip.sms[1].peer_irq_flags[7], True, "the peer sees the flag")
         chip.reg_write(0, CTRL, 1 << 4)                          # RESET SM 0
+        chip.step()
         self.assertEqual((chip.reg_read(0, IRQ), chip.sms[1].peer_irq_flags[7]), (0, False))
+
+    def test_peers_act_in_parallel(self):
+        """An SM sets its peer's flag 0 in clock 1 while the peer tests it: seen in clock 2, not
+        1, whichever SM writes. The same for a PUSH PEER word."""
+        setter = "irq peer 0\nh: jmp h"
+        tester = "jmp irq 0, 3\njmp irq 0, 5\nh: jmp h\nset x, 1\nh1: jmp h1\nset x, 2\nh2: jmp h2"
+        for n in (0, 1):
+            chip = Chip(2)
+            load(chip, n, assemble(setter))
+            load(chip, 1 - n, assemble(tester))
+            chip.reg_write(0, CTRL, 0b11)
+            chip.step(4)
+            self.assertEqual(chip.sms[1 - n].x, 2, f"SM {n} -> SM {1 - n}: seen from the next clock")
+        chip = Chip(2)
+        load(chip, 0, assemble("set x, 7\nmov isr, x\npush peer\nh: jmp h"))
+        load(chip, 1, assemble("set x, 3\nnop\npull noblock\nmov y, osr\npull noblock\nh: jmp h"))
+        chip.reg_write(0, CTRL, 0b11)
+        chip.step(6)
+        self.assertEqual((chip.sms[1].y, chip.sms[1].osr), (3, 7),
+                         "pushed in clock 3: X (empty) for the PULL in clock 3, the word in clock 5")
 
     def test_clkdiv_16_8(self):
         chip = Chip(2)
