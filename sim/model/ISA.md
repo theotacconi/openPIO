@@ -54,7 +54,7 @@ a write is discarded.
 | `010` | X | X | X | X | X |
 | `011` | Y | Y | Y | Y | Y |
 | `100` | ISR | ISR | ISR (count = bits) | ISR | ISR (count = 0) |
-| `101` | OSR | OSR | - | OSR | OSR (count = 0) |
+| `101` | OSR | OSR | PAU_BAUD | OSR | OSR (count = 0) |
 | `110` | NULL | zeros | discard | 0 | discard |
 | `111` | special | STATUS | PC (indirect jump) | STATUS | COND |
 
@@ -273,7 +273,8 @@ Protocol parameters, written by the host (MODE also gives the reset value of PAU
 The program controls the PAU with SET PAU_BAUD, SET PAU_CTL and the PAU actions:
 
 - **PAU_BAUD** = H: a half-bit lasts H strobes, a bit 2H. A new value applies from the next
-  half-bit.
+  half-bit. SET PAU_BAUD writes a constant, OUT PAU_BAUD the low 5 bits shifted out of the OSR:
+  a rate the program measured (autobaud).
 - **PAU_CTL**:
   - [0] TX on: OUT PINS feeds the TX queue and the PAU drives pin `out_base` (and
     `out_base + 1` with DIFF) instead of `gpio_out`. Turning it on starts the encoder from the
@@ -487,7 +488,7 @@ the shift counts. A program carries all of it as assembler directives (`sim/mode
   clock (the v2 model first let SM 1 see SM 0's writes in the same clock). A host access takes
   one clock with them (the model first applied it between clocks). WAIT edges compare the
   values two strobes see (the model first kept them after the instruction).
-- IN source `001` is TIME (v2 first: reserved).
+- IN source `001` is TIME, OUT destination `101` PAU_BAUD (v2 first: reserved).
 - STUFF_MODE `01` (a 1 after LEN 0s) removed: no protocol uses it (AGENT.md, the PAU rule).
 - After CTRL.RESET the OSR is empty (`osr_count` = 16; v1: 0, a full OSR of zeros), the IRQ
   flags are clear and the CRC holds its initial value.

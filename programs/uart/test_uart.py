@@ -2,7 +2,8 @@
 """UART transmitter and receiver judged by the reference UART devices: random bytes back to
 back; TX at integer and fractional dividers (bit edges on time), RX with a transmitter 3 % fast
 or slow and with framing errors. Full duplex on one SM through the PAU: both directions at
-once, bit edges on time, a framing error."""
+once, bit edges on time, a framing error. Autobaud: the rate learned from a leading 0x55, then
+random bytes back to back, at bit times from 12 to 61 clocks that are not whole strobes."""
 import random
 import sys
 import unittest
@@ -99,6 +100,23 @@ class UartDuplexTest(unittest.TestCase):
         bench, rx = self.run_duplex([0x55], [0x11, 0x22, 0x33], stop_low={1})
         self.assertTrue(bench.chip.sms[0].irq_flags[0])
         self.assertEqual(rx.frames, [0x55])
+
+
+class UartAutobaudTest(unittest.TestCase):
+
+    def test_rates(self):
+        for bit in (12.0, 37.3, 60.7):
+            with self.subTest(bit=bit):
+                data = [random.Random(int(bit)).randrange(256) for _ in range(30)]
+                bench = Bench(pullups=1)
+                bench.load(0, (HERE / "uart_autobaud.asm").read_text())
+                tx = bench.add(UartTx(0, bit, [0x55] + data, start=40))
+                bench.start(1)
+                bench.run(tx.end + round(2 * bit))
+                words = bench.received[0]
+                self.assertLessEqual(abs(words[0] - 8 * bit), 2, "8 bit times measured")
+                self.assertEqual([w >> 8 for w in words[1:]], data)
+                self.assertFalse(bench.chip.sms[0].irq_flags[0])
 
 
 if __name__ == "__main__":
