@@ -98,6 +98,8 @@ NAMED_CONDS = {
 
 # Chip reset values of COND_CFG (ISA.md, Conditions)
 COND_RESET = [0x60, 0x61, 0x00, 0xE4]
+JMP_PLAIN = {"": JC_ALWAYS, "always": JC_ALWAYS, "never": JC_NEVER,
+             "x--": JC_XDEC, "x-": JC_XDEC, "y--": JC_YDEC, "y-": JC_YDEC}
 
 # PAU_MODE fields
 PAU_ENC = {"nrz": 0, "nrzi": 1, "manchester": 2, "bmc": 3, "biphase_mark": 3}
@@ -450,6 +452,17 @@ def assemble(source_code: str) -> Program:
         instructions.append((current_addr, code_part, line_num))
         current_addr += 1
 
+    # JMP conditions take their slots first, in program order: a WAIT can use either polarity
+    for _addr, text, line_num in instructions:
+        tokens = [t for t in re.split(r"[\s,]+", re.sub(r"\[[^\]]*\]|\bside\s+\S+", "", text, flags=re.I))
+                  if t]
+        cond_tokens = tokens[1:-1]
+        if tokens[0].lower() == "jmp" and cond_tokens and not (
+                len(cond_tokens) == 1 and cond_tokens[0].lower() in JMP_PLAIN):
+            c, _, pin = _parse_cond(cond_tokens, line_num, text)
+            if c is not None:
+                conds.slot_for(c, False, line_num, text, pin)
+
     # Pass 2: encode
     words: list[int] = []
     for _addr, text, line_num in instructions:
@@ -492,11 +505,9 @@ def assemble(source_code: str) -> Program:
                 raise AssemblerError("JMP expects: jmp [condition,] target", line_num, clean)
             target = target_of(args[-1])
             cond_tokens = args[:-1]
-            plain = {"": JC_ALWAYS, "always": JC_ALWAYS, "never": JC_NEVER,
-                     "x--": JC_XDEC, "x-": JC_XDEC, "y--": JC_YDEC, "y-": JC_YDEC}
             key = cond_tokens[0].lower() if len(cond_tokens) == 1 else ("" if not cond_tokens else None)
-            if key in plain:
-                words.append(jmp(plain[key], target))
+            if key in JMP_PLAIN:
+                words.append(jmp(JMP_PLAIN[key], target))
             else:
                 c, slot, pin = _parse_cond(cond_tokens, line_num, clean)
                 if c is not None:
