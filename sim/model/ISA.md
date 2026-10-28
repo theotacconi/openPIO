@@ -260,7 +260,7 @@ Protocol parameters, written by the host (MODE also gives the reset value of PAU
 | | [2] INV | invert the line (TX pin and RX input) |
 | | [3] DIFF | TX also drives `out_base + 1` with the complement; RX treats SE0 as the end of a frame |
 | | [7:4] STUFF_LEN | run length before a stuffed bit, 1..15 (0 = 16) |
-| | [9:8] STUFF_MODE | `00` after LEN 1s insert 0, `01` after LEN 0s insert 1, `10` after LEN equal bits insert the complement, `11` reserved |
+| | [9:8] STUFF_MODE | `00` after LEN 1s insert 0, `10` after LEN equal bits insert the complement; `01` and `11` reserved (bit 8 is ignored) |
 | | [14:10] BAUD | PAU_BAUD after CTRL.RESET |
 | CRC_CFG | [4:0] | CRC width - 1 (1..32 bits) |
 | | [5] | initial value all ones (0: all zeros) |
@@ -485,6 +485,7 @@ the shift counts. A program carries all of it as assembler directives (`sim/mode
   clock (the v2 model first let SM 1 see SM 0's writes in the same clock). A host access takes
   one clock with them (the model first applied it between clocks). WAIT edges compare the
   values two strobes see (the model first kept them after the instruction).
+- STUFF_MODE `01` (a 1 after LEN 0s) removed: no protocol uses it (AGENT.md, the PAU rule).
 - After CTRL.RESET the OSR is empty (`osr_count` = 16; v1: 0, a full OSR of zeros), the IRQ
   flags are clear and the CRC holds its initial value.
 - FIFOs of 133 words (4 front + 128 in a data SRAM per SM + an IN / OUT register; v1: 4).

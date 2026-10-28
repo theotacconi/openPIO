@@ -134,20 +134,6 @@ class LineCodes(unittest.TestCase):
         line = "".join(str(p & 1) for p in run(sm, [0b11111100000], 60))
         self.assertIn("00" * 5 + "11" + "11" * 4 + "00" + "11" * 2, line)
 
-    def test_stuffing_a_1_after_zeros(self):
-        """Mode 01, the mirror of USB's: after LEN 0s a stuffed 1."""
-        sm = StateMachine(assemble("""
-            .pau enc=nrz baud=1 stuff=4 stuff_mode=zeros
-                set pins, 1
-                set pau_ctl, tx|stuff
-                pull block
-                out pins, 9
-            end:
-                jmp end
-        """))
-        line = "".join(str(p & 1) for p in run(sm, [0b100000000], 60))
-        self.assertIn("11" + "00" * 4 + "11" + "00" * 4 + "11" + "11", line)
-
 
 class Loopback(unittest.TestCase):
     """A PAU transmitter wired into a PAU receiver: bytes, stuffing and CRC come back."""
@@ -212,9 +198,6 @@ class Loopback(unittest.TestCase):
 
     def test_nrzi_usb_stuffing(self):
         self.check("nrzi", "stuff=6", 0)
-
-    def test_nrz_stuffing_a_1_after_zeros(self):
-        self.check("nrz", "stuff=4 stuff_mode=zeros", 0)
 
     def test_manchester(self):
         self.check("manchester", "", 1)
