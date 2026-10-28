@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "sim" / "model"))
 from asm import assemble                                             # noqa: E402
 from chip import (Chip, header, CTRL, GPIO, ID, IRQ, IRQ_MASK, PC, PINS, STATUS, WRAP, X, FIFO_LEVEL,  # noqa: E402
                   COND_CFG01, COND_CFG23, CRC_LO, IRQ_SUM, PINBASE, PIN_MASK, MISC, CLKDIV, CLKDIV_FRAC,
-                  SM_STATUS,                  PINS_IN, PINS_OE, PADS_BIDIR, PADS_IN, PADS_OUT,
+                  SM_STATUS, PINS_IN, PINS_OE, PADS_BIDIR, PADS_IN, PADS_OUT,
                   OP_IMEM_RD, OP_IMEM_WR, OP_REG_RD, OP_REG_WR, OP_RX_POP, OP_TX_PUSH)
 from host import Host                                                # noqa: E402
 
@@ -217,6 +217,36 @@ class HostInterface(unittest.TestCase):
         self.assertEqual((chip.sms[1].y, chip.sms[1].osr), (3, 7),
                          "pushed in clock 3: X (empty) for the PULL in clock 3, the word in clock 5")
 
+    def test_host_access_in_one_clock(self):
+        """A host write lands at the end of its clock: a PULL in that clock does not see the
+        word. With a host TX_PUSH, a PUSH PEER into the same FIFO is refused (and retried);
+        with a host RX_POP, a PULL PEER from the same FIFO finds it empty."""
+        chip = Chip(2)
+        load(chip, 0, assemble("set x, 5\npull noblock\nmov y, osr\npull noblock\nh: jmp h"))
+        chip.reg_write(0, CTRL, 1)
+        chip.step()
+        chip.host(OP_TX_PUSH, 0, word=0xABCD)                 # clock 2, the first PULL
+        chip.step(2)
+        self.assertEqual((chip.sms[0].y, chip.sms[0].osr), (5, 0xABCD))
+
+        chip = Chip(2)
+        load(chip, 0, assemble("set x, 7\nmov isr, x\npush peer\nh: jmp h"))
+        chip.reg_write(0, CTRL, 1)
+        chip.step(2)
+        chip.host(OP_TX_PUSH, 1, word=0x1111)                 # clock 3, the PUSH PEER
+        self.assertTrue(chip.sms[0].stalled, "refused: blocks")
+        chip.step()
+        self.assertEqual(list(chip.sms[1].tx_fifo), [0x1111, 7], "the host's word first")
+
+        chip = Chip(2)
+        load(chip, 0, assemble("set x, 3\nnop\nnop\nnop\npull peer noblock\nmov y, osr\nh: jmp h"))
+        load(chip, 1, assemble("set x, 9\nmov isr, x\npush\nh: jmp h"))
+        chip.reg_write(0, CTRL, 0b11)
+        chip.step(4)
+        self.assertEqual(chip.host(OP_RX_POP, 1), 9, "clock 5: the host takes the word")
+        chip.step()
+        self.assertEqual(chip.sms[0].y, 3, "the PULL PEER in that clock found the FIFO empty")
+
     def test_clkdiv_16_8(self):
         chip = Chip(2)
         load(chip, 0, assemble("loop:\nin null, 1\njmp loop"), clkdiv_int=651, clkdiv_frac=128)
@@ -372,9 +402,11 @@ class MultiSm(unittest.TestCase):
         chip.reg_write(0, X, 2)
         chip.reg_write(0, PC, 0)
         for _ in range(3):                         # x = 2, 1, 0: three passes of jmp x--
-            chip.reg_write(0, CTRL, 1 << 8)
+            chip.reg_write(0, CTRL, 1 << 8)        # STEP: one strobe from the next clock
+            chip.step(3)
         self.assertEqual(chip.reg_read(0, PC), 1)
         chip.reg_write(0, CTRL, 1 << 8)
+        chip.step(3)
         self.assertTrue(chip.sms[0].irq_flags[0])
 
     def test_open_drain_is_per_pin(self):

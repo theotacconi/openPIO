@@ -53,6 +53,7 @@ class Chip:
         self.spi_word_clocks = spi_word_clocks
         self.pads_out, self.pads_in, self.pads_bidir = pads
         self.en = 0
+        self.stepping = 0               # CTRL STEP: SM i runs until it has executed a strobe
         self.pin_in = 0                 # levels at the input pads now, bit = pin
         self._sync = [0, 0]             # 2-flip-flop input synchronizer: gpio_in of 2 clocks ago
         self.cycle = 0
@@ -73,13 +74,17 @@ class Chip:
                 sm.gpio_in = gpio_in
                 sm.peer_irq_flags = list(sm.peer.irq_flags)     # as at the clock start
             for sm in self.sms:
-                if self.en >> sm.index & 1:
+                if (self.en | self.stepping) >> sm.index & 1:
                     sm.step()
+                    if sm.strobed:
+                        self.stepping &= ~(1 << sm.index)
             for sm in self.sms:
                 sm.end_clock()
             self.bus.commit()
             for sm in self.sms:
                 sm.buffer_clock()
+            for sm in self.sms:
+                sm.land_peer_word()
             self.cycle += 1
 
     @property
@@ -237,22 +242,9 @@ class Chip:
             for sm in self.sms:
                 if val >> (4 + sm.index) & 1:
                     sm.reset()
-            for sm in self.sms:
-                if val >> (8 + sm.index) & 1 and not self.en >> sm.index & 1:
-                    self._step_one(sm)
+            self.stepping |= val >> 8 & mask & ~self.en
         elif addr == GPIO:
             self.bus.od_mask = val
-
-    def _step_one(self, sm: StateMachine) -> None:
-        """STEP: clock SM until it has executed one strobe."""
-        sm.gpio_in = self.gpio_in
-        while True:
-            sm.peer_irq_flags = list(sm.peer.irq_flags)
-            sm.step()
-            sm.end_clock()
-            self.bus.commit()
-            if sm.strobed:
-                return
 
     # ------------------------------------------------------------------ FIFOs and IMEM
 
@@ -275,29 +267,50 @@ class Chip:
 
     # ------------------------------------------------------------------ SPI transaction
 
+    def host(self, op: int, n: int, addr: int = 0, word: int = 0) -> int:
+        """One host access, in one clock (ISA.md, Timing within a clock): its reads take the
+        state at the clock start (an RX_POP before the SMs and the FIFO moves), its writes land
+        at the end, after the SMs' and the FIFO moves. Returns the word read (0 for a write)."""
+        sm = self.sms[n]
+        value, where = 0, None
+        if op == OP_REG_RD:
+            value = self.reg_read(n, addr)
+        elif op == OP_IMEM_RD:
+            value = self.imem_read(n, addr)
+        elif op == OP_RX_POP:
+            value, sm.host_popped = self.rx_pop(n), True
+        elif op == OP_TX_PUSH:
+            where, sm.host_pushing = sm.tx_where(), True
+        self.step()
+        sm.host_popped = sm.host_pushing = False
+        if op == OP_REG_WR:
+            self.reg_write(n, addr, word)
+        elif op == OP_IMEM_WR:
+            self.imem_write(n, addr, word)
+        elif where is not None:
+            sm.tx_place(word, where)
+        return value
+
     def spi(self, hdr: int, words: Sequence[int] = ()) -> list[int]:
         """One SPI transaction (HOST.md): header then a burst of data words, each taking
-        spi_word_clocks clocks. A read word takes its value when it starts, a write acts when
-        its last bit is in. Returns the MISO words: the header's, then one per data word."""
+        spi_word_clocks clocks. A read word is a host access in its first clock, a write one in
+        the clock after its last bit. Returns the MISO words: the header's, then one per data
+        word."""
         op, n, addr = hdr >> 13 & 7, hdr >> 11 & 3, hdr & 0x3F
         n = min(n, len(self.sms) - 1)
         miso = [self._sm_status_reg(self.sms[n])]
         self.step(self.spi_word_clocks)
         for word in words:
             if op in (OP_REG_RD, OP_RX_POP, OP_IMEM_RD):
-                miso.append(self.reg_read(n, addr) if op == OP_REG_RD else
-                            self.rx_pop(n) if op == OP_RX_POP else self.imem_read(n, addr))
+                miso.append(self.host(op, n, addr))
                 addr += op != OP_RX_POP
-                self.step(self.spi_word_clocks)
+                self.step(self.spi_word_clocks - 1)
                 continue
             miso.append(self._sm_status_reg(self.sms[n]))
-            self.step(self.spi_word_clocks)
-            if op == OP_REG_WR:
-                self.reg_write(n, addr, word)
-                addr += 1
-            elif op == OP_TX_PUSH:
-                self.tx_push(n, word)
-            elif op == OP_IMEM_WR:
-                self.imem_write(n, addr, word)
-                addr += 1
+            self.step(self.spi_word_clocks - 1)
+            if op in (OP_REG_WR, OP_TX_PUSH, OP_IMEM_WR):
+                self.host(op, n, addr, word)
+                addr += op != OP_TX_PUSH
+            else:
+                self.step()
         return miso
