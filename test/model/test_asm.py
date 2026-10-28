@@ -105,6 +105,14 @@ class Directives(unittest.TestCase):
         unset = set(CONFIG_RESET) - set(prog.cfg)
         self.assertEqual({k: cfg[k] for k in unset}, {k: CONFIG_RESET[k] for k in unset})
 
+    def test_jmp_conditions_take_their_slots_first(self):
+        """The WAIT comes first but takes no slot of its own: it uses the JMP's `!se0` slot
+        with the other polarity (a JMP can only use a slot as it is)."""
+        prog = assemble("wait 0 pau se0\njmp pau rx_ready, 0\njmp pau se1, 0\njmp !pau se0, 0\n"
+                        "jmp pau crc_ok, 0")
+        self.assertEqual(prog.cfg["cond_cfg"], [0x73, 0x79, 0xF8, 0x74])
+        self.assertEqual(prog[0] & 0x3F, 0b100010, "SE0 low = !se0 high: level 1 on slot 2")
+
     def test_every_program_assembles(self):
         for path in sorted(Path(__file__).resolve().parents[2].glob("programs/*/*.asm")):
             with self.subTest(path.name):
