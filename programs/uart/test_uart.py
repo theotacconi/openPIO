@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """UART transmitter and receiver judged by the reference UART devices: random bytes back to
 back; TX at integer and fractional dividers (bit edges on time), RX with a transmitter 3 % fast
-or slow and with framing errors; noise pulses of 1 to 3 clocks on the idle line make false
-start bits, which the chip's glitch filter (4 samples, every clock) removes. Full duplex on one SM through the PAU: both directions at
+or slow and with framing errors. Full duplex on one SM through the PAU: both directions at
 once, bit edges on time, a framing error. Autobaud: the rate learned from a leading 0x55, then
 random bytes back to back, at bit times from 12 to 61 clocks that are not whole strobes."""
 import random
@@ -12,9 +11,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[1] / "test" / "shared"))
-sys.path.insert(0, str(HERE.parents[1] / "sim" / "model"))
 from bench import Bench                                  # noqa: E402
-from chip import FILTER, FILTER_MASK                     # noqa: E402
 from devices import UartRx, UartTx                       # noqa: E402
 
 
@@ -69,23 +66,6 @@ class UartRxTest(unittest.TestCase):
                 bench, got = self.run_rx(4, data, gap=0.5, tx_bit=tx_bit)
                 self.assertEqual(got, data)
                 self.assertFalse(bench.chip.sms[0].irq_flags[0])
-
-    def test_noise_and_the_glitch_filter(self):
-        data = [random.Random(12).randrange(256) for _ in range(10)]
-        noise = [(20 + 640 * k + 600 + j * 7, 1 + j % 3) for k in range(10) for j in range(3)]
-        for flt in (0, 4):
-            bench = Bench(pullups=1 << 3)
-            bench.load(0, (HERE / "uart_rx.asm").read_text(), clkdiv_int=4)
-            bench.chip.reg_write(0, FILTER, flt)                 # N = 4 samples, one a clock
-            bench.chip.reg_write(0, FILTER_MASK, 1 << 3)
-            tx = bench.add(UartTx(3, 32, data, start=20, gap=10, glitches=noise))
-            bench.start(1)
-            bench.run(tx.end + 200)
-            got = [w >> 8 for w in bench.received[0]]
-            if flt:
-                self.assertEqual(got, data)
-            else:
-                self.assertNotEqual(got, data, "unfiltered: false start bits")
 
     def test_framing_error(self):
         data = [0x11, 0x22, 0x33, 0x44]

@@ -68,15 +68,13 @@ class UartRx(Device):
 class UartTx(Device):
     """UART transmitter: sends `data` frames from clock `start`, each followed by `gap` idle bit
     times (one number, or one per frame). stop_low: send a 0 stop bit (framing error) for the
-    frames whose index is in it. glitches [(clock, clocks)]: noise that inverts the line."""
+    frames whose index is in it."""
 
     def __init__(self, pin: int, bit: float, data: list[int], start: int = 0,
                  gap: float | list[float] = 0, data_bits: int = 8, parity: str | None = None,
-                 stop_bits: int = 1, stop_low: set[int] = frozenset(),
-                 glitches: list[tuple[int, int]] = ()) -> None:
+                 stop_bits: int = 1, stop_low: set[int] = frozenset()) -> None:
         super().__init__()
-        self.pin, self.glitches = pin, list(glitches)
-        self.level = 1
+        self.pin = pin
         self.schedule: list[tuple[int, int]] = []      # (clock, level)
         gaps = gap if isinstance(gap, list) else [gap] * len(data)
         t = start
@@ -95,9 +93,7 @@ class UartTx(Device):
 
     def tick(self, t: int, levels: int) -> None:
         while self.schedule and self.schedule[0][0] <= t + 1:
-            self.level = self.schedule.pop(0)[1]
-        noise = any(start <= t + 1 < start + n for start, n in self.glitches)
-        self.drive[self.pin] = self.level ^ noise
+            self.drive[self.pin] = self.schedule.pop(0)[1]
 
 
 def crc16_modbus(data: list[int]) -> int:

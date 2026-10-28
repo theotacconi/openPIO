@@ -86,8 +86,6 @@ RW*: written only while the SM is stopped (CTRL EN = 0); writes while it runs ar
 | 0x27 | PADS_OUT | R | pins with an output pad (0xFCFF) |
 | 0x28 | PADS_IN | R | pins with an input pad (0xF8FF) |
 | 0x29 | PADS_BIDIR | R | pins whose output and input pads are one bidirectional line (0x00FF) |
-| 0x2A | FILTER | RW | glitch filter: [3:0] N samples of a new level in a row before a filtered pin takes it (0: off), [15:8] P: a sample every P + 1 clocks (0) |
-| 0x2B | FILTER_MASK | RW | pins filtered, bit = pin (0) |
 
 - **RESET** (bit i): SM i as CTRL.RESET in ISA.md: registers, IRQ flags, FIFOs, PAU, PC = 0,
   COND = COND_CFG, DLYMUL = 1, CRC = its initial value, CLKDIV, CLKDIV_FRAC and PAU_BAUD
@@ -113,10 +111,7 @@ The 16 pin positions of ISA.md on the Tiny Tapeout pads: pin k is `uio[k]`, pin 
   on a bidirectional pad the direction latch enables it and open drain applies, an output-only
   pad always drives it. On pins 11..15 an input reads `ui_in`, not the value the chip drives:
   open drain, WAIT on the own output and the PAU line monitor need pins 0..7.
-- All inputs pass a 2-flip-flop synchronizer, then, for the pins in FILTER_MASK, the glitch
-  filter: a pulse shorter than N samples (N x (P + 1) clocks, up to 15 x 256 = 77 us at 50 MHz)
-  never reaches the SMs, and a level change reaches them that much later. A pin out of the mask
-  (or N = 0) passes unfiltered and the filter follows it, so a pin joins the mask at its level.
+- All inputs pass a 2-flip-flop synchronizer.
 - `uo_out[1]` HOST_IRQ: high while any SM requests it through its IRQ_MASK: a flag set (flags
   SMs use only between themselves stay off it), RX FIFO not empty, TX FIFO at most 64 words.
   The FIFO requests end by themselves once the host has drained or refilled the FIFO.
