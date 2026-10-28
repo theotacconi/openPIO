@@ -21,5 +21,8 @@ test/gate_level_netlist.v
 # SymbiYosys run directories (test/formal/*.sby)
 test/formal/*/
 
-# scripts/area.sh: the CMOS5L Liberty file
+# scripts/area.sh: the CMOS5L Liberty files
 /.pdk_lib/
+
+# test/lockstep/vsim.py: Verilator builds of the RTL
+test/lockstep/obj_dir/
