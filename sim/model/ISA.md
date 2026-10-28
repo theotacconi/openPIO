@@ -144,8 +144,9 @@ FIFO): two SMs pass data without the host.
 
 **WAIT**: stalls until programmable condition `Slot` (see Conditions) matches: level
 (`Edge` = 0) equal to `Pol`, or edge (`Edge` = 1) rising (`Pol` = 1) / falling (`Pol` = 0)
-since the previous strobe. With `T_EN` the stall also ends after TIMEOUT_VAL strobes, setting
-the timeout flag (cleared when a timed WAIT issues).
+since the previous strobe. With `T_EN` the stall also ends after TIMEOUT_VAL x DLYMUL strobes
+(DLYMUL when the WAIT issues; at least 1), setting the timeout flag (cleared when a timed WAIT
+issues). Every timed WAIT counts from TIMEOUT_VAL again.
 
 **PAU action** (see PAU): `00` CRC reset, `01` CRC append, `10` TX abort, `11` CRC feed (Count
 1..15, 0 = 16; the other actions need Count 0, else they are reserved).
@@ -162,8 +163,8 @@ the timeout flag (cleared when a timed WAIT issues).
 | `001` | PINDIRS | pindirs `set_base`.. = Value | |
 | `010` | X | X = Value (zero-extended) | X / Y |
 | `011` | Y | Y = Value | |
-| `100` | DLYMUL | delay multiplier = Value (0 = 1); does not change the strobe rate | timing |
-| `101` | TIMEOUT_VAL | WAIT timeout = Value strobes; clears the timeout flag | |
+| `100` | DLYMUL | delay and timeout multiplier = Value (0 = 1); does not change the strobe rate | timing |
+| `101` | TIMEOUT_VAL | WAIT timeout = Value x DLYMUL strobes; clears the timeout flag | |
 | `110` | PAU_BAUD | PAU half-bit period = Value strobes (0 = 32) | PAU |
 | `111` | PAU_CTL | PAU control: [0] TX, [1] RX, [2] stuffing, [3] CRC, [4] monitor | |
 

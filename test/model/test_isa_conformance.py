@@ -291,6 +291,22 @@ class Wait(unittest.TestCase):
         run(sm, 8)
         self.assertEqual((sm.timeout_flag, sm.x), (True, 1))
 
+    def test_every_timed_wait_gets_the_whole_timeout(self):
+        sm = sm_of("set timeout_val, 4\nwait 1 gpio 0 timeout\nset x, 1\nwait 1 gpio 0 timeout\nset y, 1"
+                   + HALT)
+        run(sm, 6)
+        self.assertEqual((sm.timeout_flag, sm.pc), (True, 2), "issued at strobe 2, timed out at 6")
+        run(sm, 6)
+        self.assertEqual(sm.y, 0, "the second WAIT starts again from 4: TIMEOUT_VAL is kept")
+        self.assertEqual(run(sm, 1).y, 1)
+
+    def test_timeout_scaled_by_dlymul(self):
+        sm = sm_of("set dlymul, 10\nset timeout_val, 3\nwait 1 gpio 0 timeout\nset x, 1" + HALT)
+        run(sm, 32)
+        self.assertEqual(sm.timeout_flag, False, "issued at strobe 3: 30 strobes")
+        run(sm, 1)
+        self.assertEqual((sm.timeout_flag, sm.pc), (True, 3))
+
     def test_polarity_on_an_inverted_condition(self):
         sm = sm_of(".cond1 !gpio 2\njmp cond1, 3\nwait 1 gpio 2\nset x, 1" + HALT)
         sm.gpio_in = 1 << 2
@@ -304,7 +320,7 @@ class Set(unittest.TestCase):
         sm = run(sm_of("set pins, 31\nset pindirs, 5" + HALT, set_base=4, set_count=3), 2)
         self.assertEqual((sm.gpio_out, sm.pindirs), (0x70, 0x50))
 
-    def test_dlymul_scales_delays_only(self):
+    def test_dlymul_scales_delays(self):
         sm = sm_of("set dlymul, 3\nset x, 1 [2]\nset x, 2" + HALT)
         run(sm, 2)
         self.assertEqual(sm.x, 1)
