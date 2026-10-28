@@ -286,7 +286,7 @@ class I2cTarget(Device):
 
 # ---------------------------------------------------------------------------------- USB
 
-J, K, SE0 = "J", "K", "0"
+J, K, SE0, SE1 = "J", "K", "0", "1"
 
 
 def crc16_usb(data: list[int]) -> int:
@@ -314,8 +314,9 @@ def usb_states(pid: int, payload: list[int], crc: int | None = None) -> list[str
 
 
 class UsbTx(Device):
-    """Low-speed USB transmitter on D- / D+ (J = D- high): sends `packets` [(pid, payload) or
-    (pid, payload, crc)] from clock `start`, `gap` idle bit times apart; idles at J."""
+    """Low-speed USB transmitter on D- / D+ (J = D- high): sends `packets` [(pid, payload),
+    (pid, payload, crc), or a list of line states] from clock `start`, `gap` idle bit times
+    apart; idles at J."""
 
     def __init__(self, dm: int, dp: int, bit: int, packets: list[tuple], start: int = 0,
                  gap: int = 4) -> None:
@@ -324,7 +325,7 @@ class UsbTx(Device):
         self.schedule: list[tuple[int, str]] = []
         t = start
         for p in packets:
-            for s in usb_states(*p):
+            for s in p if isinstance(p, list) else usb_states(*p):
                 self.schedule.append((t, s))
                 t += bit
             t += gap * bit
@@ -332,7 +333,7 @@ class UsbTx(Device):
         self._set(J)
 
     def _set(self, s: str) -> None:
-        self.drive = {self.dm: int(s == J), self.dp: int(s == K)}
+        self.drive = {self.dm: int(s in (J, SE1)), self.dp: int(s in (K, SE1))}
 
     def tick(self, t: int, levels: int) -> None:
         while self.schedule and self.schedule[0][0] <= t + 1:
