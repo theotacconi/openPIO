@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "sim" / "model"))
 from asm import assemble                                             # noqa: E402
 from chip import (Chip, header, CTRL, GPIO, ID, IRQ, IRQ_MASK, PC, PINS, STATUS, WRAP, X, FIFO_LEVEL,  # noqa: E402
                   COND_CFG01, COND_CFG23, CRC_LO, IRQ_SUM, PINBASE, PIN_MASK, MISC, CLKDIV, CLKDIV_FRAC,
-                  SM_STATUS, PINS_IN, PINS_OE, PADS_BIDIR, PADS_IN, PADS_OUT,
+                  SM_STATUS, PINS_IN, PINS_OE, PADS_BIDIR, FILTER, FILTER_MASK, PADS_IN, PADS_OUT,
                   OP_IMEM_RD, OP_IMEM_WR, OP_REG_RD, OP_REG_WR, OP_RX_POP, OP_TX_PUSH)
 from host import Host                                                # noqa: E402
 
@@ -246,6 +246,21 @@ class HostInterface(unittest.TestCase):
         self.assertEqual(chip.host(OP_RX_POP, 1), 9, "clock 5: the host takes the word")
         chip.step()
         self.assertEqual(chip.sms[0].y, 3, "the PULL PEER in that clock found the FIFO empty")
+
+    def test_glitch_filter(self):
+        """N = 3 samples, one every 2 clocks (P = 1): a 5-clock pulse never reaches PINS_IN, a
+        longer level does, 3 samples after it passed the synchronizer."""
+        chip = Chip(2)
+        chip.reg_write(0, FILTER, 1 << 8 | 3)
+        chip.reg_write(0, FILTER_MASK, 1)
+        seen = []
+        for t in range(40):
+            chip.pin_in = int(2 <= t < 7 or t >= 15)
+            chip.step()
+            seen.append(chip.reg_read(0, PINS_IN) & 1)
+        self.assertEqual(seen[:20], [0] * 20)
+        self.assertEqual(seen[-10:], [1] * 10)
+        self.assertEqual(chip.reg_read(0, FILTER), 0x0103)
 
     def test_clkdiv_16_8(self):
         chip = Chip(2)

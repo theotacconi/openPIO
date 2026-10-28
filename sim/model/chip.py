@@ -19,7 +19,8 @@ COND_CFG01, COND_CFG23, PAU_MODE, CRC_CFG, CRC_POLY_LO, CRC_POLY_HI, CRC_RES_LO,
 (IRQ, PC, X, Y, ISR, OSR, COUNTS, COND01, COND23, CRC_LO, CRC_HI, SM_STATUS, FIFO_LEVEL, IRQ_MASK,
  CLKDIV_FRAC, TIME) = range(16, 32)
 # Chip registers
-CTRL, GPIO, PINS, PINS_OE, PINS_IN, IRQ_SUM, ID, PADS_OUT, PADS_IN, PADS_BIDIR = range(0x20, 0x2A)
+(CTRL, GPIO, PINS, PINS_OE, PINS_IN, IRQ_SUM, ID, PADS_OUT, PADS_IN, PADS_BIDIR, FILTER,
+ FILTER_MASK) = range(0x20, 0x2C)
 
 # SPI commands
 OP_NOP, OP_REG_WR, OP_REG_RD, OP_TX_PUSH, OP_RX_POP, OP_IMEM_WR, OP_IMEM_RD = 0, 2, 3, 4, 5, 6, 7
@@ -56,20 +57,44 @@ class Chip:
         self.stepping = 0               # CTRL STEP: SM i runs until it has executed a strobe
         self.pin_in = 0                 # levels at the input pads now, bit = pin
         self._sync = [0, 0]             # 2-flip-flop input synchronizer: gpio_in of 2 clocks ago
+        self.filter = self.filter_mask = 0
+        self._filt = 0                  # glitch filter: the filtered levels, bit = pin
+        self._filt_run = [0] * 16       # samples of a new level in a row, per pin
+        self._filt_tick = 0             # clocks since the last sample
         self.cycle = 0
 
     # ------------------------------------------------------------------ clock and pins
 
     @property
     def gpio_in(self) -> int:
-        """What the SMs see: the input pins two clocks ago (synchronizer)."""
-        return self._sync[0]
+        """What the SMs see: the input pins two clocks ago (synchronizer), then the glitch
+        filter's levels for the pins in FILTER_MASK."""
+        return self._sync[0] & ~self.filter_mask | self._filt & self.filter_mask
+
+    def _filter_clock(self, raw: int) -> None:
+        """Glitch filter (HOST.md, Pins): every FILTER[15:8] + 1 clocks a sample; a filtered
+        pin takes a new level after FILTER[3:0] samples of it in a row."""
+        n, last = self.filter & 0xF, self.filter >> 8 & 0xFF
+        sample = self._filt_tick == last
+        self._filt_tick = 0 if sample else self._filt_tick + 1
+        for pin in range(16):
+            bit = raw >> pin & 1
+            if not (n and self.filter_mask >> pin & 1):
+                self._filt = self._filt & ~(1 << pin) | bit << pin
+                self._filt_run[pin] = 0
+            elif sample:
+                same = bit == self._filt >> pin & 1
+                self._filt_run[pin] = 0 if same else self._filt_run[pin] + 1
+                if self._filt_run[pin] >= n:
+                    self._filt ^= 1 << pin
+                    self._filt_run[pin] = 0
 
     def step(self, cycles: int = 1) -> None:
         """Advance `cycles` clocks (ISA.md, Timing within a clock)."""
         for _ in range(cycles):
-            gpio_in = self._sync[0]
+            gpio_in, raw = self.gpio_in, self._sync[0]
             self._sync = [self._sync[1], self.pin_in & self.pads_in]
+            self._filter_clock(raw)
             for sm in self.sms:
                 sm.gpio_in = gpio_in
                 sm.peer_irq_flags = list(sm.peer.irq_flags)     # as at the clock start
@@ -234,6 +259,10 @@ class Chip:
             return ISA_VERSION << 12 | len(self.sms) << 8 | 0x50
         if addr in (PADS_OUT, PADS_IN, PADS_BIDIR):
             return (self.pads_out, self.pads_in, self.pads_bidir)[addr - PADS_OUT]
+        if addr == FILTER:
+            return self.filter
+        if addr == FILTER_MASK:
+            return self.filter_mask
         return 0
 
     def _chip_write(self, addr: int, val: int) -> None:
@@ -246,6 +275,10 @@ class Chip:
             self.stepping |= val >> 8 & mask & ~self.en
         elif addr == GPIO:
             self.bus.od_mask = val
+        elif addr == FILTER:
+            self.filter = val & 0xFF0F
+        elif addr == FILTER_MASK:
+            self.filter_mask = val
 
     # ------------------------------------------------------------------ FIFOs and IMEM
 
