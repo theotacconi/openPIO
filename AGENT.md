@@ -65,7 +65,7 @@
 * `scripts/`: `dev.sh` (container), `area.sh` (CMOS5L cell area of a design), `tt_signoff.py` (checks a gds run's logs).
 * `.github/workflows/`: `model` (Python model and programs), `test` (cocotb on the RTL), `gds` (hardening, precheck, gate-level test, sign-off), `docs`.
 
-Status (2026-10-28): ISA v2 frozen; the model, the 23 programs and the docs are v2. `src/`, `test/test.py`, `test/lockstep/`, `test/formal/` and `fpga/` are still v1 and are ported together with the RTL; until then the `test` workflow fails on this branch.
+Status (2026-10-28): ISA v2 frozen after the slimming; the model, the 31 programs, the learner (async serial) and the docs are v2. `src/`, `test/test.py`, `test/lockstep/`, `test/formal/` and `fpga/` are still v1 and are ported together with the RTL; until then the `test` workflow fails on this branch.
 
 ## Testing
 
