@@ -1262,24 +1262,27 @@ class HdlcRx(Device):
     """HDLC receiver on an NRZI line (a 0 is a transition, as AX.25), `bit` clocks a bit: every
     edge re-aligns the sampling grid to the middle of the bit. Flags 0x7E delimit frames; a 0
     after five 1s is removed; bytes LSB first; the last two bytes are the FCS (CRC-16/X.25, low
-    byte first). `frames` gets dicts data (without FCS) and fcs_ok. Checks: whole bytes, no
-    abort (seven 1s) inside a frame, edges on the bit grid inside a frame (between frames it
-    re-aligns, as a receiver's clock recovery does)."""
+    byte first). `frames` gets dicts data (without FCS) and fcs_ok; `aborted` counts the frames
+    cut by an abort (seven 1s). Checks: whole bytes, edges on the bit grid inside a frame that a
+    flag ends (an aborted one may stop mid-bit; between frames it re-aligns, as a receiver's
+    clock recovery does)."""
 
     def __init__(self, pin: int, bit: int) -> None:
         super().__init__()
         self.pin, self.bit = pin, bit
         self.frames: list[dict] = []
+        self.aborted = 0
         self._prev = self._last = 0
         self._next: int | None = None
         self._bits: list[int] | None = None              # None: hunting for a flag
+        self._off_grid: list[int] = []                   # clocks of off-grid edges in this frame
         self._ones = 0
 
     def tick(self, t: int, levels: int) -> None:
         lv = _bit(levels, self.pin)
         if lv != self._prev:
             if self._bits and (self._next - t) % self.bit != self.bit // 2:
-                self.error(t, "edge off the bit grid inside a frame")
+                self._off_grid.append(t)
             if self._next is None:
                 self._last = self._prev
             self._next = t + self.bit // 2
@@ -1297,11 +1300,13 @@ class HdlcRx(Device):
             if not b:                                    # flag 01111110
                 if self._bits:
                     self._frame(t, self._bits[:-6])
-                self._bits, self._ones = [], 0
+                for e in self._off_grid:
+                    self.error(e, "edge off the bit grid inside a frame")
+                self._bits, self._ones, self._off_grid = [], 0, []
                 return
             if self._bits and len(self._bits) > 6:
-                self.error(t, "abort (seven 1s) inside a frame")
-            self._bits = None                            # idle: hunt
+                self.aborted += 1
+            self._bits, self._off_grid = None, []        # idle: hunt
             return
         self._ones = self._ones + 1 if b else 0
         if self._bits is not None and self._ones < 6:
