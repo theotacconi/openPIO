@@ -17,9 +17,9 @@ LOADER=${LOADER:-openFPGALoader}
 
 DEVICE=GW2AR-LV18QN88C8/I7
 FAMILY=GW2A-18C
-SRC="../../src/alu.v ../../src/shifter.v ../../src/imem.v ../../src/pau.v \
-     ../../src/openpio_core.v ../../src/fifo.v ../../src/spi_cfg_interface.v \
-     ../../src/tt_um_openpio.v tang_top.v"
+SRC="../../src/spi.v ../../src/openpio.v ../../src/openpio_sm.v ../../src/pau.v \
+     ../../src/fifo.v ../../src/imem.v ../../src/fifo_ram.v \
+     ../../src/tt_um_theotacconi_openpio.v tang_top.v"
 
 mkdir -p build
 $YOSYS -q -l build/yosys.log -p "read_verilog $SRC; synth_gowin -top tang_top -json build/tang_top.json"

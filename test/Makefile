@@ -1,7 +1,7 @@
 # cocotb testbench (Tiny Tapeout template layout, see test.py)
 #
-#   make -B                RTL simulation of ../src, IMEM = imem.v (flip-flop model)
-#   make -B IMEM=sram      same with the chip's IMEM: imem_sram.v + IHP's SRAM model
+#   make -B                RTL simulation of ../src, memories = imem.v, fifo_ram.v (flip-flop models)
+#   make -B IMEM=sram      same with the chip's memories: *_sram.v + IHP's SRAM models
 #                          under $(PDK_ROOT)
 #   make -B GATES=yes      gate-level simulation of gate_level_netlist.v (the hardened
 #                          design, from the tt_submission artifact of a gds run) with the
@@ -15,11 +15,12 @@ SIM ?= icarus
 FST ?= -fst
 TOPLEVEL_LANG ?= verilog
 SRC_DIR = $(PWD)/../src
-# source_files in info.yaml, minus the IMEM
-PROJECT_SOURCES = tt_um_openpio.v spi_cfg_interface.v fifo.v openpio_core.v pau.v shifter.v alu.v
-# IHP SRAM macro (src/imem_sram.v): behavioural model, compiled with -DFUNCTIONAL
+# source_files in info.yaml, minus the memories
+PROJECT_SOURCES = tt_um_theotacconi_openpio.v spi.v openpio.v openpio_sm.v pau.v fifo.v
+# IHP SRAM macros (src/*_sram.v): behavioural models, compiled with -DFUNCTIONAL
 SRAM_MODELS = $(addprefix $(PDK_ROOT)/ihp-sg13cmos5l/libs.ref/sg13cmos5l_sram/verilog/,\
-	RM_IHPSG13_1P_64x16_c2.v RM_IHPSG13_1P_core_behavioral.v)
+	RM_IHPSG13_1P_64x16_c2.v RM_IHPSG13_1P_core_behavioral.v \
+	RM_IHPSG13_1P_256x16_c2_bm_bist.v RM_IHPSG13_1P_core_behavioral_bm_bist.v)
 
 ifneq ($(GATES),yes)
 
@@ -27,11 +28,11 @@ ifneq ($(GATES),yes)
 SIM_BUILD				= sim_build/rtl
 VERILOG_SOURCES += $(addprefix $(SRC_DIR)/,$(PROJECT_SOURCES))
 ifneq ($(IMEM),sram)
-VERILOG_SOURCES += $(SRC_DIR)/imem.v
+VERILOG_SOURCES += $(SRC_DIR)/imem.v $(SRC_DIR)/fifo_ram.v
 else
 SIM_BUILD				= sim_build/rtl_sram
 COMPILE_ARGS    += -DFUNCTIONAL
-VERILOG_SOURCES += $(SRC_DIR)/imem_sram.v $(SRAM_MODELS)
+VERILOG_SOURCES += $(SRC_DIR)/imem_sram.v $(SRC_DIR)/fifo_ram_sram.v $(SRAM_MODELS)
 endif
 
 else
