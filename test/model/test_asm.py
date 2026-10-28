@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "sim" / "model"))
-from asm import CONFIG_RESET, AssemblerError, assemble, disassemble    # noqa: E402
+from asm import CONFIG_RESET, AssemblerError, assemble, condition, disassemble    # noqa: E402
 from emu import StateMachine                                            # noqa: E402
 
 
@@ -112,6 +112,12 @@ class Directives(unittest.TestCase):
                         "jmp pau crc_ok, 0")
         self.assertEqual(prog.cfg["cond_cfg"], [0x73, 0x79, 0xF8, 0x74])
         self.assertEqual(prog[0] & 0x3F, 0b100010, "SE0 low = !se0 high: level 1 on slot 2")
+
+    def test_condition_for_the_host(self):
+        self.assertEqual([condition(t) for t in ("!gpio 12", "irq 2", "pau crc_ok", "x_zero")],
+                         [0x8C, 0x22, 0x74, 0x60])
+        with self.assertRaises(AssemblerError):
+            condition("cond2")
 
     def test_every_program_assembles(self):
         for path in sorted(Path(__file__).resolve().parents[2].glob("programs/*/*.asm")):

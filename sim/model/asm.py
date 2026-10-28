@@ -309,6 +309,15 @@ def _parse_cond(tokens: list[str], line_num: int, text: str) -> tuple[int | None
     return cond_byte(inv, src, idx), 0, False
 
 
+def condition(text: str) -> int:
+    """The condition byte (ISA.md, Conditions) written as in a program, for a host that loads one
+    at run time (COND_CFG, or a word a program moves into COND): condition("!gpio 12") == 0x8C."""
+    c, _, _ = _parse_cond(text.replace(",", " ").split(), 0, text)
+    if c is None:
+        raise AssemblerError("A condition, not a slot", 0, text)
+    return c
+
+
 def _pins(parts: list[str], line_num: int, text: str) -> int:
     """A list of pins `0, 2, 5` as a mask."""
     mask = 0
