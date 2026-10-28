@@ -223,15 +223,13 @@ def disassemble(word: int, side_set_count: int = 0, side_set_opt: bool = False) 
         if ctype == CT_IRQ:
             parts = ["irq"] + [n for n, b in (("clear", 5), ("wait", 4), ("peer", 3)) if a >> b & 1]
             return f"{' '.join(parts)} {a & 7}{suffix}"
-        if ctype == CT_FIFO and not a & 3:
+        if ctype == CT_FIFO and not a & 7:
             is_pull = a >> 5 & 1
             parts = ["pull" if is_pull else "push"]
             if not a >> 4 & 1:
                 parts.append("noblock")
             if a >> 3 & 1:
                 parts.append("ifempty" if is_pull else "iffull")
-            if a >> 2 & 1:
-                parts.append("peer")
             return f"{' '.join(parts)}{suffix}"
         if ctype == CT_WAIT and not a & 4:
             pol, edge, t_en, slot = a >> 5 & 1, a >> 4 & 1, a >> 3 & 1, a & 3
@@ -603,12 +601,10 @@ def assemble(source_code: str) -> Program:
             words.append((OP_CTRL << 13) | dss | CT_IRQ << 6 | bits | idx)
 
         elif mnem in ("push", "pull"):
-            is_pull, block, ifcond, peer = int(mnem == "pull"), 1, 0, 0
+            is_pull, block, ifcond = int(mnem == "pull"), 1, 0
             for a in args:
                 al = a.lower()
-                if al == "peer":
-                    peer = 1
-                elif al in ("block", "blocking"):
+                if al in ("block", "blocking"):
                     block = 1
                 elif al in ("noblock", "nonblock", "nonblocking"):
                     block = 0
@@ -616,8 +612,7 @@ def assemble(source_code: str) -> Program:
                     ifcond = 1
                 else:
                     raise AssemblerError(f"Invalid argument for {mnem}: '{a}'", line_num, clean)
-            words.append((OP_CTRL << 13) | dss | CT_FIFO << 6 | is_pull << 5 | block << 4 | ifcond << 3
-                         | peer << 2)
+            words.append((OP_CTRL << 13) | dss | CT_FIFO << 6 | is_pull << 5 | block << 4 | ifcond << 3)
 
         elif mnem == "pau":
             action = args[0].lower() if args else ""

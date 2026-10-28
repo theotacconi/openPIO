@@ -141,9 +141,8 @@ text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 <text x="495" y="818" class="smtitle" text-anchor="start">State machine 1</text>
 <text x="495" y="842" class="d" text-anchor="start">Identical to state machine 0. The two run side by side, on the same pins,</text>
 <text x="495" y="862" class="d" text-anchor="start">and can start on the same clock (4 state machines in a larger build).</text>
-<polyline points="740,744 740,788" class="data" marker-end="url(#data)" marker-start="url(#datas)"/>
-<text x="752" y="763" class="ld" text-anchor="start">peer link: pass data and</text>
-<text x="752" y="779" class="ld" text-anchor="start">flags directly</text>
+<polyline points="740,744 740,788" class="ctl" marker-end="url(#ctl)" marker-start="url(#ctls)"/>
+<text x="752" y="763" class="ld" text-anchor="start">peer link: IRQ flags</text>
 <polyline points="1005,838 1028,838" class="data" marker-end="url(#data)"/>
 <polyline points="452,838 473,838" class="ctl" marker-end="url(#ctl)"/>
 <polyline points="1160,470 1258,470" class="data" marker-end="url(#data)" marker-start="url(#datas)"/>

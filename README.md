@@ -20,7 +20,7 @@ openPIO gives you programmable state machines backed by dedicated, toggleable mi
 
 - **Instruction set**: [sim/model/ISA.md](sim/model/ISA.md): instructions, programmable conditions, the PAU (Protocol Acceleration Unit: line codes, bit stuffing, CRC, clock recovery), FIFOs, timing within a clock.
 - **Host interface**: [sim/model/HOST.md](sim/model/HOST.md): SPI commands, registers, pins.
-- **Programs**: [programs/README.md](programs/README.md): 19 protocols, a protocol bridge and a logic analyzer, each judged on the pins by a reference device.
+- **Programs**: [programs/README.md](programs/README.md): 19 protocols, a logic analyzer and an edge timestamper, each judged on the pins by a reference device.
 - **Datasheet**: [docs/info.md](docs/info.md) (Tiny Tapeout).
 
 > [!NOTE]

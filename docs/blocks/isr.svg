@@ -66,11 +66,9 @@ text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 <polyline points="860,70 888,70" class="data" marker-end="url(#data)"/>
 <text x="894" y="74" class="d" text-anchor="start">RX FIFO: PUSH, to the host</text>
 <polyline points="860,130 888,130" class="data" marker-end="url(#data)"/>
-<text x="894" y="134" class="d" text-anchor="start">the other machine&#x27;s TX FIFO (PUSH peer)</text>
+<text x="894" y="134" class="d" text-anchor="start">ALU, OSR (as a source)</text>
 <polyline points="860,190 888,190" class="data" marker-end="url(#data)"/>
-<text x="894" y="194" class="d" text-anchor="start">ALU, OSR (as a source)</text>
-<polyline points="860,250 888,250" class="data" marker-end="url(#data)"/>
-<text x="894" y="254" class="d" text-anchor="start">PAU CRC (crc_feed n)</text>
+<text x="894" y="194" class="d" text-anchor="start">PAU CRC (crc_feed n)</text>
 <rect x="400" y="300" width="170" height="70" rx="8" class="b"/>
 <text x="485.0" y="331.5" class="h" text-anchor="middle">Bits collected</text>
 <text x="485.0" y="348.5" class="d" text-anchor="middle">counter, 0 … 16</text>

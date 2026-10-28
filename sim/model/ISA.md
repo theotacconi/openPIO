@@ -135,7 +135,7 @@ value (0 for COND).
 | Type | Instruction | Arguments [5:0] | Pair |
 |---|---|---|---|
 | `00` | IRQ | Clear, Wait, Peer, Index (3) | flags / FIFOs |
-| `01` | PUSH / PULL | Dir, Block, IfCond, Peer, `00` | |
+| `01` | PUSH / PULL | Dir, Block, IfCond, `000` | |
 | `10` | WAIT | Pol, Edge, T_EN, `0`, Slot (2) | wait / PAU |
 | `11` | PAU action | Action (2), Count (4) | |
 
@@ -146,9 +146,7 @@ cleared; `Peer` = 1 selects the peer flag bank.
 OSR, count cleared). `Block` = 1 stalls on a full RX / empty TX FIFO. Non-blocking: PUSH on a
 full FIFO drops the word (ISR still cleared); PULL on an empty FIFO copies X into the OSR.
 `IfCond` = 1: PUSH only when `isr_count >= push threshold`, PULL only when
-`osr_count >= pull threshold`. `Peer` = 1: PUSH writes the peer SM's TX FIFO instead of the own
-RX FIFO, PULL reads the peer's RX FIFO instead of the own TX FIFO (full / empty refer to that
-FIFO): two SMs pass data without the host.
+`osr_count >= pull threshold`.
 
 **WAIT**: stalls until programmable condition `Slot` (see Conditions) matches: level
 (`Edge` = 0) equal to `Pol`, or edge (`Edge` = 1) rising (`Pol` = 1) / falling (`Pol` = 0)
@@ -355,24 +353,19 @@ along this path. The SM's data SRAM (256 x 16, one port: one read or write per c
 word available a clock later) holds a 128-word ring for each FIFO.
 
 ```
-TX: host, peer -> front (if nothing waits) or IN register -> SRAM ring -> front (4) -> PULL
-RX: PUSH -> front (4) -> SRAM ring -> OUT register, or the front (if nothing waits) -> host, peer
+TX: host -> front (if nothing waits) or IN register -> SRAM ring -> front (4) -> PULL
+RX: PUSH -> front (4) -> SRAM ring -> OUT register, or the front (if nothing waits) -> host
 ```
 
 - PULL, PUSH, autopull and autopush see the 4-word fronts only. The SM status bits and the host
   registers count the whole FIFO.
-- **Writers** (host TX_PUSH, a peer's PUSH PEER) put a word into the front when the ring is
-  empty, the IN register empty and no word is moving to the front; else into the IN register if
-  it is free; else the write is refused (TX_PUSH drops the word, PUSH PEER sees a full FIFO).
-- **Readers** (host RX_POP, a peer's PULL PEER) take the OUT register's word; if it is empty, the
-  oldest front word when the ring is empty and no word is moving to the OUT register; else
-  nothing (RX_POP reads 0, PULL PEER sees an empty FIFO).
-- In a clock the SMs act in parallel, and with them a host access (Timing within a clock):
-  writers are accepted by the state at the clock start and their word lands at the end, after
-  the moves below (a word the host or the peer pushes is the SM's from the next clock); a word
-  an SM pushes into its RX FIFO is there for its peer from the next clock. A host access goes
-  first: in a clock with a host TX_PUSH, a PUSH PEER into that FIFO is refused, and with a host
-  RX_POP, which takes its word before the SMs, a PULL PEER from that FIFO finds it empty.
+- **The host's TX_PUSH** puts its word into the front when the ring is empty, the IN register
+  empty and no word is moving to the front; else into the IN register if it is free; else the
+  word is dropped. The choice is by the state at the start of its clock and the word lands at
+  the end, after the moves below: the SM can pull it from the next clock.
+- **The host's RX_POP** takes the OUT register's word; if it is empty, the oldest front word
+  when the ring is empty and no word is moving to the OUT register; else it reads 0. It takes
+  the word before the SMs and the moves of its clock.
 - **At the end of each clock**:
   1. Words read from the SRAM in the clock before land in the TX front and the OUT register.
   2. Bypasses, without the SRAM: the IN word moves to the TX front when the ring is empty, no
@@ -383,13 +376,13 @@ RX: PUSH -> front (4) -> SRAM ring -> OUT register, or the front (if nothing wai
      The search starts after the request served last, in that order: each pending request is
      served within 4 clocks, and a request alone every clock.
 - An SPI word lasts at least 96 clocks, so the host always finds a free IN register and a ready
-  OUT register. A peer moving more than about a word every 2 clocks can find them busy and wait.
+  OUT register.
 
 ## Multiple state machines
 
 - **Peer**: SM i and SM i XOR 1 are peers (0 and 1, 2 and 3). Peer IRQ flags are the peer's own
   flags: `irq peer 3` sets flag 3 of the peer, a peer IRQ condition reads the peer's flags.
-  PUSH / PULL `Peer` reach the peer's FIFOs (see FIFOs). Peers act in parallel: an SM reads its
+  Peers act in parallel: an SM reads its
   peer's flags as they were at the start of the clock, and its writes to them land at the end
   (after the peer's own write to the same flag in that clock).
 - **Pin positions**: the ISA has 16 pins, 0..15. An implementation connects each to pads (the
@@ -421,7 +414,7 @@ Every clock, in this order (emu.py and chip.py follow it; the RTL must match it)
    A host access (an SPI word, HOST.md) takes one clock, in parallel with the SMs: its reads
    take the state at the clock start, its writes land at the end, after the SMs' (the host's
    write wins) and after the FIFO moves of step 4.
-2. **Each enabled SM**, in parallel (the peer's flags and FIFO words as at the clock start):
+2. **Each enabled SM**, in parallel (the peer's flags as at the clock start):
    1. The prescaler decides whether this clock is a strobe. On other clocks nothing else of
       the SM changes.
    2. The PAU transmitter advances (the line of this strobe), then the receiver samples
@@ -484,8 +477,9 @@ the shift counts. A program carries all of it as assembler directives (`sim/mode
 - Timing within a clock written down, with the 2-clock input synchronizer in the model.
 - ALU ISR leaves the ISR count at 0 (empty, as RP2040 `MOV ISR`), not 16: a program can drop a
   partial word without pushing it.
-- Peer SMs act in parallel: flags and FIFO words written to the peer are seen from the next
-  clock (the v2 model first let SM 1 see SM 0's writes in the same clock). A host access takes
+- Peer SMs act in parallel: flags written to the peer are seen from the next clock (the v2
+  model first let SM 1 see SM 0's writes in the same clock). No PUSH / PULL to the peer's FIFOs
+  (v2 had them: one program used them, at the price of FIFO arbitration between SMs). A host access takes
   one clock with them (the model first applied it between clocks). WAIT edges compare the
   values two strobes see (the model first kept them after the instruction).
 - IN source `001` is TIME, OUT destination `101` PAU_BAUD (v2 first: reserved).
@@ -493,7 +487,7 @@ the shift counts. A program carries all of it as assembler directives (`sim/mode
 - After CTRL.RESET the OSR is empty (`osr_count` = 16; v1: 0, a full OSR of zeros), the IRQ
   flags are clear and the CRC holds its initial value.
 - FIFOs of 133 words (4 front + 128 in a data SRAM per SM + an IN / OUT register; v1: 4).
-- STATUS as IN / ALU source `111`; PUSH / PULL `Peer`; several SMs with shared pins, PIN_MASK
+- STATUS as IN / ALU source `111`; several SMs with shared pins, PIN_MASK
   and chip-level open drain (v1: one SM, open drain rewrote its pindirs).
 - 16 pin positions mapped to the implementation's pads (v1: 8 pins; the chip's `ui_in[7:3]` were
   alternative inputs and `uo_out[7:2]` copies of pins 2..7, now pins 11..15 and 10..15).

@@ -12,7 +12,7 @@ openPIO is a programmable I/O co-processor: two state machines (SMs), each a tin
 - **PAU (Protocol Acceleration Unit):** a serial transmitter and receiver with its own bit timing between OUT / IN PINS and the pins: NRZ, NRZI, Manchester and biphase mark line codes, programmable bit stuffing, a CRC of 1 to 32 bits, clock recovery and a line monitor that stops the transmitter at the first bit another node overrides (CAN, LIN, 1-Wire arbitration).
 - **Clocking:** a 16-bit integer + 8-bit fractional prescaler per SM (from 50 MHz down to 763 Hz); delays and timeouts count strobes times a delay multiplier.
 - **FIFOs:** 133-word TX (host to SM) and RX (SM to host) FIFOs per SM, in an SRAM.
-- **Two SMs** share the pins (per-SM pin mask), start on the same clock, and pass words and IRQ flags to each other without the host.
+- **Two SMs** share the pins (per-SM pin mask), start on the same clock, and signal each other through IRQ flags.
 
 Example programs (UART, Modbus RTU, SPI, I2C, USB low speed, USB Power Delivery BMC, 10BASE-T TX, CAN, LIN, DALI, HDLC, JTAG, SWD, 1-Wire, PS/2, I2S, WS2812B, NEC infrared, quadrature encoder, a logic analyzer, ...) are in `programs/`; `sim/model/asm.py` assembles them.
 
