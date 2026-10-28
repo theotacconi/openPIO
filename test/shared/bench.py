@@ -24,7 +24,7 @@ from typing import Callable, Sequence
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "sim" / "model"))
 from asm import assemble          # noqa: E402
-from chip import OP_RX_POP, OP_TX_PUSH, Chip     # noqa: E402
+from chip import OP_REG_WR, OP_RX_POP, OP_TX_PUSH, Chip     # noqa: E402
 from host import Host             # noqa: E402
 
 
@@ -77,6 +77,7 @@ class Bench:
         self.contention: list[str] = []
         self.to_send: list[list[int]] = [[] for _ in self.chip.sms]
         self.received: list[list[int]] = [[] for _ in self.chip.sms]
+        self.writes: list[tuple[int, int, int]] = []    # register writes for the host
         self.t = 0
 
     # ------------------------------------------------------------------ setup
@@ -95,6 +96,10 @@ class Bench:
 
     def start(self, mask: int = 1) -> None:
         self.host.start(mask)
+
+    def write(self, sm: int, addr: int, value: int) -> None:
+        """A register write by the host (REG_WR): it lands at the end of the next run() clock."""
+        self.writes.append((sm, addr, value))
 
     def send(self, sm: int, words: Sequence[int]) -> None:
         """Queue words for the host to push into the TX FIFO as soon as there is room."""
@@ -130,8 +135,9 @@ class Bench:
 
     def run(self, cycles: int, until: Callable[[], bool] | None = None) -> int:
         """Run up to `cycles` clocks, stopping after the clock where until() is true. The host
-        makes at most one access a clock (chip.host()): an RX_POP of a word the OUT register
-        holds, else a TX_PUSH where the IN register is free, the SMs taken in turn."""
+        makes at most one access a clock (chip.host()): a register write (write()), else an
+        RX_POP of a word the OUT register holds, else a TX_PUSH where the IN register is free,
+        the SMs taken in turn."""
         for n in range(cycles):
             host_turn = not self.host_word_clocks or self.t % self.host_word_clocks == 0
             access = self._host_access() if host_turn else None
@@ -141,6 +147,9 @@ class Bench:
                 d.tick(self.t, lv)
             if access is None:
                 self.chip.step()
+            elif access[0] == OP_REG_WR:
+                self.chip.host(*access)
+                self.writes.pop(0)
             elif access[0] == OP_RX_POP:
                 self.received[access[1]].append(self.chip.host(*access))
             else:
@@ -152,6 +161,9 @@ class Bench:
         return cycles
 
     def _host_access(self) -> tuple[int, int, int, int] | None:
+        if self.writes:
+            sm, addr, value = self.writes[0]
+            return OP_REG_WR, sm, addr, value
         sms = self.chip.sms
         for k in range(len(sms)):
             sm = (self.t + k) % len(sms)

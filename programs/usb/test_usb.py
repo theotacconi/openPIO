@@ -55,7 +55,7 @@ class UsbRxTest(unittest.TestCase):
             flags = bench.chip.reg_read(0, IRQ)
             if flags:
                 verdicts.append(flags)
-                bench.chip.reg_write(0, IRQ, flags)
+                bench.write(0, IRQ, flags)
         self.assertEqual(verdicts, [1] * len(sent) + [2], "IRQ 0 good packet, IRQ 1 CRC error")
         words, n = [w >> 8 for w in bench.received[0]], 0
         for pid, p, *crc in packets:

@@ -34,7 +34,7 @@ class Nec(unittest.TestCase):
                     bench.run(1000)
                     if bench.chip.reg_read(0, IRQ):
                         repeats += 1
-                        bench.chip.reg_write(0, IRQ, 1)
+                        bench.write(0, IRQ, 1)
                 self.assertEqual(bench.errors(), [])
                 self.assertEqual(bench.received[0], [w for a, c in keys for w in (a | (a ^ 0xFF) << 8,
                                                                                    c | (c ^ 0xFF) << 8)])

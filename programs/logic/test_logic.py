@@ -44,7 +44,7 @@ def run(levels, trigger, n, clkdiv=1, irq_at=None):
     bench.start(1)
     if irq_at is not None:
         bench.run(irq_at)
-        bench.chip.reg_write(0, 0x10, 1 << (8 + (trigger & 7)))       # IRQ: set the flag
+        bench.write(0, 0x10, 1 << (8 + (trigger & 7)))       # IRQ: set the flag
     bench.run(len(levels) - bench.t)
     return bench.received[0]
 

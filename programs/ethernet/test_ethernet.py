@@ -25,7 +25,7 @@ def frame_words(f):
 def setup(host_word_clocks=0):
     bench = Bench(host_word_clocks=host_word_clocks)
     bench.load(0, (HERE / "eth_tx.asm").read_text())
-    bench.chip.reg_write(0, IRQ_MASK, 1 << 1)              # HOST_IRQ only for "frame sent"
+    bench.write(0, IRQ_MASK, 1 << 1)              # HOST_IRQ only for "frame sent"
     rx = bench.add(ManchesterRx(TDP, BIT))
     bench.start(1)
     return bench, rx
@@ -35,9 +35,9 @@ def send(bench, f):
     """Host: load the frame, set flag 0, wait for flag 1."""
     bench.send(0, frame_words(f))
     bench.run(200 * len(f), until=lambda: not bench.to_send[0])
-    bench.chip.reg_write(0, IRQ, 1 << 8)
+    bench.write(0, IRQ, 1 << 8)
     bench.run((len(f) + 20) * 8 * BIT, until=lambda: bench.chip.host_irq)
-    bench.chip.reg_write(0, IRQ, 1 << 1)
+    bench.write(0, IRQ, 1 << 1)
 
 
 class EthernetTx(unittest.TestCase):
