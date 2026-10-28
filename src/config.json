@@ -132,7 +132,9 @@
   "//": "Absolute die size",
   "FP_SIZING": "absolute",
 
-  "GRT_ALLOW_CONGESTION": 1,
+  "//": "openPIO: 0, not TT's 1. A design whose global route overflows then fails in global routing",
+  "//": "(~40 min) instead of grinding in detailed routing until the 6-hour GitHub limit.",
+  "GRT_ALLOW_CONGESTION": 0,
 
   "FP_IO_HLENGTH": 2,
   "FP_IO_VLENGTH": 2,
