@@ -748,9 +748,7 @@ class StateMachine:
             if info["t_en"]:
                 if self.timeout_counter > 0:
                     self.timeout_counter -= 1
-                    self.timeout_val = self.timeout_counter
                 if self.timeout_counter == 0:
-                    self.timeout_val = 0
                     self.timeout_flag = True
                     done = True
             done = done or self._wait_met(info["pol"], info["edge"], info["slot"])
@@ -949,8 +947,8 @@ class StateMachine:
                         return self._stall("PUSH", peer=peer, delay=delay, next_pc=next_pc)
             elif ctype == CT_WAIT and not a & 4:
                 pol, edge, t_en, slot = a >> 5 & 1, a >> 4 & 1, a >> 3 & 1, a & 3
-                if t_en:
-                    self.timeout_counter = self.timeout_val
+                if t_en:                                # TIMEOUT_VAL x DLYMUL strobes from now
+                    self.timeout_counter = self.timeout_val * self.dlymul
                     self.timeout_flag = False
                 if not self._wait_met(pol, edge, slot):
                     return self._stall("WAIT", pol=pol, edge=edge, t_en=t_en, slot=slot,
@@ -988,7 +986,7 @@ class StateMachine:
             elif dest == 4:
                 self.dlymul = val or 1
             elif dest == 5:
-                self.timeout_val = self.timeout_counter = val
+                self.timeout_val = val
                 self.timeout_flag = False
             elif dest == 6:
                 self.pau_baud = val
