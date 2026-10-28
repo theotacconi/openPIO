@@ -39,7 +39,20 @@ class HostInterface(unittest.TestCase):
         chip.spi(header(OP_TX_PUSH, 1), [0x1111, 0x2222, 0x3333, 0x4444, 0x5555])
         chip.reg_write(1, CTRL, 0b10)
         chip.step(40)
-        self.assertEqual(chip.spi(header(OP_RX_POP, 1), [0] * 6)[1:], [0x1111, 0x2222, 0x3333, 0x4444, 0x5555, 0])
+        self.assertEqual(chip.spi(header(OP_RX_POP, 1, 6), [0] * 6)[1:], [0x1111, 0x2222, 0x3333, 0x4444, 0x5555, 0])
+        chip.spi(header(OP_TX_PUSH, 1), [0x6666, 0x7777])
+        chip.step(40)
+        self.assertEqual(chip.spi(header(OP_RX_POP, 1, 1), [0] * 3)[1:], [0x6666, 0, 0],
+                         "one pop: the words beyond it read 0")
+        self.assertEqual(chip.spi(header(OP_RX_POP, 1, 1), [0])[1:], [0x7777], "not lost")
+
+    def test_header_miso_is_the_previous_transactions_sm(self):
+        """The header's SM field comes after MISO's top bits: the header carries the STATUS of
+        the SM of the transaction before (SM 0 after reset)."""
+        chip = Chip(2)
+        chip.reg_write(0, CTRL, 0b10)                            # SM 1 runs: STATUS bit 5
+        self.assertEqual(chip.spi(header(OP_REG_RD, 1, PC), [0])[0] >> 5 & 1, 0, "SM 0's")
+        self.assertEqual(chip.spi(header(OP_REG_RD, 0, PC), [0])[0] >> 5 & 1, 1, "SM 1's")
 
     def test_fifo_depth_through_the_sram(self):
         chip = Chip(2)

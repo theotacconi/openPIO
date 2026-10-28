@@ -539,6 +539,9 @@ Found designing the RTL, or by the principles above:
 - CRC_POLY, CRC_RES and the CRC are MSB-aligned (v2 first: right-aligned, three 32-bit
   shifters an SM). The first strobe after CTRL.RESET sees no WAIT edge (v2 first: an edge from
   the conditions of the reset state, four more condition multiplexers an SM).
+- HOST.md, found designing the SPI slave: RX_POP pops `Addr` words (a read word is fetched
+  before the slave knows whether it is clocked, so an open burst lost a word); the header's MISO
+  is the previous transaction's SM STATUS (the SM field arrives after MISO's top bits).
 - The CRC takes the data bits on the wire, a bit a strobe: a TX bit when it is sent, not when
   queued; CRC feed takes Count strobes; CRC append waits for the queued data bits (v2 first fed
   up to 16 bits in a strobe: a chain of 16 programmable 32-bit CRC steps, about 23k um2 an SM
