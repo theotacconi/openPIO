@@ -353,28 +353,24 @@ along this path. The SM's data SRAM (256 x 16, one port: one read or write per c
 word available a clock later) holds a 128-word ring for each FIFO.
 
 ```
-TX: host -> front (if nothing waits) or IN register -> SRAM ring -> front (4) -> PULL
-RX: PUSH -> front (4) -> SRAM ring -> OUT register, or the front (if nothing waits) -> host
+TX: host -> IN register -> SRAM ring -> front (4) -> PULL
+RX: PUSH -> front (4) -> SRAM ring -> OUT register -> host
 ```
 
 - PULL, PUSH, autopull and autopush see the 4-word fronts only. The SM status bits and the host
   registers count the whole FIFO.
-- **The host's TX_PUSH** puts its word into the front when the ring is empty, the IN register
-  empty and no word is moving to the front; else into the IN register if it is free; else the
-  word is dropped. The choice is by the state at the start of its clock and the word lands at
-  the end, after the moves below: the SM can pull it from the next clock.
-- **The host's RX_POP** takes the OUT register's word; if it is empty, the oldest front word
-  when the ring is empty and no word is moving to the OUT register; else it reads 0. It takes
-  the word before the SMs and the moves of its clock.
+- **The host's TX_PUSH** puts its word into the IN register if it is free (by the state at the
+  start of its clock; the word lands at its end), else drops it.
+- **The host's RX_POP** takes the OUT register's word, before the SMs and the moves of its
+  clock; it reads 0 when the register is empty.
 - **At the end of each clock**:
   1. Words read from the SRAM in the clock before land in the TX front and the OUT register.
-  2. Bypasses, without the SRAM: the IN word moves to the TX front when the ring is empty, no
-     word is moving and the front has room; the oldest RX front word moves to an empty OUT
-     register when the ring is empty and no word is moving.
-  3. The SRAM port serves one request: TX refill (ring to TX front, which has room), TX store (IN
+  2. The SRAM port serves one request: TX refill (ring to TX front, which has room), TX store (IN
      to ring), RX store (oldest RX front word to ring), RX fetch (ring to the empty OUT register).
      The search starts after the request served last, in that order: each pending request is
      served within 4 clocks, and a request alone every clock.
+  A word takes this one path, without bypasses: from the host to the TX front in 3 clocks or
+  more, from a PUSH to the OUT register in 2 or more (up to 9 with every request pending).
 - An SPI word lasts at least 96 clocks, so the host always finds a free IN register and a ready
   OUT register.
 
@@ -425,7 +421,7 @@ Every clock, in this order (emu.py and chip.py follow it; the RTL must match it)
    4. The four condition values this strobe saw are kept for the WAIT edges of the next one.
 3. **Pin latches.** The writes of the clock are applied, SM by SM in index order and each SM's
    in program order: the highest SM wins a pin, an instruction wins over its own side-set.
-4. **FIFO data paths** (every SM, enabled or not): SRAM reads land, bypasses move, each SRAM
+4. **FIFO data paths** (every SM, enabled or not): SRAM reads land, each SRAM
    port serves one request (FIFOs).
 
 An SM with CTRL EN = 0 is frozen: prescaler, PAU, conditions, delays and stalls keep their
@@ -486,7 +482,8 @@ the shift counts. A program carries all of it as assembler directives (`sim/mode
 - STUFF_MODE `01` (a 1 after LEN 0s) removed: no protocol uses it (AGENT.md, the PAU rule).
 - After CTRL.RESET the OSR is empty (`osr_count` = 16; v1: 0, a full OSR of zeros), the IRQ
   flags are clear and the CRC holds its initial value.
-- FIFOs of 133 words (4 front + 128 in a data SRAM per SM + an IN / OUT register; v1: 4).
+- FIFOs of 133 words (4 front + 128 in a data SRAM per SM + an IN / OUT register; v1: 4). Every
+  word passes the SRAM: the v2 model first had bypasses for SM-to-SM traffic, gone with it.
 - STATUS as IN / ALU source `111`; several SMs with shared pins, PIN_MASK
   and chip-level open drain (v1: one SM, open drain rewrote its pindirs).
 - 16 pin positions mapped to the implementation's pads (v1: 8 pins; the chip's `ui_in[7:3]` were

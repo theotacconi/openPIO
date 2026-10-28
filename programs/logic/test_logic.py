@@ -88,8 +88,8 @@ class LogicAnalyzer(unittest.TestCase):
             bench.run(1)
             if flagged is None and bench.chip.sms[0].irq_flags[0]:
                 flagged = bench.t
-            if first is None and bench.received[1]:
-                first = bench.t
+            if first is None and (bench.chip.sms[1].rx_level or bench.received[1]):
+                first = bench.t                                # the first sample pushed
         self.assertEqual(len(bench.received[1]), 40)
         self.assertIn(first - flagged, range(1, 4), "sampling starts at once")
         self.assertEqual([w >> 3 & 1 for w in bench.received[1]], [bench.trace[t - 2] >> 3 & 1
