@@ -60,7 +60,7 @@ OPERAND_NAMES = ["pins", "pindirs", "x", "y", "isr", "osr", "null", "special"]
 IN_SRC = {"pins": R_PINS, "time": R_PINDIRS, "x": R_X, "y": R_Y, "isr": R_ISR, "osr": R_OSR,
           "null": R_NULL, "status": R_SPECIAL}
 OUT_DEST = {"pins": R_PINS, "pindirs": R_PINDIRS, "x": R_X, "y": R_Y, "isr": R_ISR,
-            "null": R_NULL, "pc": R_SPECIAL}
+            "pau_baud": R_OSR, "null": R_NULL, "pc": R_SPECIAL}
 ALU_DEST = {"pins": R_PINS, "pindirs": R_PINDIRS, "x": R_X, "y": R_Y, "isr": R_ISR, "osr": R_OSR,
             "null": R_NULL, "cond": R_SPECIAL}
 ALU_SRC = {**ALU_DEST, "status": R_SPECIAL}

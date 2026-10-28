@@ -934,6 +934,8 @@ class StateMachine:
                 self.y = val
             elif dest == R_ISR:
                 self.isr, self.isr_count = val, count
+            elif dest == R_OSR:                         # PAU_BAUD
+                self.pau_baud = val & 0x1F
             elif dest == R_SPECIAL:
                 next_pc = val % IMEM_WORDS
 
