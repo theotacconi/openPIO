@@ -169,7 +169,6 @@ class Bench:
 
 def compare_state(c: Core, sm: StateMachine) -> list[str]:
     g = c.get
-    w = (sm.crc_cfg & 0x1F) + 1
     checks = [
         ("pc", g("pc"), sm.pc), ("x", g("x"), sm.x), ("y", g("y"), sm.y),
         ("isr", g("isr"), sm.isr), ("osr", g("osr"), sm.osr),
@@ -179,12 +178,13 @@ def compare_state(c: Core, sm: StateMachine) -> list[str]:
         ("tmo_flag", g("tmo_flag"), int(sm.timeout_flag)), ("dlymul", g("dlymul"), sm.dlymul),
         ("tmo_val", g("tmo_val"), sm.timeout_val), ("time", g("time_r"), sm.time),
         ("cond", g("cond"), sum(v << 8 * i for i, v in enumerate(sm.cond))),
-        ("cond_prev", g("cond_prev"), bits(sm.cond_prev)),
         ("pau_ctl", g("u_pau.ctl"), sm.pau_ctl), ("pau_baud", g("u_pau.baud"), sm.pau_baud),
         ("tx_queue", g("u_pau.tq_len"), len(sm.tx_queue)),
         ("rx_queue", g("u_pau.rq_len"), len(sm.rx_queue)),
-        ("crc", g("u_pau.crc_a"), sm.crc << (32 - w) & 0xFFFFFFFF),
+        ("crc", g("u_pau.crc_a"), sm.crc),
     ]
+    if sm.cond_prev is not None:
+        checks.append(("cond_prev", g("cond_prev"), bits(sm.cond_prev)))
     if sm.delay_counter:
         checks.append(("delay", g("cnt"), sm.delay_counter))
     elif sm.stalled and sm.stall_reason == "WAIT" and sm.stall_info["t_en"]:

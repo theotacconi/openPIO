@@ -431,8 +431,9 @@ def assemble(source_code: str) -> Program:
                     raise AssemblerError(".crc width=1..32 poly=<value> [init=ones] [xorout=1] [res=<value>]",
                                          line_num, raw_line)
                 cfg["crc_cfg"] = (width - 1) | (kv.get("init") == "ones") << 5 | (kv.get("xorout") == "1") << 6
-                cfg["crc_poly"] = _parse_int(kv["poly"], line_num, raw_line) & 0xFFFFFFFF
-                cfg["crc_res"] = _parse_int(kv.get("res", "0"), line_num, raw_line) & 0xFFFFFFFF
+                # CRC_POLY and CRC_RES are MSB-aligned (ISA.md, PAU): the directive's values are not
+                cfg["crc_poly"] = _parse_int(kv["poly"], line_num, raw_line) << (32 - width) & 0xFFFFFFFF
+                cfg["crc_res"] = _parse_int(kv.get("res", "0"), line_num, raw_line) << (32 - width) & 0xFFFFFFFF
             elif directive == ".wrap_target":
                 cfg["wrap_bottom"] = current_addr
             elif directive == ".wrap":

@@ -10,7 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "sim" / "model"))
 from asm import assemble                                             # noqa: E402
 from chip import (Chip, header, CTRL, GPIO, ID, IRQ, IRQ_MASK, PC, PINS, STATUS, WRAP, X, FIFO_LEVEL,  # noqa: E402
-                  COND_CFG01, COND_CFG23, CRC_LO, IRQ_SUM, PINBASE, PIN_MASK, MISC, CLKDIV, CLKDIV_FRAC,
+                  COND_CFG01, COND_CFG23, CRC_HI, IRQ_SUM, PINBASE, PIN_MASK, MISC, CLKDIV, CLKDIV_FRAC,
                   SM_STATUS, PINS_IN, PINS_OE, PADS_BIDIR, PADS_IN, PADS_OUT,
                   OP_IMEM_RD, OP_IMEM_WR, OP_REG_RD, OP_REG_WR, OP_RX_POP, OP_TX_PUSH)
 from host import Host                                                # noqa: E402
@@ -185,7 +185,7 @@ class HostInterface(unittest.TestCase):
     def test_reset_clears_flags_and_loads_the_crc_init(self):
         chip = Chip(2)
         load(chip, 0, assemble(".crc width=16 poly=0x8005 init=ones\nend: jmp end"))
-        self.assertEqual(chip.reg_read(0, CRC_LO), 0xFFFF, "CRC initial value after RESET")
+        self.assertEqual(chip.reg_read(0, CRC_HI), 0xFFFF, "CRC initial value after RESET (MSB-aligned)")
         chip.reg_write(0, IRQ, 0x81 << 8)
         chip.step()
         self.assertEqual(chip.sms[1].peer_irq_flags[7], True, "the peer sees the flag")

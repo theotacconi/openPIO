@@ -96,11 +96,12 @@ module openpio_sm (
     reg         tmo_flag;
     reg  [31:0] cond;                 // COND, slots 3..0
     reg  [3:0]  cond_prev;            // what the last strobe saw
+    reg         fresh;                // no strobe since RESET: no WAIT edge
     reg  [15:0] prev_gpio, time_r;
     reg  [15:0] clkdiv;               // prescaler: CLKDIV and CLKDIV_FRAC since RESET
     reg  [7:0]  frac, div_acc;
     reg  [15:0] div_cnt;
-    reg  [16:0] div_per;
+    reg         div_carry;            // the period is CLKDIV + this carry
     reg         strobe_r;             // the next running clock is a strobe (one clock ahead)
 
     // ================================================================== prescaler
@@ -111,7 +112,8 @@ module openpio_sm (
     wire [8:0]  acc_sum  = div_acc + frac;
     wire        div_load = div_cnt == 16'd0;
     wire [7:0]  acc_n    = div_load ? acc_sum[7:0] : div_acc;
-    wire [16:0] per_n    = div_load ? clkdiv + acc_sum[8] : div_per;
+    wire        carry    = div_load ? acc_sum[8] : div_carry;
+    wire [16:0] per_n    = clkdiv + carry;
     wire [15:0] cnt_n    = strobe_r ? 16'd0 : div_cnt + 16'd1;
     wire        carry_n  = acc_n > ~frac;                  // the carry of acc_n + frac
     wire [16:0] per_nn   = (cnt_n == 16'd0) ? clkdiv + carry_n : per_n;
@@ -175,34 +177,18 @@ module openpio_sm (
                              isr_cnt >= push_at, osr_cnt >= pull_at, tmo_flag,
                              x == y, y == 16'd0, x == 16'd0};
     wire [15:0] status_w  = {pau_status[7:0], sm_status[7:0]};
-    reg  [15:0] gpio_rot;             // pin in_base + i, mod 16
-    integer r;
-    always @(*) for (r = 0; r < 16; r = r + 1) gpio_rot[r] = gpio_in[in_base + r[3:0]];
-    wire [127:0] sig      = {5'd0, pau_status, sm_status, y, x, peer_irq, peer_irq, irq, irq,
-                             gpio_rot, gpio_in};
+    // sources 0 and 1 (pin Index, pin in_base + Index) share one pin multiplexer a slot
+    wire [127:0] sig      = {5'd0, pau_status, sm_status, y, x, peer_irq, peer_irq, irq, irq, 32'd0};
     wire [3:0] cond_seen;
     genvar k;
     generate
         for (k = 0; k < 4; k = k + 1) begin : g_cond
-            assign cond_seen[k] = sig[cond[8*k +: 7]] ^ cond[8*k + 7];
+            wire [3:0] pin = cond[8*k +: 4] + (cond[8*k + 4] ? in_base : 4'd0);
+            wire       val = cond[8*k + 6:8*k + 5] == 2'd0 ? gpio_in[pin] : sig[cond[8*k +: 7]];
+            assign cond_seen[k] = val ^ cond[8*k + 7];
         end
     endgenerate
 
-    // after CTRL.RESET: the conditions of the reset state (emu.py reset()), the last strobe's
-    // for the first WAIT edge. X = Y = 0, flags clear, ISR empty, OSR empty, FIFOs empty.
-    wire [10:0] pau_rst  = {1'b0, gpio_in[in_base] & gpio_in[in_base + 4'd1],
-                            ~gpio_in[in_base] & ~gpio_in[in_base + 4'd1], 2'b00,
-                            ~crc_cfg[5], crc_rst_res, 4'b0111};
-    wire [31:0] crc_rmask = 32'hFFFF_FFFF >> ~crc_cfg[4:0];
-    wire        crc_rst_res = (crc_cfg[5] ? crc_rmask : 32'd0) == (crc_res & crc_rmask);
-    wire [127:0] sig_rst  = {5'd0, pau_rst, 16'h0057, 32'd0, peer_irq, peer_irq, 16'd0,
-                             gpio_rot, gpio_in};
-    wire [3:0] cond_rst;
-    generate
-        for (k = 0; k < 4; k = k + 1) begin : g_cond_rst
-            assign cond_rst[k] = sig_rst[cond_cfg[8*k +: 7]] ^ cond_cfg[8*k + 7];
-        end
-    endgenerate
 
     // ================================================================== operands
     wire [15:0] out_view = ss_on & ~ss_pdir ? (latch_out & ~(ss_m & pin_mask)) | (ss_v & pin_mask) : latch_out;
@@ -283,7 +269,7 @@ module openpio_sm (
     wire        ph_delay = stb & delaying;
     wire        ph_stall = stb & ~delaying & stalled & ~retry;
     wire        ph_exec  = stb & ~delaying & (~stalled | retry);
-    wire        met      = instr[4] ? (cond_prev[instr[1:0]] == ~instr[5]) & (cond_seen[instr[1:0]] == instr[5])
+    wire        met      = instr[4] ? ~fresh & (cond_prev[instr[1:0]] == ~instr[5]) & (cond_seen[instr[1:0]] == instr[5])
                                     : cond_seen[instr[1:0]] == instr[5];   // WAIT: edge / level
 
     // delay_f or TIMEOUT_VAL (a timed WAIT that stalls at issue), times DLYMUL
@@ -681,15 +667,15 @@ module openpio_sm (
             dlymul <= 5'd1;      tmo_val <= 5'd0;     tmo_flag <= 1'b0;
             irq <= 8'd0;
             time_r <= 16'd0;
-            div_cnt <= 16'd0;    div_acc <= 8'd0;     div_per <= 17'd0;
+            div_cnt <= 16'd0;    div_acc <= 8'd0;     div_carry <= 1'b0;
+            cond_prev <= 4'd0;
+            fresh <= 1'b1;
             if (!rst_n) begin
                 cond <= 32'hE400_6160;
-                cond_prev <= 4'b0011;          // X == 0, Y == 0, pin 0 low, not OSR empty
                 prev_gpio <= 16'd0;
                 clkdiv <= 16'd1;   frac <= 8'd0;   strobe_r <= 1'b1;
             end else begin
                 cond <= cond_cfg;
-                cond_prev <= cond_rst;
                 prev_gpio <= gpio_in;
                 clkdiv <= clkdiv_cfg;   frac <= frac_cfg;
                 strobe_r <= clkdiv_cfg <= 16'd1;
@@ -701,6 +687,7 @@ module openpio_sm (
                 {delaying, stalled, retry, tmo_flag} <= {delaying_d, stalled_d, retry_d, tmo_flag_d};
                 {dlymul, tmo_val, cond} <= {dlymul_d, tmo_val_d, cond_d};
                 cond_prev <= cond_seen;
+                fresh <= 1'b0;
                 prev_gpio <= gpio_in;
                 time_r <= time_r + 16'd1;
             end
@@ -708,7 +695,7 @@ module openpio_sm (
             if (run) begin
                 div_cnt <= div_on ? cnt_n : div_cnt;
                 div_acc <= div_on ? acc_n : div_acc;
-                div_per <= div_on ? per_n : div_per;
+                div_carry <= div_on ? carry : div_carry;
                 strobe_r <= strobe_n;
             end
             if (hw & stopped) begin
