@@ -4,7 +4,9 @@ and the sample count; the samples are the 14 input pins, every 2 strobes without
 (each one the pins of the same clock offset). Triggers: a pin rising, a pin falling (an
 inverted condition, pin 12 on ui_in), an IRQ flag the host sets, the other SM's IRQ flag (a
 capture started by the UART receiver's framing error). Edge timestamps (IN TIME): every edge
-of a random waveform, the intervals exact at CLKDIV 1 and within a strobe at CLKDIV 3."""
+of a random waveform, the intervals exact at CLKDIV 1 and within a strobe at CLKDIV 3. A
+recording of all pins (SM status: a pin changed): every change of a random waveform on the 13
+input pins, with the exact time between changes."""
 import random
 import sys
 import unittest
@@ -121,6 +123,30 @@ class EdgeTimes(unittest.TestCase):
         clocks, strobes = self.run_edges(3, 7)
         self.assertTrue(all(abs(3 * s - c) < 3 for s, c in zip(strobes, clocks)), "within a strobe")
         self.assertLess(abs(3 * sum(strobes) - sum(clocks)), 3, "no drift")
+
+
+class Record(unittest.TestCase):
+
+    def test_every_change_of_every_pin(self):
+        rnd = random.Random(10)
+        changes, t, v = [], 40, 0
+        for _ in range(80):
+            t += rnd.randrange(3, 30)                    # 3 strobes apart at least (CLKDIV 1)
+            v = (v ^ rnd.getrandbits(16)) & PADS_IN or 1
+            changes.append((t, v))
+        bench = Bench()
+        bench.load(0, (HERE / "record.asm").read_text())
+        bench.add(Script([(0, {p: 0 for p in range(16) if PADS_IN >> p & 1})] +
+                         [(c, {p: v >> p & 1 for p in range(16) if PADS_IN >> p & 1}) for c, v in changes]))
+        bench.run(4)                                     # the synchronizer settles
+        bench.start(1)
+        bench.run(t + 40)
+        first, *rest = bench.received[0]
+        times, pins = rest[0::2], rest[1::2]
+        self.assertEqual(first, 0)
+        self.assertEqual(pins, [v for _, v in changes])
+        self.assertEqual([(b - a) & 0xFFFF for a, b in zip(times, times[1:])],
+                         [b - a for (a, _), (b, _) in zip(changes, changes[1:])])
 
 
 if __name__ == "__main__":

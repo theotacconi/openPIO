@@ -226,7 +226,7 @@ The condition is the selected signal, inverted when `Inv` = 1.
 | 5 | ISR full (`isr_count >= push threshold`) | CRC == 0 | |
 | 6 | TX FIFO empty | stuff error (sticky) | FIFOs; RX errors |
 | 7 | RX FIFO full | RX overrun (sticky) | |
-| 8 | 0 | SE0: pins `in_base`, `in_base + 1` both low | line states |
+| 8 | a pin changed: `gpio_in` differs from the previous strobe's | SE0: pins `in_base`, `in_base + 1` both low | pins; line states |
 | 9 | 0 | SE1: both high | |
 | 10 | 0 | bit error (sticky): a monitored TX bit read back different | |
 | 11..15 | 0 | 0 | |
@@ -518,6 +518,7 @@ Found designing the RTL, or by the principles above:
 - A host access takes one clock, in parallel with the SMs (the model first applied it between
   clocks). WAIT edges compare the values two strobes see (the model first kept them after the
   instruction).
-- IN source `001` is TIME, OUT destination `101` PAU_BAUD (v2 first: reserved).
+- IN source `001` is TIME, OUT destination `101` PAU_BAUD (v2 first: reserved). SM status 8:
+  a pin changed since the previous strobe (a recording of every pin).
 - STUFF_MODE `01` (a 1 after LEN 0s) removed: no protocol uses it (AGENT.md, the PAU rule).
 - Every FIFO word passes the SRAM: no bypasses (they served SM-to-SM traffic).

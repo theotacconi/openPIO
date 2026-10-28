@@ -47,6 +47,20 @@ class Capture:
             edges.append(round(t * clocks_per_strobe))
         return Capture(level & 1, edges)
 
+    @staticmethod
+    def from_record_program(words: list[int], pin: int, clocks_per_strobe: float = 1) -> "Capture":
+        """Pin `pin` from the RX words of programs/logic/record.asm: the pins first, then
+        (16-bit strobe time, pins) at every change of any pin."""
+        level, edges, t, prev = words[0] >> pin & 1, [], 0, None
+        cur = level
+        for time, pins in zip(words[1::2], words[2::2]):
+            t += (time - prev) & 0xFFFF if prev is not None else 0
+            prev = time
+            if (pins >> pin & 1) != cur:
+                cur ^= 1
+                edges.append(round(t * clocks_per_strobe))
+        return Capture(level, edges)
+
     def widths(self) -> list[int]:
         """Clocks between consecutive edges."""
         return [b - a for a, b in zip(self.edges, self.edges[1:])]

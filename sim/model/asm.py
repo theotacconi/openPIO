@@ -82,7 +82,7 @@ COND_SRC = {"gpio": CS_GPIO, "pin": CS_GPIO, "in_base": CS_INBASE, "base": CS_IN
             "x": CS_XBIT, "y": CS_YBIT, "status": CS_STATUS, "pau": CS_PAU}
 REV_COND_SRC = ["gpio", "in_base", "irq", "peer_irq", "x", "y", "status", "pau"]
 STATUS_NAMES = {"x_zero": 0, "y_zero": 1, "x_eq_y": 2, "timeout": 3,
-                "osr_empty": 4, "isr_full": 5, "tx_empty": 6, "rx_full": 7}
+                "osr_empty": 4, "isr_full": 5, "tx_empty": 6, "rx_full": 7, "pins_changed": 8}
 PAU_STATUS_NAMES = {"tx_idle": 0, "rx_idle": 1, "tx_ready": 2, "rx_ready": 3,
                     "crc_ok": 4, "crc_zero": 5, "stuff_err": 6, "overrun": 7, "se0": 8, "se1": 9,
                     "bit_err": 10}
