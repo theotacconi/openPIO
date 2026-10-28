@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """UART transmitter and receiver judged by the reference UART devices: random bytes back to
 back; TX at integer and fractional dividers (bit edges on time), RX with a transmitter 3 % fast
-or slow and with framing errors."""
+or slow and with framing errors. Full duplex on one SM through the PAU: both directions at
+once, bit edges on time, a framing error."""
 import random
 import sys
 import unittest
@@ -70,6 +71,34 @@ class UartRxTest(unittest.TestCase):
         bench, got = self.run_rx(1, data, gap=1, stop_low={1})
         self.assertEqual(got, [0x11, 0x33, 0x44], "the frame with a low stop bit is dropped")
         self.assertTrue(bench.chip.sms[0].irq_flags[0])
+
+
+class UartDuplexTest(unittest.TestCase):
+
+    def run_duplex(self, out, into, stop_low=frozenset()):
+        bench = Bench(pullups=0b11)
+        bench.load(0, (HERE / "uart_duplex.asm").read_text(), clkdiv_int=2)   # 16 clocks a bit
+        rx = bench.add(UartRx(0, 16))
+        tx = bench.add(UartTx(1, 16, into, start=50, stop_low=stop_low))
+        bench.send(0, out)
+        bench.start(1)
+        bench.run(max(tx.end, 16 * 11 * len(out)) + 400)
+        return bench, rx
+
+    def test_both_directions_at_once(self):
+        rnd = random.Random(11)
+        out, into = [rnd.randrange(256) for _ in range(40)], [rnd.randrange(256) for _ in range(40)]
+        bench, rx = self.run_duplex(out, into)
+        self.assertEqual(rx.frames, out)
+        self.assertEqual(rx.skew, 0, "every TX edge on the bit grid")
+        self.assertEqual([w >> 8 for w in bench.received[0]], into)
+        self.assertEqual(bench.errors(), [])
+        self.assertFalse(bench.chip.sms[0].irq_flags[0])
+
+    def test_framing_error(self):
+        bench, rx = self.run_duplex([0x55], [0x11, 0x22, 0x33], stop_low={1})
+        self.assertTrue(bench.chip.sms[0].irq_flags[0])
+        self.assertEqual(rx.frames, [0x55])
 
 
 if __name__ == "__main__":
