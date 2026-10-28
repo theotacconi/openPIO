@@ -71,6 +71,7 @@ the header. Chip registers (`Addr` >= 0x20) ignore `SM`.
 | 0x1F | TIME | R | IN TIME: strobes since RESET, 16 bits |
 
 RW*: written only while the SM is stopped (CTRL EN = 0); writes while it runs are ignored.
+Bits outside the fields above read 0 (PAU_MODE bit 8 too: STUFF_MODE ignores it).
 
 ## Chip registers (`Addr` 0x20..0x3F, any `SM`)
 

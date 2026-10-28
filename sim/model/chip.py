@@ -25,10 +25,51 @@ CTRL, GPIO, PINS, PINS_OE, PINS_IN, IRQ_SUM, ID, PADS_OUT, PADS_IN, PADS_BIDIR =
 OP_NOP, OP_REG_WR, OP_REG_RD, OP_TX_PUSH, OP_RX_POP, OP_IMEM_WR, OP_IMEM_RD = 0, 2, 3, 4, 5, 6, 7
 
 ISA_VERSION = 2
+PAU_MODE_BITS, CRC_CFG_BITS = 0x7EFF, 0x7F     # the defined fields; bit 8 of PAU_MODE is ignored
 
 # Pads of the 16 pin positions (HOST.md, Pins), Tiny Tapeout chip: pin k = uio[k] (k < 8), pin 8 + k
 # = uo_out[k] out, ui_in[k] in; uo_out[1:0] and ui_in[2:0] belong to the host.
 TT_PADS = (0xFCFF, 0xF8FF, 0x00FF)      # pins with an output pad, with an input pad, bidirectional
+
+
+def sm_register(sm: StateMachine, addr: int, irq_mask: int) -> int:
+    """Register `addr` (0x01..0x1F, HOST.md) of an SM; reserved ones and COND_CFG read 0."""
+    c = sm.cond_cfg
+    regs = {
+        WRAP: lambda: sm.wrap_top << 8 | sm.wrap_bottom,
+        SIDESET: lambda: (sm.sideset_base << 8 | sm.side_set_pindirs << 4 | sm.side_set_opt << 3
+                          | sm.side_set_count),
+        PINBASE: lambda: sm.set_count << 12 | sm.set_base << 8 | sm.out_base << 4 | sm.in_base,
+        PIN_MASK: lambda: sm.pin_mask,
+        MISC: lambda: (sm.pull_thresh << 12 | sm.push_thresh << 8 | sm.shift_out_right << 1
+                       | sm.shift_in_right),
+        CLKDIV: lambda: sm.clkdiv_cfg_int,
+        CLKDIV_FRAC: lambda: sm.clkdiv_cfg_frac,
+        COND_CFG01: lambda: c[1] << 8 | c[0],
+        COND_CFG23: lambda: c[3] << 8 | c[2],
+        PAU_MODE: lambda: sm.pau_mode,
+        CRC_CFG: lambda: sm.crc_cfg,
+        CRC_POLY_LO: lambda: sm.crc_poly & 0xFFFF,
+        CRC_POLY_HI: lambda: sm.crc_poly >> 16,
+        CRC_RES_LO: lambda: sm.crc_res & 0xFFFF,
+        CRC_RES_HI: lambda: sm.crc_res >> 16,
+        IRQ: lambda: sum(int(f) << i for i, f in enumerate(sm.irq_flags)),
+        PC: lambda: sm.pc,
+        X: lambda: sm.x,
+        Y: lambda: sm.y,
+        ISR: lambda: sm.isr,
+        OSR: lambda: sm.osr,
+        COUNTS: lambda: sm.osr_count << 8 | sm.isr_count,
+        COND01: lambda: sm.cond[1] << 8 | sm.cond[0],
+        COND23: lambda: sm.cond[3] << 8 | sm.cond[2],
+        CRC_LO: lambda: sm.crc & 0xFFFF,
+        CRC_HI: lambda: sm.crc >> 16,
+        SM_STATUS: lambda: sm.status_word(),
+        FIFO_LEVEL: lambda: sm.rx_level << 8 | sm.tx_level,
+        IRQ_MASK: lambda: irq_mask,
+        TIME: lambda: sm.time,
+    }
+    return regs[addr]() & 0xFFFF if addr in regs else 0
 
 
 def header(op: int, sm: int = 0, addr: int = 0) -> int:
@@ -121,43 +162,9 @@ class Chip:
         if addr >= 0x20:
             return self._chip_read(addr)
         sm = self.sms[n]
-        c = sm.cond_cfg
-        regs = {
-            STATUS: lambda: self._sm_status_reg(sm),
-            WRAP: lambda: sm.wrap_top << 8 | sm.wrap_bottom,
-            SIDESET: lambda: (sm.sideset_base << 8 | sm.side_set_pindirs << 4 | sm.side_set_opt << 3
-                              | sm.side_set_count),
-            PINBASE: lambda: sm.set_count << 12 | sm.set_base << 8 | sm.out_base << 4 | sm.in_base,
-            PIN_MASK: lambda: sm.pin_mask,
-            MISC: lambda: (sm.pull_thresh << 12 | sm.push_thresh << 8 | sm.shift_out_right << 1
-                           | sm.shift_in_right),
-            CLKDIV: lambda: sm.clkdiv_cfg_int,
-            CLKDIV_FRAC: lambda: sm.clkdiv_cfg_frac,
-            COND_CFG01: lambda: c[1] << 8 | c[0],
-            COND_CFG23: lambda: c[3] << 8 | c[2],
-            PAU_MODE: lambda: sm.pau_mode,
-            CRC_CFG: lambda: sm.crc_cfg,
-            CRC_POLY_LO: lambda: sm.crc_poly & 0xFFFF,
-            CRC_POLY_HI: lambda: sm.crc_poly >> 16,
-            CRC_RES_LO: lambda: sm.crc_res & 0xFFFF,
-            CRC_RES_HI: lambda: sm.crc_res >> 16,
-            IRQ: lambda: sum(int(f) << i for i, f in enumerate(sm.irq_flags)),
-            PC: lambda: sm.pc,
-            X: lambda: sm.x,
-            Y: lambda: sm.y,
-            ISR: lambda: sm.isr,
-            OSR: lambda: sm.osr,
-            COUNTS: lambda: sm.osr_count << 8 | sm.isr_count,
-            COND01: lambda: sm.cond[1] << 8 | sm.cond[0],
-            COND23: lambda: sm.cond[3] << 8 | sm.cond[2],
-            CRC_LO: lambda: sm.crc & 0xFFFF,
-            CRC_HI: lambda: sm.crc >> 16,
-            SM_STATUS: lambda: sm.status_word(),
-            FIFO_LEVEL: lambda: sm.rx_level << 8 | sm.tx_level,
-            IRQ_MASK: lambda: self.irq_mask[n],
-            TIME: lambda: sm.time,
-        }
-        return regs[addr]() & 0xFFFF if addr in regs else 0
+        if addr == STATUS:
+            return self._sm_status_reg(sm)
+        return sm_register(sm, addr, self.irq_mask[n])
 
     def reg_write(self, n: int, addr: int, val: int) -> None:
         val &= 0xFFFF
@@ -185,9 +192,9 @@ class Chip:
         elif addr == COND_CFG:
             sm.cond_cfg[val >> 8 & 3] = val & 0xFF
         elif addr == PAU_MODE:
-            sm.pau_mode = val
+            sm.pau_mode = val & PAU_MODE_BITS
         elif addr == CRC_CFG:
-            sm.crc_cfg = val
+            sm.crc_cfg = val & CRC_CFG_BITS
         elif addr == CRC_POLY_LO:
             sm.crc_poly = sm.crc_poly & 0xFFFF0000 | val
         elif addr == CRC_POLY_HI:
