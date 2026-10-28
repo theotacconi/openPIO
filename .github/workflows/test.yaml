@@ -1,5 +1,6 @@
-# cocotb tests (test/test.py) on the RTL: a few minutes, on every push that can change
-# their result. The same tests run on the hardened netlist in gds.yaml (gl_test job).
+# cocotb tests (test/test.py) on the RTL, and the RTL against the model in lockstep
+# (test/lockstep/): minutes, on every push that can change their result. The cocotb tests also
+# run on the hardened netlist in gds.yaml (gl_test job).
 name: test
 
 on:
@@ -56,3 +57,32 @@ jobs:
           path: |
             test/tb.fst
             test/results.xml
+
+  lockstep:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: checkout repo
+        uses: actions/checkout@v6
+
+      - name: Setup python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install Verilator and Yosys
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y verilator g++ make
+          pip install yowasp-yosys
+
+      - name: One SM against emu.py (netlist)
+        run: cd test/lockstep && python3 sm_fuzz.py --programs 30 --cycles 300
+
+      - name: Chip core against chip.py (Verilator)
+        run: cd test/lockstep && python3 chip_lockstep.py --runs 40 --cycles 5000
+
+      - name: Every program test in lockstep
+        run: cd test/lockstep && python3 programs.py
+
+      - name: Tiny Tapeout top through its pins
+        run: cd test/lockstep && python3 top_lockstep.py --runs 10 --cycles 20000

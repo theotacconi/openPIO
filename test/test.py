@@ -1,15 +1,16 @@
-"""cocotb tests of the whole chip, through its pins only.
+"""cocotb tests of the whole chip, through its pins only (HOST.md), so the same tests run on the
+RTL and on the hardened gate-level netlist (make GATES=yes).
 
-The test plays the host microcontroller: it talks to the chip over the SPI
-slave on ui_in[2:0] (protocol in src/spi_cfg_interface.v) and drives / watches
-the PIO pins uio[7:0]. Only top-level pins are used, so the same tests run on
-the RTL and on the hardened gate-level netlist (make GATES=yes).
+The test is the host microcontroller: SPI on ui_in[2:0] / uo_out[0] at SCLK = clk / 6, the
+transactions sim/model/host.py makes to load a program (recorded, then played on the pins),
+and the reference devices of test/shared/devices.py on the PIO pins. test/lockstep/ checks the
+same RTL against the model clock by clock; these tests check the chip as a host and a board
+see it.
 
-    test_registers      reset values and write/read-back of the config registers
-    test_fifo_echo      TX FIFO -> SM -> RX FIFO: order, full flags, dropped push
-    test_uart_rx        serial bytes on uio[0] -> agents/uart program -> RX FIFO, IRQ pin
-    test_usb_vs_emu     agents/usb_ls (PAU NRZI + bit-stuffing) pins, clock by clock vs emu.py
-    test_nrzi16_vs_emu  same, 16 bits per OUT
+    test_id_and_registers   ID, reset values, write and read back, the header's MISO
+    test_fifo_echo          TX FIFO -> SM -> RX FIFO through the SRAM rings, RX_POP's count
+    test_uart_tx            programs/uart/uart_tx.asm judged by the reference UART receiver
+    test_uart_rx            programs/uart/uart_rx.asm fed by the reference UART transmitter
 """
 import random
 import sys
@@ -17,223 +18,178 @@ from pathlib import Path
 
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import ClockCycles
+from cocotb.triggers import ClockCycles, RisingEdge
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "sim" / "model"))
-from asm import assemble          # noqa: E402  golden assembler
-from emu import StateMachine      # noqa: E402  golden model
+sys.path[:0] = [str(ROOT / "sim" / "model"), str(ROOT / "test" / "shared")]
+from asm import assemble                                       # noqa: E402
+from chip import (CTRL, ID, OP_REG_RD, OP_REG_WR, OP_RX_POP, OP_TX_PUSH, PADS_BIDIR,  # noqa: E402
+                  PC, STATUS, WRAP, Chip, header, sm_register)
+from devices import UartRx, UartTx                             # noqa: E402
+from host import Host                                          # noqa: E402
 
-# SPI ops: cmd = {op[2:0], addr[4:0]}, then 16 data bits
-OP_IMEM_WR, OP_REG_WR, OP_REG_RD, OP_TX_PUSH, OP_RX_POP, OP_IRQ = 1, 2, 3, 4, 5, 6
-CTRL, WRAP, SIDESET, PINBASE, MISC, CLKDIV, GPIO, STATUS = 0, 1, 2, 3, 4, 5, 6, 8
-EN, RESET = 0b01, 0b10                       # CTRL bits
-TX_EMPTY, TX_FULL, RX_EMPTY, RX_FULL = 1, 2, 4, 8   # STATUS bits
-# Writable bits and reset value of registers 0..6
-REG_MASK = {0: 0x0003, 1: 0x1F1F, 2: 0x071F, 3: 0x7777, 4: 0x0037, 5: 0xFF1F, 6: 0xF8FF}
-REG_RESET = {0: 0x0000, 1: 0x1F00, 2: 0x0000, 3: 0x5000, 4: 0x0030, 5: 0x0001, 6: 0x0000}
-
-HALF = 6          # SCK half period in clk cycles: the chip needs >= 6 (f_SCK <= f_clk / 12)
+HALF = 3                    # clocks of each SCLK phase: SCLK = clk / 6, HOST.md's limit
 
 
-# --------------------------------------------------------------------------- host side
+class Recorder:
+    """A Chip for host.Host that records its SPI transactions (to play them on the pins) and
+    answers its reads as a stopped chip after reset would."""
 
-async def start(dut):
-    """Start the 50 MHz clock and reset the chip; SPI idle (CS_N high), PIO pins low."""
-    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
-    dut.ena.value = 1
-    dut.ui_in.value = 0b100
-    dut.uio_in.value = 0
-    dut.rst_n.value = 0
-    await ClockCycles(dut.clk, 10)
-    dut.rst_n.value = 1
-    await ClockCycles(dut.clk, 2)
+    def __init__(self) -> None:
+        self.transactions: list[tuple[int, list[int]]] = []
 
-
-async def spi(dut, op, addr=0, data=0):
-    """One 24-bit SPI frame (mode 0, MSB first); returns the 16-bit answer from MISO."""
-    word = (op << 21) | (addr << 16) | data
-    dut.ui_in.value = 0b000                        # CS_N low
-    await ClockCycles(dut.clk, HALF)
-    answer = 0
-    for i in range(23, -1, -1):
-        mosi = (word >> i) & 1
-        dut.ui_in.value = mosi << 1                # SCK low, MOSI = next bit
-        await ClockCycles(dut.clk, HALF)
-        answer = (answer << 1) | int(dut.uo_out.value[0])   # MISO, read before SCK rises
-        dut.ui_in.value = (mosi << 1) | 1          # SCK high: the chip samples MOSI
-        await ClockCycles(dut.clk, HALF)
-    dut.ui_in.value = 0b000
-    await ClockCycles(dut.clk, HALF)
-    dut.ui_in.value = 0b100                        # CS_N high: end of frame
-    await ClockCycles(dut.clk, HALF)
-    return answer & 0xFFFF                         # bits during the command byte are 0
+    def spi(self, hdr: int, words=()) -> list[int]:
+        self.transactions.append((hdr, list(words)))
+        op, addr = hdr >> 13, hdr & 0x3F
+        if op == OP_REG_RD:
+            return [0] + [{PADS_BIDIR: 0x00FF}.get(addr + k, 0) for k in range(len(words))]
+        return [0] * (len(words) + 1)
 
 
-async def load(dut, sm, gpio=0):
-    """Program IMEM and the config registers from an emu.py StateMachine, then RESET.
-    Leaves the SM stopped (EN = 0)."""
-    for addr, word in enumerate(sm.memory):
-        await spi(dut, OP_IMEM_WR, addr, word)
-    await spi(dut, OP_REG_WR, WRAP, sm.wrap_top << 8 | sm.wrap_bottom)
-    await spi(dut, OP_REG_WR, SIDESET, sm.sideset_base << 8 | sm.side_set_pindirs << 4
-              | sm.side_set_opt << 3 | sm.side_set_count)
-    await spi(dut, OP_REG_WR, PINBASE, sm.set_count << 12 | sm.set_base << 8
-              | sm.out_base << 4 | sm.in_base)
-    await spi(dut, OP_REG_WR, MISC, sm.shift_out_right << 5 | sm.shift_in_right << 4 | sm.jmp_pin)
-    await spi(dut, OP_REG_WR, CLKDIV, sm.clkdiv_frac << 8 | sm.clkdiv_int)
-    await spi(dut, OP_REG_WR, GPIO, gpio)
-    await spi(dut, OP_REG_WR, CTRL, RESET)         # RESET: SM to PC 0, FIFOs emptied
-    await spi(dut, OP_REG_WR, CTRL, 0)
+class Board:
+    """The chip's pins: the SPI host on ui_in, devices on the 16 pin positions."""
 
+    def __init__(self, dut) -> None:
+        self.dut = dut
+        self.devices = []
+        self.pullups = 0
+        self.t = 0
+        self.spi_pins = 0b100                       # CS_N high
 
-def agent(name, **kw):
-    """emu.py StateMachine loaded with agents/<name>/<name>.asm."""
-    return StateMachine(assemble((ROOT / "agents" / name / f"{name}.asm").read_text()), **kw)
+    async def start(self) -> None:
+        dut = self.dut
+        cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())
+        dut.ena.value = 1
+        dut.ui_in.value = self.spi_pins
+        dut.uio_in.value = 0
+        dut.rst_n.value = 0
+        await ClockCycles(dut.clk, 10)
+        dut.rst_n.value = 1
+        cocotb.start_soon(self._pins())
 
+    async def _pins(self) -> None:
+        """Every clock: resolve pins 0..7 (chip, devices, pull-ups), let the devices see them."""
+        dut = self.dut
+        while True:
+            await RisingEdge(dut.clk)
+            out, oe = int(dut.uio_out.value), int(dut.uio_oe.value)
+            low = high = 0
+            for d in self.devices:
+                for pin, lv in d.drive.items():
+                    if lv:
+                        high |= 1 << pin
+                    else:
+                        low |= 1 << pin
+            low |= oe & ~out
+            high |= oe & out
+            levels = ~low & (high | self.pullups) & 0xFF
+            for d in self.devices:
+                d.tick(self.t, levels)
+            dut.uio_in.value = levels
+            dut.ui_in.value = self.spi_pins
+            self.t += 1
 
-# --------------------------------------------------------------------------- tests
+    async def spi(self, hdr: int, words=()) -> list[int]:
+        """One transaction, mode 0, MSB first: the MISO words (header first)."""
+        miso = []
+        self.spi_pins = 0b000                       # CS_N low
+        await ClockCycles(self.dut.clk, HALF)
+        for word in [hdr, *words]:
+            got = 0
+            for bit in range(15, -1, -1):
+                mosi = word >> bit & 1
+                self.spi_pins = mosi << 1
+                await ClockCycles(self.dut.clk, HALF)
+                got = got << 1 | int(self.dut.uo_out.value) & 1
+                self.spi_pins = mosi << 1 | 1       # SCLK rises: both sides sample
+                await ClockCycles(self.dut.clk, HALF)
+            miso.append(got)
+        self.spi_pins = 0b100
+        await ClockCycles(self.dut.clk, 2 * HALF)
+        return miso
+
+    async def read(self, sm: int, addr: int, count: int = 1) -> list[int]:
+        return (await self.spi(header(OP_REG_RD, sm, addr), [0] * count))[1:]
+
+    async def write(self, sm: int, addr: int, *words: int) -> None:
+        await self.spi(header(OP_REG_WR, sm, addr), words)
+
+    async def load(self, sm: int, source: str, **cfg) -> None:
+        """What host.Host.load does: IMEM, registers, RESET, PC / X / Y; the SM stays stopped."""
+        rec = Recorder()
+        Host(rec).load(sm, assemble(source), **cfg)
+        for hdr, words in rec.transactions:
+            await self.spi(hdr, words)
+
 
 @cocotb.test()
-async def test_registers(dut):
-    """Reset values, then random values written and read back (only writable bits stick)."""
-    await start(dut)
-    expect = dict(REG_RESET)
-    expect[STATUS] = TX_EMPTY | RX_EMPTY           # SM stopped at PC 0, FIFOs empty
-    for addr in range(16):                         # 7, 9..15: 0 after reset
-        got = await spi(dut, OP_REG_RD, addr)
-        assert got == expect.get(addr, 0), f"reg {addr} after reset: {got:#06x}"
-
-    rng = random.Random(1)
-    for _ in range(2):
-        for addr in range(1, 7):                   # not CTRL: that would start the SM
-            val = rng.randrange(1 << 16)
-            await spi(dut, OP_REG_WR, addr, val)
-            got = await spi(dut, OP_REG_RD, addr)
-            assert got == val & REG_MASK[addr], f"reg {addr}: wrote {val:#06x}, read {got:#06x}"
+async def test_id_and_registers(dut):
+    board = Board(dut)
+    await board.start()
+    assert await board.read(0, ID) == [0x2250], "ISA v2, 2 SMs, 'P'"
+    model = Chip(2)
+    for sm in range(2):
+        got = await board.read(sm, 1, 31)                     # registers 0x01..0x1F
+        want = [sm_register(model.sms[sm], a, 0xFF) for a in range(1, 32)]
+        assert got == want, f"SM {sm} after reset: {[hex(v) for v in got]}"
+    await board.write(1, WRAP, 0x2A05, 0x0F1B)                 # WRAP, SIDESET
+    assert await board.read(1, WRAP, 2) == [0x2A05, 0x0F1B]
+    assert await board.read(0, WRAP) == [0x3F00], "SM 0 untouched"
+    await board.write(0, CTRL, 0b10)                           # SM 1 runs: STATUS bit 5
+    # the header's MISO is the STATUS of the previous transaction's SM
+    assert (await board.spi(header(OP_REG_RD, 1, PC), [0]))[0] >> 5 & 1 == 0, "SM 0's"
+    assert (await board.spi(header(OP_REG_RD, 1, STATUS), [0]))[0] >> 5 & 1 == 1, "SM 1's"
 
 
 @cocotb.test()
 async def test_fifo_echo(dut):
-    """The SM copies every TX word to RX: words come back in order, the 5th push
-    into a full TX FIFO is dropped, status flags follow."""
-    await start(dut)
-    await load(dut, StateMachine(assemble("""
-    .wrap_target
-        pull block
-        mov isr, osr
-        push block
-    .wrap
-    """)))
-    words = [0x1234, 0xABCD, 0x0000, 0xFFFF]
-    for w in words:                                # SM stopped: TX fills up
-        await spi(dut, OP_TX_PUSH, data=w)
-    await spi(dut, OP_TX_PUSH, data=0xDEAD)        # TX full: dropped
-    status = await spi(dut, OP_REG_RD, STATUS)
-    assert status & 0xF == TX_FULL | RX_EMPTY, f"status with TX full: {status:#06x}"
+    """150 words through an echo program: both 128-word SRAM rings fill; RX_POP of a count."""
+    board = Board(dut)
+    await board.start()
+    await board.load(0, "loop:\npull block\nmov isr, osr\npush block\njmp loop")
+    await board.write(0, CTRL, 0b01)
+    words = [random.Random(1).randrange(1 << 16) for _ in range(150)]
+    for k in range(0, len(words), 30):
+        await board.spi(header(OP_TX_PUSH, 0), words[k:k + 30])
+    got = []
+    while len(got) < len(words):
+        k = min(64, len(words) - len(got))
+        got += (await board.spi(header(OP_RX_POP, 0, k & 63), [0] * k))[1:]
+    assert got == words
+    await board.spi(header(OP_TX_PUSH, 0), [0xBEEF, 0xCAFE])
+    await ClockCycles(dut.clk, 50)
+    assert (await board.spi(header(OP_RX_POP, 0, 1), [0, 0, 0]))[1:] == [0xBEEF, 0, 0], \
+        "one pop: the words beyond it read 0"
+    assert (await board.spi(header(OP_RX_POP, 0, 1), [0]))[1:] == [0xCAFE], "none lost"
 
-    await spi(dut, OP_REG_WR, CTRL, EN)
-    await ClockCycles(dut.clk, 50)                 # 4 words x 3 instructions
-    status = await spi(dut, OP_REG_RD, STATUS)
-    assert status & 0xF == TX_EMPTY | RX_FULL, f"status after echo: {status:#06x}"
-    got = [await spi(dut, OP_RX_POP) for _ in words]
-    assert got == words, f"echo: sent {[hex(w) for w in words]}, got {[hex(w) for w in got]}"
-    assert await spi(dut, OP_RX_POP) == 0, "pop from empty RX must answer 0"
+
+@cocotb.test()
+async def test_uart_tx(dut):
+    board = Board(dut)
+    board.pullups = 1
+    await board.start()
+    rx = UartRx(0, 24)                                         # CLKDIV 3, 8 strobes a bit
+    board.devices.append(rx)
+    await board.load(0, (ROOT / "programs/uart/uart_tx.asm").read_text(), clkdiv_int=3)
+    data = [random.Random(2).randrange(256) for _ in range(12)]
+    await board.spi(header(OP_TX_PUSH, 0), data)
+    await board.write(0, CTRL, 0b01)
+    await ClockCycles(dut.clk, 24 * 10 * (len(data) + 2))
+    assert rx.frames == data, rx.frames
+    assert rx.errors == []
 
 
 @cocotb.test()
 async def test_uart_rx(dut):
-    """UART receiver program (8 clk per bit, pin uio[0]): bytes sent back to back land
-    in RX, a frame with a low stop bit raises IRQ 0 instead (HOST_IRQ = uo_out[1])."""
-    await start(dut)
-    await load(dut, agent("uart", in_base=0, jmp_pin=0))
-    dut.uio_in.value = 1                           # line idle high
-    await spi(dut, OP_REG_WR, CTRL, EN)
-
-    async def send(data, stop=1):
-        # 8N1 frames with no gap: start bit, 8 data bits LSB first, 1 stop bit;
-        # the next start bit follows the stop bit. Then the line idles high.
-        for byte in data:
-            for bit in [0] + [(byte >> i) & 1 for i in range(8)] + [stop]:
-                dut.uio_in.value = bit
-                await ClockCycles(dut.clk, 8)
-        dut.uio_in.value = 1
-        await ClockCycles(dut.clk, 16)
-
-    data = [0xA5, 0x00, 0xFF, 0x3C]
-    await send(data)
-    got = [await spi(dut, OP_RX_POP) >> 8 for _ in data]   # in shift right: byte in [15:8]
-    assert got == data, f"UART RX: sent {[hex(b) for b in data]}, got {[hex(b) for b in got]}"
-
-    assert int(dut.uo_out.value[1]) == 0, "IRQ pin high before any framing error"
-    await send([0x55], stop=0)
-    await ClockCycles(dut.clk, 8)
-    assert int(dut.uo_out.value[1]) == 1, "framing error did not raise the IRQ pin"
-    assert await spi(dut, OP_IRQ, data=0x0001) & 0xFF == 0x01, "IRQ flags: only IRQ 0 expected"
-    assert int(dut.uo_out.value[1]) == 0, "IRQ 0 not cleared by the IRQ command"
-    assert await spi(dut, OP_REG_RD, STATUS) & RX_EMPTY, "bad frame must not reach RX"
-
-
-async def pins_vs_emu(dut, sm, words, clocks):
-    """Load sm's program, push words into the TX FIFO, start the SM: the pins
-    (uio_out, uio_oe) must equal emu.py on every clock from the SM start."""
-    await load(dut, sm)
-    for w in words:                                # at most 4: the TX FIFO depth
-        await spi(dut, OP_TX_PUSH, data=w)
-        sm.tx_fifo.append(w)
-
-    # The SM starts inside the EN frame, so recording starts before it
-    chip = []
-    async def record():                            # runs in parallel, one sample per clock
-        while True:
-            chip.append((int(dut.uio_out.value), int(dut.uio_oe.value)))
-            await ClockCycles(dut.clk, 1)
-    recorder = cocotb.start_soon(record())
-    await spi(dut, OP_REG_WR, CTRL, EN)
-    await ClockCycles(dut.clk, clocks)
-    recorder.cancel()
-    model = [(sm.gpio_out, sm.pindirs)]            # pins before the first step
-    for _ in range(clocks - 20):
-        sm.step()
-        model.append((sm.gpio_out, sm.pindirs))
-
-    # The chip trace starts with idle pins (= model[0]) while the EN frame is sent:
-    # find where the SM starts, then everything after must match exactly.
-    shifts = range(len(chip) - len(model) + 1)
-    if not any(chip[k:k + len(model)] == model for k in shifts):
-        k = max(shifts, key=lambda k: sum(a == b for a, b in zip(chip[k:], model)))
-        i = next(i for i, (a, b) in enumerate(zip(chip[k:], model)) if a != b)
-        assert False, f"pins differ from emu.py at SM step {i}: chip {chip[k + i]}, emu {model[i]}"
-    dut._log.info(f"pins match emu.py for {len(model)} clocks")
-
-
-@cocotb.test()
-async def test_usb_vs_emu(dut):
-    """agents/usb_ls packets on uio[1:0]: PAU NRZI encoding and bit-stuffing,
-    one bit per OUT (stuffing decided by the ones counter carried across OUTs)."""
-    await start(dut)
-    sm = agent("usb_ls", set_base=0, out_base=0)
-    # sync 0x80 + data byte; 0xFF and 0x7E need a stuffed bit
-    await pins_vs_emu(dut, sm, [0xFF80, 0xAA80, 0x0080, 0x7E80], 400)
-    assert sm.irq_flags[0] and int(dut.uo_out.value[1]) == 1, "packet-done IRQ 0"
-
-
-@cocotb.test()
-async def test_nrzi16_vs_emu(dut):
-    """NRZI + bit-stuffing over 16 bits per OUT. Only the line state after each
-    OUT reaches the pins, so the words make a misplaced stuffed bit change the
-    number of toggles (bits sent LSB first):
-      0xFFFF  16 ones: stuff after the 6th and 12th
-      0xFC3F  six 1s, four 0s, six 1s: stuff at the end of both runs
-      0x0F3E  0, five 1s, ...: five 1s must NOT stuff
-      0x7FFE  0, fourteen 1s, 0: stuff after the 6th and 12th"""
-    await start(dut)
-    sm = StateMachine(assemble("""
-        set pau_cfg, 3      ; NRZI + bit-stuffing
-        set pins, 1         ; line to J
-    .wrap_target
-        pull block
-        out pins, 16 [1]
-    .wrap
-    """), set_base=0, out_base=0)
-    await pins_vs_emu(dut, sm, [0xFFFF, 0xFC3F, 0x0F3E, 0x7FFE], 80)
+    board = Board(dut)
+    board.pullups = 1 << 3
+    await board.start()
+    await board.load(0, (ROOT / "programs/uart/uart_rx.asm").read_text(), clkdiv_int=4)
+    await board.write(0, CTRL, 0b01)
+    data = [random.Random(3).randrange(256) for _ in range(12)]
+    tx = UartTx(3, 32, data, start=board.t + 20)
+    board.devices.append(tx)
+    await ClockCycles(dut.clk, tx.end - board.t + 100)
+    got = (await board.spi(header(OP_RX_POP, 0, len(data)), [0] * len(data)))[1:]
+    assert [w >> 8 for w in got] == data
+    assert int(dut.uo_out.value) >> 1 & 1 == 0, "no framing error: HOST_IRQ low"
