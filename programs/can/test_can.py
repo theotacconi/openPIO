@@ -45,7 +45,7 @@ class CanTx(unittest.TestCase):
             bench.send(0, frame_words(*f))
             bench.run(2000, until=lambda: any(bench.chip.sms[0].irq_flags))
             irqs.append(bench.chip.reg_read(0, 0x10))
-            bench.chip.reg_write(0, 0x10, 0xFF)
+            bench.write(0, 0x10, 0xFF)
         self.assertEqual(bench.errors(), [])
         self.assertEqual([(f["id"], f["data"]) for f in listener.frames], frames)
         self.assertTrue(all(f["crc_ok"] for f in listener.frames))
@@ -83,7 +83,7 @@ class CanRx(unittest.TestCase):
         for _ in frames:
             bench.run(3000, until=lambda: any(bench.chip.sms[0].irq_flags))
             irqs.append(bench.chip.reg_read(0, 0x10))
-            bench.chip.reg_write(0, 0x10, 0xFF)
+            bench.write(0, 0x10, 0xFF)
         bench.run(200)
         self.assertEqual(bench.errors(), [])
         self.assertEqual(irqs, [1] * len(frames), "IRQ 0: CRC right")

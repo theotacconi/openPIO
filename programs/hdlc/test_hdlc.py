@@ -45,7 +45,7 @@ class Hdlc(unittest.TestCase):
         bench.send(0, [20] + list(range(20)))
         bench.start(1)
         bench.run(10 * 8 * BIT)                                    # the opening flag and ~8 bytes
-        bench.chip.reg_write(0, IRQ, 1 << 9)                       # the host sets IRQ 1
+        bench.write(0, IRQ, 1 << 9)                       # the host sets IRQ 1
         bench.run(40 * BIT, until=lambda: bench.chip.sms[0].irq_flags[0])
         self.assertTrue(bench.chip.sms[0].irq_flags[0])
         bench.load(0, (HERE / "hdlc_tx.asm").read_text())          # RESET, Y = the flag
