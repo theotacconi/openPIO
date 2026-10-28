@@ -100,26 +100,31 @@ class Bench:
 
     # ------------------------------------------------------------------ running
 
-    def _resolve(self, pin: int, drivers: list[int]) -> int:
-        if 0 in drivers and 1 in drivers:
-            self.contention.append(f"t={self.t}: pin {pin} driven 0 and 1")
-        return (0 if 0 in drivers else 1) if drivers else self.pullups >> pin & 1
+    def _resolve(self, low: int, high: int) -> int:
+        """Levels of the 16 pins driven low / high by these masks: any 0 wins (and both is
+        contention), an undriven pin has its pull-up."""
+        for pin in range(16) if low & high else ():
+            if low & high >> pin & 1:
+                self.contention.append(f"t={self.t}: pin {pin} driven 0 and 1")
+        return ~low & (high | self.pullups) & 0xFFFF
 
     def levels(self) -> tuple[int, int]:
         """(levels the devices see, levels at the chip's input pads) of the 16 pins, from the
         chip outputs and the device drives."""
         out, oe = self.chip.pins
-        seen = chip_in = 0
-        for pin in range(16):
-            dev = [d.drive[pin] for d in self.devices if pin in d.drive]
-            chip = [out >> pin & 1] if oe >> pin & 1 else []
-            if self.chip.pads_bidir >> pin & 1:
-                seen_bit = in_bit = self._resolve(pin, dev + chip)
-            else:
-                seen_bit, in_bit = self._resolve(pin, chip), self._resolve(pin, dev)
-            seen |= seen_bit << pin
-            chip_in |= in_bit << pin
-        return seen, chip_in
+        dev_low = dev_high = 0
+        for d in self.devices:
+            for pin, lv in d.drive.items():
+                if lv:
+                    dev_high |= 1 << pin
+                else:
+                    dev_low |= 1 << pin
+        chip_low, chip_high = oe & ~out, oe & out
+        bidir, split = self.chip.pads_bidir, ~self.chip.pads_bidir
+        one = self._resolve((dev_low | chip_low) & bidir, (dev_high | chip_high) & bidir) & bidir
+        seen = self._resolve(chip_low & split, chip_high & split) & split        # two wires
+        chip_in = self._resolve(dev_low & split, dev_high & split) & split
+        return one | seen, one | chip_in
 
     def run(self, cycles: int, until: Callable[[], bool] | None = None) -> int:
         """Run up to `cycles` clocks, stopping after the clock where until() is true."""

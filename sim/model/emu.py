@@ -2,7 +2,8 @@
 
 step() is one clock. On a strobe (every Nth clock, CLKDIV), in order: the PAU advances (TX line, RX
 sampling), then the SM delays, re-evaluates a stall, or executes the instruction at PC; at the
-end the condition values are kept for WAIT edges. Traces are concise fixed-width rows.
+end the condition values are kept for WAIT edges. Traces are concise fixed-width rows, one per
+strobe.
 """
 
 from __future__ import annotations
@@ -709,7 +710,6 @@ class StateMachine:
                 self._current_clkdiv_period = self.clkdiv_int + carry
             self.clkdiv_counter += 1
             if self.clkdiv_counter < self._current_clkdiv_period:
-                self.history.append(self._format_trace_row(trace_pc, self._current_instr_str))
                 return
             self.clkdiv_counter = 0
 
