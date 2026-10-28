@@ -103,7 +103,7 @@ JMP_PLAIN = {"": JC_ALWAYS, "always": JC_ALWAYS, "never": JC_NEVER,
 
 # PAU_MODE fields
 PAU_ENC = {"nrz": 0, "nrzi": 1, "manchester": 2, "bmc": 3, "biphase_mark": 3}
-STUFF_MODES = {"ones": 0, "zeros": 1, "equal": 2}
+STUFF_MODES = {"ones": 0, "equal": 2}
 
 
 def cond_byte(inv: int, src: int, idx: int) -> int:
@@ -421,7 +421,7 @@ def assemble(source_code: str) -> Program:
                 if "stuff" in kv:
                     n = _parse_int(kv["stuff"], line_num, raw_line)
                     if not 1 <= n <= 16 or kv.get("stuff_mode", "ones") not in STUFF_MODES:
-                        raise AssemblerError("stuff=1..16, stuff_mode=ones|zeros|equal", line_num, raw_line)
+                        raise AssemblerError("stuff=1..16, stuff_mode=ones|equal", line_num, raw_line)
                     mode |= (n & 0xF) << 4 | STUFF_MODES[kv.get("stuff_mode", "ones")] << 8
                 if "baud" in kv:
                     mode |= (_parse_int(kv["baud"], line_num, raw_line) & 0x1F) << 10

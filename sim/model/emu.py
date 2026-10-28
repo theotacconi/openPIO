@@ -44,26 +44,23 @@ class _Stuffer:
         self.run = 0
         self.last: int | None = None
 
-    def due(self, mode: int, length: int) -> int | None:
+    def due(self, equal: bool, length: int) -> int | None:
         """Value of the stuffed bit owed now, or None."""
         if self.run < length:
             return None
-        return {0: 0, 1: 1}.get(mode, 1 - (self.last or 0))
+        return 1 - (self.last or 0) if equal else 0
 
-    def count(self, bit: int, mode: int) -> None:
+    def count(self, bit: int, equal: bool) -> None:
         """Account for a bit sent / received (data or stuffed)."""
-        if mode == 2:
+        if equal:
             self.run = self.run + 1 if bit == self.last else 1
         else:
-            self.run = self.run + 1 if bit == (1 if mode == 0 else 0) else 0
+            self.run = self.run + 1 if bit else 0
         self.last = bit
 
-    def stuffed(self, bit: int, mode: int) -> None:
-        """A stuffed bit went by: in modes 00 / 01 it ends the run, in 10 it starts one."""
-        if mode == 2:
-            self.run, self.last = 1, bit
-        else:
-            self.run, self.last = 0, bit
+    def stuffed(self, bit: int, equal: bool) -> None:
+        """A stuffed bit went by: after 1s it ends the run, after equal bits it starts one."""
+        self.run, self.last = int(equal), bit
 
 
 class PinBus:
@@ -465,7 +462,7 @@ class StateMachine:
 
     def _stuff_cfg(self) -> tuple[bool, int, int]:
         on = bool(self.pau_ctl & 4)
-        return on, (self.pau_mode >> 8) & 3, ((self.pau_mode >> 4) & 0xF) or 16
+        return on, bool(self.pau_mode >> 9 & 1), ((self.pau_mode >> 4) & 0xF) or 16   # [8] reserved
 
     def _set_pau_ctl(self, val: int) -> None:
         draining = self.tx_drives
