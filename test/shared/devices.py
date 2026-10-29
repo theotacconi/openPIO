@@ -1444,3 +1444,164 @@ class SentTx(Device):
         while self.schedule and self.schedule[0][0] <= t + 1:
             lv = self.schedule.pop(0)[1]
             self.drive = {} if lv is None else {self.pin: lv}
+
+
+# ---------------------------------------------------------------------------------- ISO 7816
+
+class IsoCard(Device):
+    """An ISO/IEC 7816-3 smart card (T = 0, direct convention, F = 372, D = 1) on I/O (open
+    drain, pull-up), CLK and RST from the reader. Its time base is CLK: every time below is in
+    card clocks, an elementary time unit (ETU) is 372 of them.
+
+    Cold reset: RST must stay low for 400 clocks or more of a running CLK; after RST rises the
+    card sends `atr`. Then it receives a T = 0 command header (CLA INS P1 P2 P3) and answers it
+    as an outgoing command: the procedure byte INS, P3 bytes of `data`, SW1 SW2 = 90 00, the
+    answer's first character 16 ETU or more after the header's last.
+
+    Characters: start bit, 8 data bits LSB first, even parity; 12 ETU a character (2 of guard
+    time) or more. The card samples the reader's bits at 0.2, 0.5 and 0.8 ETU, which must agree.
+    Error signalling: receiving a character with the wrong parity (or one listed in `reject`,
+    by its index in the header, the first time), the card pulls I/O low from 10.5 to 12 ETU and
+    expects it again; sending one listed in `bad_parity` (index among the card's characters, the
+    first time) with the wrong parity, it expects the reader's error signal, 10.5 +- 0.2 ETU
+    for 1 to 2 ETU: I/O high at 10.3 ETU, low at 10.7 and 11.45, high again at 12.55; then it
+    repeats the character from 13.5 ETU."""
+
+    ETU = 372
+
+    def __init__(self, io: int, clk: int, rst: int, atr: list[int], data: list[int],
+                 bad_parity=(), reject=()) -> None:
+        super().__init__()
+        self.io, self.clk, self.rst = io, clk, rst
+        self.atr, self.data = atr, data
+        self.bad_parity, self.reject = set(bad_parity), set(reject)
+        self.c = 0                          # card clocks (CLK rising edges)
+        self.clk_prev = self.io_prev = 1     # io_prev: at the last card clock
+        self.rst_prev = 0
+        self.rst_low = 0                    # card clocks with RST low
+        self.mode = "off"
+        self.out: list[tuple[int, bool]] = []
+        self.sent_count = 0
+        self.not_before = 0
+        self.last_lead = None               # (card clock, "card" | "reader") of a character
+        self.received: list[int] = []       # the header, as the card took it
+        self.sent: list[int] = []
+        self.reader_signals = 0             # error signals the reader sent the card
+        self.card_signals = 0
+
+    def tick(self, t: int, levels: int) -> None:
+        io, clk, rst = (levels >> self.io & 1, levels >> self.clk & 1, levels >> self.rst & 1)
+        if clk and not self.clk_prev:
+            self.c += 1
+            self._clock(t, io, rst)
+            self.io_prev = io
+        self.clk_prev = clk
+
+    def _lead(self, t: int, who: str) -> None:
+        if self.last_lead is not None:
+            c0, prev = self.last_lead
+            need = 12 if prev == who else 16
+            if self.c - c0 < need * self.ETU - 2:
+                self.error(t, f"{who} character {(self.c - c0) / self.ETU:.2f} ETU after the last ({need} needed)")
+        self.last_lead = (self.c, who)
+
+    def _clock(self, t: int, io: int, rst: int) -> None:
+        E, c = self.ETU, self.c
+        if not rst:
+            self.mode, self.drive = "off", {}
+            self.rst_low += 1
+            self.rst_prev = 0
+            return
+        if not self.rst_prev:                                   # RST rises: answer to reset
+            if self.rst_low < 400:
+                self.error(t, f"RST low for {self.rst_low} card clocks (400 needed)")
+            self.rst_prev = 1
+            self.mode, self.out = "idle", [(b, False) for b in self.atr]
+            self.not_before = c + 1000
+            self.last_lead = None
+        if self.mode == "idle":
+            if self.out and c >= self.not_before:
+                byte, retry = self.out.pop(0)
+                bad = not retry and self.sent_count in self.bad_parity
+                parity = bin(byte).count("1") & 1 ^ bad
+                self.tx = {"c0": c, "byte": byte, "bad": bad, "seen": {},
+                           "bits": [0] + [byte >> i & 1 for i in range(8)] + [parity]}
+                self.mode = "tx"
+                self._lead(t, "card")
+            elif not io and self.io_prev:
+                self.rx = {"c0": c, "s": {}}
+                self.mode = "rx"
+                self._lead(t, "reader")
+        if self.mode == "tx":
+            self._tx(t, io, c - self.tx["c0"])
+        elif self.mode in ("rx", "rx_sig"):
+            self._rx(t, io, c - self.rx["c0"])
+
+    def _tx(self, t: int, io: int, d: int) -> None:
+        E, tx = self.ETU, self.tx
+        if d < 10 * E:
+            bit = tx["bits"][d // E]
+            self.drive = {} if bit else {self.io: 0}
+            if bit and not io and d % E == E // 2:
+                self.error(t, f"I/O pulled low during the card's bit {d // E}")
+            return
+        self.drive = {}
+        for name, at in (("10.3", 10.3), ("10.7", 10.7), ("11.45", 11.45), ("12.55", 12.55)):
+            if d == round(at * E):
+                tx["seen"][name] = io
+        if d == 11 * E:
+            signalled = not io
+            if signalled != tx["bad"]:
+                self.error(t, f"character {tx['byte']:#04x}: reader error signal {signalled}, parity bad {tx['bad']}")
+        if d == round(12.6 * E):
+            s = tx["seen"]
+            if not tx["bad"] and not io:
+                return self.error(t, "I/O low after the character")
+            if tx["bad"]:
+                self.reader_signals += 1
+                if (s["10.3"], s["10.7"], s["11.45"], s["12.55"]) != (1, 0, 0, 1):
+                    self.error(t, f"reader error signal at 10.3/10.7/11.45/12.55 ETU: {s}")
+                self.out.insert(0, (tx["byte"], True))
+                self.not_before = self.c + round(0.9 * E)       # 13.5 ETU
+            else:
+                self.sent.append(tx["byte"])
+                self.sent_count += 1
+                self.not_before = self.c - round(0.6 * E)       # 12 ETU after the start
+            self.mode = "idle"
+
+    def _rx(self, t: int, io: int, d: int) -> None:
+        E, rx = self.ETU, self.rx
+        for k in range(10):
+            for f in (0.2, 0.5, 0.8):
+                if d == round((k + f) * E):
+                    rx["s"][(k, f)] = io
+        if self.mode == "rx" and d == round(10.3 * E):
+            s = rx["s"]
+            for k in range(10):
+                if len({s[(k, f)] for f in (0.2, 0.5, 0.8)}) != 1:
+                    self.error(t, f"reader bit {k} not stable over 0.2..0.8 ETU: {[s[(k, f)] for f in (0.2, 0.5, 0.8)]}")
+            if s[(0, 0.5)]:
+                self.error(t, "no start bit")
+            bits = [s[(k, 0.5)] for k in range(1, 10)]
+            byte = sum(b << i for i, b in enumerate(bits[:8]))
+            index = len(self.received)
+            bad = sum(bits) & 1
+            if bad:
+                self.error(t, f"reader character {byte:#04x} with the wrong parity")
+            if bad or index in self.reject:
+                self.reject.discard(index)
+                self.card_signals += 1
+                self.mode = "rx_sig"
+            else:
+                self.received.append(byte)
+                self.mode = "idle"
+                if len(self.received) == 5:                     # a header: the answer
+                    ins, p3 = self.received[1], self.received[4]
+                    self.out = [(b, False) for b in [ins, *self.data[:p3], 0x90, 0x00]]
+                    self.not_before = self.rx["c0"] + 16 * E
+        if self.mode == "rx_sig":
+            if round(10.5 * E) <= d < 12 * E:
+                self.drive = {self.io: 0}
+            elif d >= 12 * E:
+                self.drive = {}
+                self.mode = "idle"
