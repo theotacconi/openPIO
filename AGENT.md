@@ -10,7 +10,7 @@
 * Priorities, in order: correctness and timing determinism, closing timing and area, features. Every instruction takes a known number of clocks: no unmodeled latency or branch penalty.
 * The ISA is v2 and frozen until the v2 RTL passes lockstep against the model. Every spec feature is exercised by at least one program; a feature without one gets a program, not silence.
 * Sizes that the silicon fixes but an FPGA could grow (number of SMs, FIFO depth) are RTL parameters, set for the chip in its top level.
-* Silicon: 6x4 tiles (8x4 if the organisers release it), 50 MHz (20 ns) closing setup and hold in all three corners. Measure the cell area of any addition (Yosys + CMOS5L Liberty) before committing to it.
+* Silicon: 6x4 tiles (8x4 if the organisers release it), 50 MHz (20 ns) nominal: setup closed in the typical and fast corners, hold in all three; the slow corner (1.08 V, 125 C) is reported with the clock it allows (user's decision, 2026-10-29). Measure the cell area of any addition (Yosys + CMOS5L Liberty) before committing to it.
 
 ## Reference model
 
@@ -82,4 +82,4 @@ Status (2026-10-28): ISA v2 frozen (revised from the RTL with the user: the CRC 
   2. Lockstep against the model, every clock (`test/lockstep/`): `sm_fuzz.py` (one SM against `emu.py`, a Python netlist: random configurations, random words and PAU traffic loops, every host register), `chip_lockstep.py` (the chip core against `chip.py` through Verilator: random programs and host traffic), `programs.py` (every program test with the RTL beside the model), `top_lockstep.py` (the Tiny Tapeout top through its pads, a bit-banged SPI host). A harness change is checked by mutating the RTL (`OPENPIO_SRC`, set inside the container): the bench must catch it.
   3. cocotb through the pins: `cd test && make -B` (and `IMEM=sram` when the IMEM or FIFO memories change).
   4. Formal: `sby -f test/formal/<proof>.sby` for every invariant or equivalence a timing fix relies on.
-* Sign-off: the `gds` workflow green (gds, precheck, gl_test, signoff, viewer) and the `tt_submission` artifact present. `scripts/tt_signoff.py` fails on any DRC / LVS / antenna / slew / capacitance error or negative slack in any corner.
+* Sign-off: the `gds` workflow green (gds, precheck, gl_test, signoff, viewer) and the `tt_submission` artifact present. `scripts/tt_signoff.py` fails on any DRC / LVS / antenna / slew / capacitance error, negative hold slack in any corner, or negative setup slack in the typical or fast corner.
