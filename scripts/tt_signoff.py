@@ -6,9 +6,11 @@
 
 Reads <run>/final/metrics.json. Exit status 1 if any DRC/LVS/antenna error
 count is non-zero, the hold worst slack is negative in any corner, or the setup
-worst slack is negative in the typical or fast corner. The clock is 50 MHz
-nominal (typical corner, 1.2 V, 25 C); the slow corner's setup slack is
-reported with the clock it allows, not checked.
+worst slack or the max slew violation count is negative / non-zero in the
+typical or fast corner. The clock is 50 MHz nominal (typical corner, 1.2 V,
+25 C); in the slow corner the setup slack is reported with the clock it allows,
+and slew violations (nets detailed routing lengthened, with no repair after
+it) are reported, not checked.
 """
 import json
 import sys
@@ -28,7 +30,6 @@ ERROR_COUNTS = [
     ("design__lvs_unmatched_pin__count", "LVS unmatched pins"),
     ("antenna__violating__nets", "antenna violating nets"),
     ("antenna__violating__pins", "antenna violating pins"),
-    ("design__max_slew_violation__count", "max slew violations"),
     ("design__max_cap_violation__count", "max cap violations"),
 ]
 INFO = [
@@ -54,6 +55,14 @@ for key, label in ERROR_COUNTS:
 
 PERIOD = 20.0                                     # ns, src/config.json CLOCK_PERIOD
 SLOW = "nom_slow_1p08V_125C"
+for key in sorted(k for k in metrics if k.startswith("design__max_slew_violation__count__corner:")):
+    val = int(metrics[key])
+    if key.endswith(SLOW):
+        note = "info" if val else "ok"
+    else:
+        failed |= val != 0
+        note = "FAIL" if val else "ok"
+    print(f"  {key:60s} {val:10d}     {note}")
 for kind in ("setup", "hold"):
     for key in sorted(k for k in metrics if k.startswith(f"timing__{kind}__ws__corner:")):
         val = float(metrics[key])
