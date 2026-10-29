@@ -2,7 +2,7 @@
 # gds: LibreLane flow (3.1.0.dev3, action default) via tt_tool --harden; precheck: TT KLayout DRC and
 # submission checks on the final GDS; viewer: 3D GDS viewer on GitHub Pages; signoff: scripts/tt_signoff.py
 # on the run logs, red on any DRC/LVS/antenna/cap error, negative hold slack, or slew violation or negative
-# setup slack in the typical or fast corner (the slow corner is reported);
+# setup slack in the typical or fast corner (the slow corner and the known SRAM-pin slew are reported);
 # gl_test: the cocotb tests (test/) on the hardened gate-level netlist.
 name: gds
 
