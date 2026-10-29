@@ -32,6 +32,11 @@
   "GRT_DESIGN_REPAIR_MAX_SLEW_PCT": 40,
   "GRT_DESIGN_REPAIR_MAX_WIRE_LENGTH": 300,
 
+  "//": "Setup repair on global-route parasitics as well (off by default in LibreLane). Placement",
+  "//": "estimates put the slow corner at ~0 ns, routed it was -9.7 ns; with this -5.5 ns, typical",
+  "//": "+1.3 -> +3.7 ns, for 0.2 % more cell area.",
+  "RUN_POST_GRT_RESIZER_TIMING": 1,
+
   "//": "Routing from Metal1 (the PDK starts at Metal2): with TT's cap at Metal4, Metal3 is the only",
   "//": "other horizontal layer, and v2 overflowed it (85 %, 2207 overflows; with Metal1 3, and",
   "//": "detailed routing converges to 0 violations in 10 iterations).",
