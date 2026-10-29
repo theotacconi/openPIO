@@ -126,6 +126,11 @@
   "MAGIC_MACRO_STD_CELL_SOURCE": "PDK",
   "MAGIC_EXT_ABSTRACT_CELLS": ["RM_IHPSG13_.*"],
 
+  "//": "Yosys 0.66's arith_tree pass (on by default) miscompiles fifo.v's txf[16*tx_tail +: 16]",
+  "//": "write: the landing TX word went to bit offset tx_tail instead of 16*tx_tail (gate-level test",
+  "//": "test_fifo_echo; reproduced on a 4-line module). Off for the whole design.",
+  "SYNTH_ARITH_TREE": false,
+
   "//": "RUN_LINTER, LINTER_INCLUDE_PDK_MODELS - Disabling the linter is not recommended!",
   "RUN_LINTER": 1,
   "LINTER_INCLUDE_PDK_MODELS": 1,
