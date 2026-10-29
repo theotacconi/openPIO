@@ -1605,3 +1605,115 @@ class IsoCard(Device):
             elif d >= 12 * E:
                 self.drive = {}
                 self.mode = "idle"
+
+
+# ---------------------------------------------------------------------------------- MIL-STD-1553
+
+def mil1553_levels(words: list[tuple[str, int, bool]], half: int) -> list[int]:
+    """Bus levels (+1 / -1), a half-bit of `half` clocks each, of contiguous 1553 words:
+    (sync "cmd" or "data", 16-bit value, wrong parity). Sync: 1.5 bits +1 then 1.5 bits -1 for
+    a command or status word, the opposite for data; bits MSB first, 1 = +1 then -1; odd
+    parity."""
+    out = []
+    for sync, value, bad in words:
+        s = 1 if sync == "cmd" else -1
+        out += [s] * 3 * half + [-s] * 3 * half
+        bits = [value >> (15 - i) & 1 for i in range(16)]
+        bits.append((sum(bits) + 1) % 2 ^ bad)
+        for b in bits:
+            out += [1 if b else -1] * half + [-1 if b else 1] * half
+    return out
+
+
+class Mil1553Rt(Device):
+    """A MIL-STD-1553B remote terminal behind a bus transceiver, and the bus. The bus
+    controller drives TX and TXB (its complement) while TXINH is low; RX shows the bus high on
+    its positive half. 1 Mbit/s: a bit is `bit` clocks.
+
+    It decodes every word the controller sends: sync shape, each mid-bit transition within 2
+    clocks of its place, TX the complement of TXB, odd parity, the words of a message back to
+    back (a word every 20 bits). A command to its address is answered after `response` us (from
+    the middle of the last word's parity bit to the middle of the status sync, 4..12 us): a
+    receive command (T/R = 0) once its data words are in, with the status word; a transmit
+    command with the status word and `data` (word count words; indices in `bad` with the
+    wrong parity). Nothing may drive the bus while the other does."""
+
+    def __init__(self, tx: int, txb: int, inh: int, rx: int, address: int, data: list[int],
+                 bit: int = 50, response: float = 4, bad=()) -> None:
+        super().__init__()
+        self.tx, self.txb, self.inh, self.rx = tx, txb, inh, rx
+        self.address, self.data, self.bit, self.response = address, data, bit, response
+        self.bad = set(bad)
+        self.bc: dict[int, int] = {}                     # clock -> controller's level
+        self.start = None                                # the controller's word in progress
+        self.message: list[tuple[str, int]] = []
+        self.received: list[list[int]] = []              # data words of receive commands
+        self.commands: list[int] = []
+        self.out: list[int] = []                         # the terminal's levels from out_t
+        self.out_t = 0
+        self.drive = {rx: 0}
+
+    def tick(self, t: int, levels: int) -> None:
+        b = self.bit
+        driving = not levels >> self.inh & 1
+        rt = self.out[t - self.out_t] if 0 <= t - self.out_t < len(self.out) else 0
+        if driving:
+            tx, txb = levels >> self.tx & 1, levels >> self.txb & 1
+            if tx == txb:
+                self.error(t, f"TX = TXB = {tx} while transmitting")
+            self.bc[t] = 1 if tx else -1
+            if rt:
+                self.error(t, "the controller drives the bus while the terminal does")
+            if self.start is None:
+                self.start = t
+        if self.start is not None and t == self.start + 20 * b + 12:
+            self._word(t)
+        bus = self.bc.get(t, 0) or rt
+        self.drive = {self.rx: int(bus == 1)}
+
+    def _word(self, t: int) -> None:
+        b, s, lv = self.bit, self.start, self.bc
+        h = b // 2
+        first = lv.get(s + h)
+        if first is None or lv.get(s + 3 * h - 2) != first or lv.get(s + 3 * h + 2) != -first \
+                or lv.get(s + 6 * h - 2) != -first:
+            self.error(t, f"word at {s}: no sync")
+            self.start = None
+            return
+        bits = []
+        for k in range(17):
+            m = s + 3 * b + k * b + h                    # the mid-bit transition
+            a, z = lv.get(m - 2), lv.get(m + 2)
+            if a is None or z is None or a == z or lv.get(m - h + 2) != a or lv.get(m + h - 2) != z:
+                self.error(t, f"word at {s}: bit {k} not Manchester at its place")
+            bits.append(int(a == 1))
+        value = sum(bit << (15 - i) for i, bit in enumerate(bits[:16]))
+        if sum(bits) % 2 != 1:
+            self.error(t, f"word {value:#06x}: even parity")
+        self.message.append(("cmd" if first == 1 else "data", value))
+        parity_mid = s + 19 * b + h
+        if lv.get(s + 20 * b + 10) is not None:         # the next word, back to back
+            self.start = s + 20 * b
+            return
+        self.start = None
+        self._answer(parity_mid)
+
+    def _answer(self, parity_mid: int) -> None:
+        message, self.message = self.message, []
+        if message[0][0] != "cmd" or any(sync != "data" for sync, _ in message[1:]):
+            return self.error(parity_mid, f"message syncs {[s for s, _ in message]}")
+        cmd = message[0][1]
+        self.commands.append(cmd)
+        if cmd >> 11 != self.address:
+            return
+        count = cmd & 0x1F or 32
+        transmit = cmd >> 10 & 1
+        if not transmit:
+            self.received.append([v for _, v in message[1:]])
+            if len(message) - 1 != count:
+                self.error(parity_mid, f"{len(message) - 1} data words for a count of {count}")
+        words = [("cmd", self.address << 11, False)]
+        if transmit:
+            words += [("data", self.data[i], i in self.bad) for i in range(count)]
+        self.out = mil1553_levels(words, self.bit // 2)
+        self.out_t = parity_mid + round(self.response * self.bit) - 3 * self.bit // 2
