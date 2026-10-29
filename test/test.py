@@ -132,6 +132,7 @@ async def test_id_and_registers(dut):
         got = await board.read(sm, 1, 31)                     # registers 0x01..0x1F
         want = [sm_register(model.sms[sm], a, 0xFF) for a in range(1, 32)]
         assert got == want, f"SM {sm} after reset: {[hex(v) for v in got]}"
+    await board.load(1, "loop:\njmp loop")                      # SM 1 runs only words written
     await board.write(1, WRAP, 0x2A05, 0x0F1B)                 # WRAP, SIDESET
     assert await board.read(1, WRAP, 2) == [0x2A05, 0x0F1B]
     assert await board.read(0, WRAP) == [0x3F00], "SM 0 untouched"
