@@ -1400,3 +1400,47 @@ class DaliBus(Device):
             g.step(t, bus)
         self.drive = {self.rx: 1 - bus}
         self.errors = [e for g in self.gear for e in g.errors]
+
+
+# ---------------------------------------------------------------------------------- SENT
+
+# SAE J2716 (2010) CRC4, x^4 + x^3 + x^2 + 1: the specification's table and seed, with the
+# recommended implementation's extra zero nibble at the end
+SENT_CRC4_TABLE = [0, 13, 7, 10, 14, 3, 9, 4, 1, 12, 6, 11, 15, 2, 8, 5]
+
+
+def sent_crc4(data: list[int]) -> int:
+    """SENT checksum of the data nibbles (the status nibble is not included)."""
+    crc = 5
+    for nibble in data:
+        crc = nibble ^ SENT_CRC4_TABLE[crc]
+    return SENT_CRC4_TABLE[crc]
+
+
+class SentTx(Device):
+    """A SENT (SAE J2716) sensor on an open-drain line with a pull-up: fast-channel frames
+    back to back from clock `start`, at `tick` clocks a tick (nominal 3 us, the sensor's clock
+    within +-20 %). Every pulse is a falling edge, `low` ticks low (4 or more), then released
+    until the next falling edge: sync 56 ticks, then the status nibble, the data nibbles and the
+    CRC, each 12 + value ticks. A frame is (status, [data nibbles]), or (status, [data], crc)
+    to send a wrong CRC."""
+
+    def __init__(self, pin: int, frames: list, tick: float, start: int = 0, low: int = 5):
+        super().__init__()
+        self.pin = pin
+        self.schedule: list[tuple[int, int | None]] = []
+        t = start
+        for frame in frames:
+            status, data = frame[0], frame[1]
+            crc = frame[2] if len(frame) > 2 else sent_crc4(data)
+            for ticks in [56] + [12 + v for v in [status, *data, crc]]:
+                self.schedule += [(round(t), 0), (round(t + low * tick), None)]
+                t += ticks * tick
+        self.schedule.append((round(t), 0))               # the next frame's falling edge
+        self.schedule.append((round(t + low * tick), None))
+        self.end = round(t + low * tick)
+
+    def tick(self, t: int, levels: int) -> None:
+        while self.schedule and self.schedule[0][0] <= t + 1:
+            lv = self.schedule.pop(0)[1]
+            self.drive = {} if lv is None else {self.pin: lv}
