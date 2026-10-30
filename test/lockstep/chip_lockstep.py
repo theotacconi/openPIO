@@ -191,8 +191,7 @@ def random_load(chip: LockstepChip, host: Host, n: int, rng: random.Random) -> N
               push_thresh=rng.randrange(16), pull_thresh=rng.randrange(16),
               pau_mode=rng.randrange(1 << 16) & PAU_MODE_BITS,
               pau_code=rng.choice([*PAU_CODES.values(), rng.randrange(1 << 16)]),
-              pau_cfg=rng.randrange(1, 4) | rng.randrange(4) << 5 | rng.choice([0, 0, rng.randrange(1, 9)]) << 8,
-              sync=rng.randrange(1 << 32),
+              pau_cfg=rng.randrange(1, 4) | rng.randrange(4) << 5,
               page=rng.randrange(4) if len(prog) <= PAGE_WORDS else 0,
               crc_cfg=rng.randrange(128), crc_poly=rng.randrange(1 << 32),
               open_drain_mask=rng.randrange(256) & host.read(0, PADS_BIDIR)[0] if rng.random() < .3 else 0)

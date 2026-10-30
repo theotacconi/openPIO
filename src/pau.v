@@ -5,11 +5,12 @@
 // sees (status, queue lengths, RX bits). Step 3: the instruction's operation (one at most, all
 // inputs below "instruction" are valid only with stb) acts on *_s and gives the next state.
 //
-// Queues hold their oldest bit at index 0. A TX entry is a bit and the PAU_CTL flags it was
-// queued with (stuffing, monitor, CRC). The CRC and its registers are MSB-aligned (ISA.md, PAU):
-// a step is then the same for every width, crc_a[31] is the bit that leaves, and a CRC append
-// is crc_a bit-reversed. It takes at most one line bit (a TX bit as it starts, or an RX bit) and
-// one CRC feed bit a strobe: two steps of a 32-bit LFSR.
+// Queues hold one word, their oldest bit at index 0. A TX entry is a bit and the PAU_CTL flags
+// it was queued with (stuffing, monitor, CRC). The CRC and its registers are MSB-aligned
+// (ISA.md, PAU): a step is then the same for every width, and crc_a[31] is the bit that leaves.
+// A CRC append sends crc_a[31] and feeds it back, which only shifts crc_a: the CRC goes out of
+// its own register, not through the queue. The CRC takes at most one line bit (a TX bit as it
+// starts, or an RX bit) and one CRC feed bit a strobe: two steps of a 32-bit LFSR.
 //
 // The line code is PAU_CODE: the action (hold, toggle, 0, 1) at the start of each half-bit for
 // the bit and the one before it. Level codes (every second half holds) are sampled mid-bit;
@@ -35,8 +36,6 @@ module pau (
     input  wire        sequal,       // stuffing after equal bits (else after 1s)
     input  wire [4:0]  baud_rst,     // PAU_CFG: PAU_BAUD after RESET
     input  wire [1:0]  run,          // a transition code's longest run of half-bits, minus 2
-    input  wire [5:0]  sync_len,     // sync word length, 0: none
-    input  wire [31:0] sync,
     input  wire [6:0]  crc_cfg,      // [4:0] width - 1, [5] init ones, [6] append complement
     input  wire [31:0] crc_poly,     // MSB-aligned; bits below the width are ignored
     input  wire [31:0] crc_res,
@@ -55,7 +54,7 @@ module pau (
     input  wire        rx_take,      // IN PINS, RX on, rx_len_s >= rx_n checked
     input  wire [4:0]  rx_n,
     input  wire        crc_reset,
-    input  wire        crc_append,   // the TX queue is empty (checked)
+    input  wire        crc_append,   // the TX queue is empty, no append under way (checked)
     input  wire        tx_abort,
     input  wire        feed,         // CRC feed: one ISR bit this strobe
     input  wire        feed_bit,
@@ -64,8 +63,9 @@ module pau (
     output wire        rx_on,        // PAU_CTL [1]: IN PINS takes the RX queue
     output wire [12:0] status,       // PAU status 0..12 (ISA.md, Conditions), after step 2
     output wire [7:0]  status_r,     // status 0..7 before it: the host's (clock-start) view
-    output wire [5:0]  tx_len_s,     // bits in the TX queue, after step 2
-    output wire [5:0]  rx_len_s,
+    output wire [4:0]  tx_len_s,     // bits in the TX queue, after step 2
+    output wire [4:0]  rx_len_s,
+    output wire        crc_busy,     // a CRC append under way, after step 2: the CRC is sent
     output wire [15:0] rx_bits_s,    // the oldest 16 bits of the RX queue, after step 2
     output wire        drive,        // TX drives pin out_base (and out_base + 1, PIN2): from flip-flops
     output wire        line,         // its level (INV applied)
@@ -111,8 +111,10 @@ module pau (
     endfunction
 
     // ------------------------------------------------------------------ state
-    reg [31:0] tq_b, tq_s, tq_m, tq_c;     // TX queue: bit, stuff, monitor, CRC flags
-    reg [5:0]  tq_len;
+    reg [15:0] tq_b, tq_s, tq_m, tq_c;     // TX queue: bit, stuff, monitor, CRC flags
+    reg [4:0]  tq_len;
+    reg [5:0]  a_cnt;                      // CRC append: bits still to send, before the queue
+    reg        a_s, a_m;                   // their stuffing and monitor flags
     reg        t_act, t_half, t_bit, t_line, t_mon, t_err;
     reg        t_p, t_last;                // the bit before the one sent; the last bit started
     reg [4:0]  t_cnt;                      // strobes left in the half-bit, minus 1
@@ -120,8 +122,8 @@ module pau (
     reg        ts_last, ts_pend, ts_pval;  // last bit; a stuffed bit is owed, its value
     reg        e_prev;                     // the external clock pin at the last strobe
 
-    reg [31:0] rq_b;                       // RX queue
-    reg [5:0]  rq_len;
+    reg [15:0] rq_b;                       // RX queue
+    reg [4:0]  rq_len;
     reg        r_prev, r_armed, r_last, r_p;
     reg [5:0]  r_cnt;                      // level codes: strobes to the sample, minus 1
     reg [7:0]  r_since;                    // transition codes: strobes since the last edge
@@ -131,9 +133,6 @@ module pau (
     reg [7:0]  r_quiet;                    // strobes without an input edge (saturates)
     reg [4:0]  rs_run;                     // RX destuffing
     reg        rs_last, r_serr, r_ovr;
-    reg [31:0] r_sync;                     // sync hunt: the last decoded bits, oldest in bit 0
-    reg [5:0]  r_scnt;                     // bits hunted (saturates at 32)
-    reg        r_synced;
 
     reg [31:0] crc_a;
 
@@ -143,25 +142,29 @@ module pau (
     wire       e_shift  = e_edge & (pin_in1 != (cpol == cpha));
 
     // ------------------------------------------------------------------ step 2: TX
-    wire drives = ~t_err & (ctl[0] | t_act | (tq_len != 6'd0) | ts_pend);
-    wire pending = (tq_len != 6'd0) | ts_pend;
+    wire pending = (tq_len != 5'd0) | ts_pend | (a_cnt != 6'd0);
+    wire drives  = ~t_err & (ctl[0] | t_act | pending);
 
-    reg [31:0] tq_b_s, tq_s_s, tq_m_s, tq_c_s;
-    reg [5:0]  tq_len_s;
+    reg [15:0] tq_b_s, tq_s_s, tq_m_s, tq_c_s;
+    reg [4:0]  tq_len_s;
+    reg [5:0]  a_cnt_s;
     reg        t_act_s, t_half_s, t_bit_s, t_line_s, t_mon_s, t_err_s, t_p_s, t_last_s;
     reg [4:0]  t_cnt_s, ts_run_s;
     reg        ts_last_s, ts_pend_s, ts_pval_s;
     reg        tx_feed;                    // a TX bit starting feeds the CRC
-    reg        tb;                         // the bit starting
+    reg        a_feed;                     // an appended bit starting shifts the CRC
+    reg        tb, ts;                     // the bit starting, its stuffing flag
     reg        t_start, t_end;             // a bit starts, the bit under way ends
 
     always @(*) begin
-        {tq_b_s, tq_s_s, tq_m_s, tq_c_s, tq_len_s} = {tq_b, tq_s, tq_m, tq_c, tq_len};
+        {tq_b_s, tq_s_s, tq_m_s, tq_c_s, tq_len_s, a_cnt_s} = {tq_b, tq_s, tq_m, tq_c, tq_len, a_cnt};
         {t_act_s, t_half_s, t_bit_s, t_line_s, t_mon_s, t_err_s} = {t_act, t_half, t_bit, t_line, t_mon, t_err};
         {t_p_s, t_last_s} = {t_p, t_last};
         {t_cnt_s, ts_run_s, ts_last_s, ts_pend_s, ts_pval_s} = {t_cnt, ts_run, ts_last, ts_pend, ts_pval};
         tx_feed = 1'b0;
+        a_feed  = 1'b0;
         tb      = ts_pval;
+        ts      = 1'b0;
         t_start = 1'b0;
         t_end   = 1'b0;
         if (stb & drives) begin
@@ -180,8 +183,9 @@ module pau (
             if (t_end) begin
                 if (t_mon & (rx_in != t_line)) begin          // monitor: quiet until TX on
                     t_err_s   = 1'b1;
-                    tq_len_s  = 6'd0;
-                    {tq_b_s, tq_s_s, tq_m_s, tq_c_s} = 128'd0;
+                    tq_len_s  = 5'd0;
+                    a_cnt_s   = 6'd0;
+                    {tq_b_s, tq_s_s, tq_m_s, tq_c_s} = 64'd0;
                     t_act_s   = 1'b0;
                     ts_pend_s = 1'b0;
                     t_start   = 1'b0;
@@ -200,20 +204,29 @@ module pau (
                     ts_run_s  = {4'd0, sequal};               // ends a run of 1s, starts one of equal bits
                     ts_last_s = ts_pval;
                 end else begin
-                    tb       = tq_b[0];
-                    t_mon_s  = tq_m[0];
-                    tx_feed  = tq_c[0];
-                    tq_b_s   = {1'b0, tq_b[31:1]};
-                    tq_s_s   = {1'b0, tq_s[31:1]};
-                    tq_m_s   = {1'b0, tq_m[31:1]};
-                    tq_c_s   = {1'b0, tq_c[31:1]};
-                    tq_len_s = tq_len - 6'd1;
-                    if (tq_s[0]) begin
-                        ts_run_s  = (sequal ? (tq_b[0] == ts_last) : tq_b[0]) ? ts_run + 5'd1
-                                                                               : {4'd0, sequal};
-                        ts_last_s = tq_b[0];
+                    if (a_cnt != 6'd0) begin                  // the CRC's top bit (append)
+                        tb       = crc_a[31] ^ crc_cfg[6];
+                        ts       = a_s;
+                        t_mon_s  = a_m;
+                        a_feed   = 1'b1;
+                        a_cnt_s  = a_cnt - 6'd1;
+                    end else begin
+                        tb       = tq_b[0];
+                        ts       = tq_s[0];
+                        t_mon_s  = tq_m[0];
+                        tx_feed  = tq_c[0];
+                        tq_b_s   = {1'b0, tq_b[15:1]};
+                        tq_s_s   = {1'b0, tq_s[15:1]};
+                        tq_m_s   = {1'b0, tq_m[15:1]};
+                        tq_c_s   = {1'b0, tq_c[15:1]};
+                        tq_len_s = tq_len - 5'd1;
+                    end
+                    if (ts) begin
+                        ts_run_s  = (sequal ? (tb == ts_last) : tb) ? ts_run + 5'd1
+                                                                     : {4'd0, sequal};
+                        ts_last_s = tb;
                         ts_pend_s = ts_run_s >= slen;
-                        ts_pval_s = sequal & ~tq_b[0];
+                        ts_pval_s = sequal & ~tb;
                     end else begin
                         ts_run_s = 5'd0;                      // an unstuffed bit restarts the count
                     end
@@ -229,12 +242,14 @@ module pau (
         end
     end
 
-    wire drives_s = ~t_err_s & (ctl[0] | t_act_s | (tq_len_s != 6'd0) | ts_pend_s);
+    wire pending_s = (tq_len_s != 5'd0) | ts_pend_s | (a_cnt_s != 6'd0);
+    wire drives_s  = ~t_err_s & (ctl[0] | t_act_s | pending_s);
 
     // ------------------------------------------------------------------ step 2: RX
-    reg [31:0] rq_b_s, r_sync_s;
-    reg [5:0]  rq_len_s, r_cnt_s, r_scnt_s;
-    reg        r_prev_s, r_armed_s, r_last_s, r_p_s, r_synced_s;
+    reg [15:0] rq_b_s;
+    reg [4:0]  rq_len_s;
+    reg [5:0]  r_cnt_s;
+    reg        r_prev_s, r_armed_s, r_last_s, r_p_s;
     reg [7:0]  r_since_s;
     reg [8:0]  r_thr_s;
     reg [2:0]  r_run_s;
@@ -249,8 +264,6 @@ module pau (
     wire       edge_in = rx_in != r_prev;
     wire [7:0] s1      = r_since + 8'd1;
     wire [8:0] t2      = {s1, 1'b0};
-    wire [5:0] n_sync  = sync_len > 6'd32 ? 6'd32 : sync_len;
-    wire [31:0] s_mask = ~(32'hFFFF_FFFE << (n_sync - 6'd1));
     // the halves the code gives bit b after the previous bit, which ended at end_b (at the
     // first edge after arming, the line before it: an ALIGN start decodes a bit at once)
     wire       end_b   = r_armed ? r_prev : r_end;
@@ -263,7 +276,6 @@ module pau (
         {rq_b_s, rq_len_s, r_cnt_s, r_since_s, r_quiet_s} = {rq_b, rq_len, r_cnt, r_since, r_quiet};
         {r_prev_s, r_armed_s, r_last_s, r_p_s} = {r_prev, r_armed, r_last, r_p};
         {r_thr_s, r_run_s, r_half_s, r_h0_s, r_end_s} = {r_thr, r_run, r_half, r_h0, r_end};
-        {r_sync_s, r_scnt_s, r_synced_s} = {r_sync, r_scnt, r_synced};
         {rs_run_s, rs_last_s, r_serr_s, r_ovr_s} = {rs_run, rs_last, r_serr, r_ovr};
         rb = act(code, 1'b0, 1'b1, r_p, r_last) == rx_in;     // a level code's sample
         rb_v = 1'b0;
@@ -336,18 +348,10 @@ module pau (
                 end
             end
         end
-        // a decoded bit: the sync hunt, then destuffing, the CRC and the queue
+        // a decoded bit: destuffing, the CRC and the queue
         rx_feed = 1'b0;
         if (rb_v) begin
             r_p_s = rb;
-            if ((n_sync != 6'd0) & ~r_synced) begin
-                r_sync_s   = ((r_sync >> 1) | ({31'd0, rb} << (n_sync - 6'd1))) & s_mask;
-                r_scnt_s   = r_scnt + {5'd0, r_scnt != 6'd32};
-                r_synced_s = (r_scnt_s >= n_sync) & (r_sync_s == (sync & s_mask));
-                rb_v       = 1'b0;
-            end
-        end
-        if (rb_v) begin
             if (ctl[2]) begin
                 if (rs_run < slen) begin
                     rs_run_s  = (sequal ? (rb == rs_last) : rb) ? rs_run + 5'd1 : {4'd0, sequal};
@@ -364,50 +368,43 @@ module pau (
         end
         if (rb_v) begin
             rx_feed = ctl[3] & ~drives_s;
-            if (rq_len == 6'd32)
+            if (rq_len == 5'd16)
                 r_ovr_s = 1'b1;
             else begin
-                rq_b_s   = rq_b | ({31'd0, rb} << rq_len[4:0]);
-                rq_len_s = rq_len + 6'd1;
+                rq_b_s   = rq_b | ({15'd0, rb} << rq_len[3:0]);
+                rq_len_s = rq_len + 5'd1;
             end
         end
     end
 
     // ------------------------------------------------------------------ step 2: CRC
-    wire [31:0] crc_s = (tx_feed | rx_feed) ? crc_step(crc_a, tx_feed ? tb : rb) : crc_a;
+    wire [31:0] crc_s = a_feed ? {crc_a[30:0], 1'b0}                  // fed its own top bit
+                      : (tx_feed | rx_feed) ? crc_step(crc_a, tx_feed ? tb : rb) : crc_a;
 
     // ------------------------------------------------------------------ status, outputs
     wire [1:0] pair = {pin_in1, pin_in};                    // the line state, raw
     assign status = {t_err_s, pair == 2'd3, pair == 2'd2, pair == 2'd1, pair == 2'd0,
-                     r_ovr_s, r_serr_s, r_synced_s, crc_s == cres,
-                     rq_len_s != 6'd0, tq_len_s <= 6'd16,
+                     r_ovr_s, r_serr_s, 1'b0, crc_s == cres,
+                     rq_len_s != 5'd0, tq_len_s == 5'd0,
                      ~ctl[1] | (r_quiet_s >= {h, 2'b00}),
-                     ~t_act_s & (tq_len_s == 6'd0) & ~ts_pend_s};
-    assign status_r = {r_ovr, r_serr, r_synced, crc_a == cres,
-                       rq_len != 6'd0, tq_len <= 6'd16,
+                     ~t_act_s & ~pending_s};
+    assign status_r = {r_ovr, r_serr, 1'b0, crc_a == cres,
+                       rq_len != 5'd0, tq_len == 5'd0,
                        ~ctl[1] | (r_quiet >= {h, 2'b00}),
-                       ~t_act & (tq_len == 6'd0) & ~ts_pend};
+                       ~t_act & ~pending};
     assign tx_on     = ctl[0];
     assign rx_on     = ctl[1];
     assign tx_len_s  = tq_len_s;
     assign rx_len_s  = rq_len_s;
-    assign rx_bits_s = rq_b_s[15:0];
+    assign crc_busy  = a_cnt_s != 6'd0;
+    assign rx_bits_s = rq_b_s;
     assign drive     = drives;
     assign line      = t_line ^ inv;
     assign bit_clk   = t_act ? cpol ^ cpha ^ t_half : cpol;
     assign crc       = crc_a;
 
     // ------------------------------------------------------------------ step 3 and registers
-    wire [31:0] tx_mask  = ~(32'hFFFF_FFFF << tx_n) << tq_len_s[4:0];
-    wire [31:0] app_bits;                                     // CRC append: MSB first
-    wire [31:0] app_word = crc_s ^ (crc_cfg[6] ? cmask : 32'd0);  // the last data bit fed in step 2
-    genvar i;
-    generate
-        for (i = 0; i < 32; i = i + 1) begin : g_app
-            assign app_bits[i] = app_word[31 - i];
-        end
-    endgenerate
-    wire [31:0] app_mask = 32'hFFFF_FFFF >> csh;              // the low width bits
+    wire [15:0] tx_mask  = ~(16'hFFFF << tx_n) << tq_len_s;
     wire        tx_rise  = ctl_we & ctl_val[0] & ~ctl[0];
     wire        rx_rise  = ctl_we & ctl_val[1] & ~ctl[1];
 
@@ -416,14 +413,15 @@ module pau (
             ctl     <= 5'd0;
             baud    <= rst_n ? baud_rst : 5'd0;
             crc_a   <= rst_n ? cinit : 32'd0;
-            {tq_b, tq_s, tq_m, tq_c} <= 128'd0;
-            tq_len  <= 6'd0;
+            {tq_b, tq_s, tq_m, tq_c} <= 64'd0;
+            tq_len  <= 5'd0;
+            {a_cnt, a_s, a_m} <= 8'd0;
             {t_act, t_half, t_bit, t_line, t_mon, t_err, t_p, t_last} <= 8'd0;
             t_cnt   <= 5'd0;
             {ts_run, ts_last, ts_pend, ts_pval} <= 8'd0;
             e_prev  <= rst_n & pin_in1;
-            rq_b    <= 32'd0;
-            rq_len  <= 6'd0;
+            rq_b    <= 16'd0;
+            rq_len  <= 5'd0;
             {r_prev, r_last, r_p} <= 3'd0;
             r_armed <= 1'b1;
             r_cnt   <= 6'd0;
@@ -433,18 +431,14 @@ module pau (
             {r_half, r_h0, r_end} <= 3'd0;
             r_quiet <= 8'd0;
             {rs_run, rs_last, r_serr, r_ovr} <= 8'd0;
-            r_sync  <= 32'd0;
-            r_scnt  <= 6'd0;
-            r_synced <= 1'b0;
         end else begin
-            {tq_b, tq_s, tq_m, tq_c, tq_len} <= {tq_b_s, tq_s_s, tq_m_s, tq_c_s, tq_len_s};
+            {tq_b, tq_s, tq_m, tq_c, tq_len, a_cnt} <= {tq_b_s, tq_s_s, tq_m_s, tq_c_s, tq_len_s, a_cnt_s};
             {t_act, t_half, t_bit, t_line, t_mon, t_err} <= {t_act_s, t_half_s, t_bit_s, t_line_s, t_mon_s, t_err_s};
             {t_p, t_last} <= {t_p_s, t_last_s};
             {t_cnt, ts_run, ts_last, ts_pend, ts_pval} <= {t_cnt_s, ts_run_s, ts_last_s, ts_pend_s, ts_pval_s};
             {rq_b, rq_len, r_cnt, r_since, r_quiet} <= {rq_b_s, rq_len_s, r_cnt_s, r_since_s, r_quiet_s};
             {r_prev, r_armed, r_last, r_p} <= {r_prev_s, r_armed_s, r_last_s, r_p_s};
             {r_thr, r_run, r_half, r_h0, r_end} <= {r_thr_s, r_run_s, r_half_s, r_h0_s, r_end_s};
-            {r_sync, r_scnt, r_synced} <= {r_sync_s, r_scnt_s, r_synced_s};
             {rs_run, rs_last, r_serr, r_ovr} <= {rs_run_s, rs_last_s, r_serr_s, r_ovr_s};
             crc_a <= feed ? crc_step(crc_s, feed_bit) : crc_s;
             if (stb)
@@ -463,8 +457,8 @@ module pau (
                         end
                     end
                     if (rx_rise) begin                        // a new reception
-                        rq_len  <= 6'd0;
-                        rq_b    <= 32'd0;
+                        rq_len  <= 5'd0;
+                        rq_b    <= 16'd0;
                         r_armed <= 1'b1;
                         r_cnt   <= 6'd0;
                         r_since <= 8'd0;
@@ -473,9 +467,6 @@ module pau (
                         r_last  <= rx_in;
                         r_p     <= 1'b0;
                         {r_serr, r_ovr} <= 2'b00;
-                        r_sync  <= 32'd0;
-                        r_scnt  <= 6'd0;
-                        r_synced <= 1'b0;
                     end
                     if (rx_rise | ~ctl_val[2])
                         {rs_run, rs_last} <= 6'd0;
@@ -483,31 +474,30 @@ module pau (
                 if (baud_we)
                     baud <= baud_val;
                 if (tx_push & ~t_err_s) begin
-                    tq_b   <= tq_b_s | ({16'd0, tx_bits} << tq_len_s[4:0]);
-                    tq_s   <= tq_s_s | (tx_mask & {32{ctl[2]}});
-                    tq_m   <= tq_m_s | (tx_mask & {32{ctl[4]}});
-                    tq_c   <= tq_c_s | (tx_mask & {32{ctl[3]}});
-                    tq_len <= tq_len_s + {1'b0, tx_n};
+                    tq_b   <= tq_b_s | (tx_bits << tq_len_s);
+                    tq_s   <= tq_s_s | (tx_mask & {16{ctl[2]}});
+                    tq_m   <= tq_m_s | (tx_mask & {16{ctl[4]}});
+                    tq_c   <= tq_c_s | (tx_mask & {16{ctl[3]}});
+                    tq_len <= tq_len_s + tx_n;
                 end
                 if (rx_take) begin
                     rq_b   <= rq_b_s >> rx_n;
-                    rq_len <= rq_len_s - {1'b0, rx_n};
+                    rq_len <= rq_len_s - rx_n;
                 end
                 if (crc_reset) begin
                     crc_a <= cinit;
                     {r_serr, r_ovr} <= 2'b00;
                 end
                 if (crc_append & ~t_err_s) begin
-                    tq_b   <= app_bits;
-                    tq_s   <= app_mask & {32{ctl[2]}};
-                    tq_m   <= app_mask & {32{ctl[4]}};
-                    tq_c   <= 32'd0;
-                    tq_len <= {1'b0, crc_cfg[4:0]} + 6'd1;
+                    a_cnt <= {1'b0, crc_cfg[4:0]} + 6'd1;
+                    a_s   <= ctl[2];
+                    a_m   <= ctl[4];
                 end
                 if (tx_abort) begin
                     ctl[0]  <= 1'b0;
-                    {tq_b, tq_s, tq_m, tq_c} <= 128'd0;
-                    tq_len  <= 6'd0;
+                    {tq_b, tq_s, tq_m, tq_c} <= 64'd0;
+                    tq_len  <= 5'd0;
+                    a_cnt   <= 6'd0;
                     t_act   <= 1'b0;
                     ts_pend <= 1'b0;
                 end
