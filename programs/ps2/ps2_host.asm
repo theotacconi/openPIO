@@ -29,7 +29,7 @@ rbit:
     wait fall in_base 1
     in pins, 1              ; stop
     mov x, isr
-    jmp !pau crc_zero, good
+    jmp !pau crc_ok, good
     set y, 1
     or x, y                 ; parity error
 good:
@@ -54,7 +54,7 @@ tbit:
     out pins, 1
     jmp x--, tbit
     wait fall in_base 1
-    jmp !pau crc_zero, par0
+    jmp !pau crc_ok, par0
     set pins, 3             ; parity 1 (even number of ones)
     jmp stop
 par0:

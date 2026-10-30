@@ -8,7 +8,7 @@
 * Judging: flexibility first (the chip runs protocols it was not designed for), then the protocols shown, what the architecture makes possible, and how it was designed and verified.
 * Beyond the competition: a protocol emulator useful in the real world (robotics, automation, debugging), on silicon and on FPGA. The measure is flexibility: ideally any existing serial protocol can be written for it, and the more protocols the programs prove, the better.
 * Priorities, in order: correctness and timing determinism, closing timing and area, features. Every instruction takes a known number of clocks: no unmodeled latency or branch penalty.
-* The ISA is v2 and frozen until the v2 RTL passes lockstep against the model. Every spec feature is exercised by at least one program; a feature without one gets a program, not silence.
+* The ISA is v3 (revised from v2 by the user on 2026-10-30: the line layer as a complete space of parameters, a 256-word IMEM in pages); it changes only by the user's decision. Every spec feature is exercised by at least one program; a feature without one gets a program, not silence.
 * Sizes that the silicon fixes but an FPGA could grow (number of SMs, FIFO depth) are RTL parameters, set for the chip in its top level.
 * Silicon: 6x4 tiles (8x4 if the organisers release it), 50 MHz (20 ns) nominal: setup closed in the typical and fast corners, hold in all three; the slow corner (1.08 V, 125 C) is reported with the clock it allows (user's decision, 2026-10-29). Measure the cell area of any addition (Yosys + CMOS5L Liberty) before committing to it.
 

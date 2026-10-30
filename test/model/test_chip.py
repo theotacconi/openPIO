@@ -25,16 +25,18 @@ class HostInterface(unittest.TestCase):
     def test_reset_values_and_id(self):
         chip = Chip(2)
         regs = chip.spi(header(OP_REG_RD, 1, WRAP), [0] * 6)[1:]
-        self.assertEqual(regs, [0x3F00, 0, 0x5000, 0xFFFF, 0x0003, 0x0001])   # WRAP .. CLKDIV
+        self.assertEqual(regs, [0xFF00, 0, 0x5000, 0xFFFF, 0x0003, 0x0001])   # WRAP .. CLKDIV
         self.assertEqual(chip.reg_read(0, COND_CFG01), 0x6160)
         self.assertEqual(chip.reg_read(0, COND_CFG23), 0xE400)
-        self.assertEqual(chip.reg_read(0, ID), 0x2250)
+        self.assertEqual(chip.reg_read(0, ID), 0x3250)
 
     def test_burst_imem_and_fifos(self):
         chip = Chip(2)
         prog = assemble("pull block\nmov isr, osr\npush block")
-        chip.spi(header(OP_IMEM_WR, 1, 0), list(prog))
-        self.assertEqual(chip.spi(header(OP_IMEM_RD, 1, 0), [0] * 3)[1:], list(prog))
+        chip.spi(header(OP_IMEM_WR, 1), [0, *prog])        # the first word: the address
+        self.assertEqual(chip.spi(header(OP_IMEM_RD, 1), [0] * 4)[2:], list(prog))
+        chip.spi(header(OP_IMEM_WR, 1), [200, 0x1234])     # page 3
+        self.assertEqual(chip.spi(header(OP_IMEM_RD, 1), [199, 0, 0])[2:], [0, 0x1234])
         chip.reg_write(1, WRAP, 2 << 8)
         chip.spi(header(OP_TX_PUSH, 1), [0x1111, 0x2222, 0x3333, 0x4444, 0x5555])
         chip.reg_write(1, CTRL, 0b10)
@@ -109,9 +111,9 @@ class HostInterface(unittest.TestCase):
     def test_imem_read_only_while_stopped(self):
         chip = Chip(2)
         load(chip, 0, assemble("nop\nend: jmp end"))
-        self.assertEqual(chip.spi(header(OP_IMEM_RD, 0, 1), [0])[1:], [0x0001])
+        self.assertEqual(chip.spi(header(OP_IMEM_RD, 0), [1, 0])[2:], [0x0001])
         chip.reg_write(0, CTRL, 1)
-        self.assertEqual(chip.spi(header(OP_IMEM_RD, 0, 1), [0])[1:], [0], "the port fetches")
+        self.assertEqual(chip.spi(header(OP_IMEM_RD, 0), [1, 0])[2:], [0], "the port fetches")
 
     def test_writes_faster_than_the_sram_wait(self):
         """Two writes in one clock: the second finds the IN register busy."""
@@ -378,9 +380,9 @@ class MultiSm(unittest.TestCase):
         chip.reg_write(0, CTRL, 1)
         chip.step()
         # SM: X == 0, Y == 0, X == Y, OSR empty, TX FIFO empty
-        # PAU: TX idle, RX idle, TX room, CRC == CRC_RES and CRC == 0 (both 0)
-        self.assertEqual(chip.sms[0].x, 0x3757)
-        self.assertEqual(chip.reg_read(0, SM_STATUS), 0x3752)   # X != 0 now: bits 0, 2 drop
+        # PAU: TX idle, RX idle, TX room, CRC == CRC_RES (both 0); no sync word: sync seen 0
+        self.assertEqual(chip.sms[0].x, 0x1757)
+        self.assertEqual(chip.reg_read(0, SM_STATUS), 0x1752)   # X != 0 now: bits 0, 2 drop
 
 
 if __name__ == "__main__":

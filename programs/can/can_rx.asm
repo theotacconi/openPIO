@@ -6,7 +6,7 @@
 .set_pins 0 1            ; TX
 .in_pins 1               ; RX
 .shift_in left
-.pau enc=nrz stuff=5 stuff_mode=equal baud=4
+.pau code=nrz stuff=5 stuff_mode=equal baud=4
 .crc width=15 poly=0x4599
 
     set pins, 1             ; recessive
@@ -29,7 +29,7 @@ next:
     jmp x--, byte
     in pins, 15             ; CRC
     set pau_ctl, rx|stuff   ; the delimiter does not feed the CRC (it comes 2 bit-halves later)
-    jmp !pau crc_zero, bad
+    jmp !pau crc_ok, bad
     in pins, 1              ; CRC delimiter (a stuffed bit before it is still dropped)
     set pins, 0 [7]         ; ACK slot: dominant for one bit, as soon as the delimiter is seen
     set pins, 1

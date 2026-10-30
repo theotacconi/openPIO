@@ -33,7 +33,7 @@ bit:
     jmp next
 end:
     set x, 1
-    jmp pau crc_zero, mark
+    jmp pau crc_ok, mark
     set x, 3
 mark:
     mov isr, x

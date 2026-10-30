@@ -5,16 +5,16 @@ Exact rules: sim/model/ISA.md (instruction set) and sim/model/HOST.md (host inte
 
 ## How it works
 
-openPIO is a programmable I/O co-processor: two state machines (SMs), each a tiny 16-bit processor whose instruction set only moves bits between pins and FIFOs with cycle-exact timing. A host microcontroller loads a program of up to 64 instructions per SM over SPI; the SMs then run serial protocols on up to 14 pins (8 bidirectional) with no software jitter.
+openPIO is a programmable I/O co-processor: two state machines (SMs), each a tiny 16-bit processor whose instruction set only moves bits between pins and FIFOs with cycle-exact timing. A host microcontroller loads programs of up to 256 instructions per SM (four pages of 64) over SPI; the SMs then run serial protocols on up to 14 pins (8 bidirectional) with no software jitter.
 
 - **Datapath per SM:** 16-bit X and Y registers, input and output shift registers (ISR / OSR) with autopush / autopull, an 8-operation ALU (MOV, REV, AND, OR, XOR, XNOR, ADD, SUB). Each instruction has a 5-bit field shared between a delay and side-set pins.
-- **Instructions:** JMP on four programmable conditions (any pin, IRQ flag, register bit, SM or PAU status), WAIT on a level or an edge with an optional timeout, IN, OUT (also to the PC: jump tables), ALU, PUSH / PULL (also to and from the other SM), IRQ and SET.
-- **PAU (Protocol Acceleration Unit):** a serial transmitter and receiver with its own bit timing between OUT / IN PINS and the pins: NRZ, NRZI, Manchester and biphase mark line codes, programmable bit stuffing, a CRC of 1 to 32 bits, clock recovery and a line monitor that stops the transmitter at the first bit another node overrides (CAN, LIN, 1-Wire arbitration).
+- **Instructions:** JMP on four programmable conditions (any pin, IRQ flag, register bit, SM or PAU status) within a page, JMP FAR to the 16 entries of any page, WAIT on a level or an edge with an optional timeout, IN, OUT (also to the PC: jump tables), ALU, PUSH / PULL, IRQ and SET.
+- **PAU (Protocol Acceleration Unit):** a serial transmitter and receiver between OUT / IN PINS and the pins, where a protocol is a point in a space of parameters: the bit clock (its own, an external clock pin, or put out on a second pin, in the four SPI modes), the line code as a table of half-bit actions (NRZ, NRZI, Manchester, differential Manchester, biphase mark and space, Miller / MFM, ...), a second pin (complement or clock), programmable bit stuffing, a sync word the receiver hunts for, a CRC of 1 to 32 bits, clock recovery, and a line monitor that stops the transmitter at the first bit another node overrides (CAN, LIN, 1-Wire arbitration).
 - **Clocking:** a 16-bit integer + 8-bit fractional prescaler per SM (from 50 MHz down to 763 Hz); delays and timeouts count strobes times a delay multiplier.
 - **FIFOs:** 133-word TX (host to SM) and RX (SM to host) FIFOs per SM, in an SRAM.
 - **Two SMs** share the pins (per-SM pin mask), start on the same clock, and signal each other through IRQ flags.
 
-Example programs (UART, Modbus RTU, SPI, I2C, USB low speed, USB Power Delivery BMC, 10BASE-T TX, CAN, LIN, DALI, HDLC, JTAG, SWD, 1-Wire, PS/2, I2S, WS2812B, NEC infrared, quadrature encoder, a logic analyzer, ...) are in `programs/`; `sim/model/asm.py` assembles them.
+Example programs (UART, Modbus RTU, SPI, I2C, USB low speed, USB Power Delivery BMC, 10BASE-T TX, CAN, LIN, DALI, HDLC, JTAG, SWD, 1-Wire, PS/2, I2S, WS2812B, NEC infrared, SENT, ISO 7816 smart cards, MIL-STD-1553B, SD card commands, an MFM disk controller, quadrature encoder, a logic analyzer, ...) are in `programs/`; `sim/model/asm.py` assembles them.
 
 ### SPI host interface
 
@@ -28,10 +28,10 @@ A transaction is CS_N low, a 16-bit header `{Op[15:13], SM[12:11], 0[10:6], Addr
 | 011 | REG_RD | MISO = register `Addr` |
 | 100 | TX_PUSH | TX FIFO <= word (dropped when full) |
 | 101 | RX_POP | MISO = RX FIFO head, popped (0 when empty); `Addr` = words to pop, 1..63 (0 = 64) |
-| 110 | IMEM_WR | instruction `Addr` <= word (SM stopped) |
-| 111 | IMEM_RD | MISO = instruction `Addr` (SM stopped) |
+| 110 | IMEM_WR | the first word is an address A (0..255), then instruction A <= word, A + 1, ... (SM stopped) |
+| 111 | IMEM_RD | the first word is an address A, then MISO = instruction A, A + 1, ... (SM stopped) |
 
-Registers 0x00-0x1F belong to the SM named in the header (configuration, PC, X, Y, CRC, FIFO levels, IRQ flags); 0x20-0x29 are chip registers: CTRL (0x20: [3:0] enable, [7:4] reset, [11:8] single step, one bit per SM), GPIO (open-drain mask), pin state, ID (0x26, reads 0x2250) and the pads of each pin.
+Registers 0x00-0x1F and 0x30-0x33 belong to the SM named in the header (configuration, line code, sync word, PC, X, Y, CRC, FIFO levels, IRQ flags); 0x20-0x29 are chip registers: CTRL (0x20: [3:0] enable, [7:4] reset, [11:8] single step, one bit per SM), GPIO (open-drain mask), pin state, ID (0x26, reads 0x3250) and the pads of each pin.
 
 ### Pins
 
@@ -57,7 +57,7 @@ The instruction set has 16 pin positions; pin k is `uio[k]`, pin 8 + k is `uo_ou
 You need an SPI master on `ui_in[2:0]` / `uo_out[0]`: the RP2040 of the demo board, another microcontroller or a USB-SPI adapter. `sim/model/host.py` is a reference driver.
 
 1. Reset the design (`rst_n` low, then high).
-2. Write the program with IMEM_WR (header 0xC000 for SM 0 from address 0), then its configuration with REG_WR. `asm.py` produces both from one source file.
+2. Write the program with IMEM_WR (header 0xC000 for SM 0, then the start address), then its configuration with REG_WR. `asm.py` produces both from one source file.
 3. Write CTRL: reset and enable the SMs together.
 4. Exchange data with TX_PUSH and RX_POP; poll STATUS or use HOST_IRQ.
 5. Clear the enable bit before loading a new program.
@@ -65,11 +65,11 @@ You need an SPI master on `ui_in[2:0]` / `uo_out[0]`: the RP2040 of the demo boa
 Echo loop on SM 0 (`pull block`, `mov isr, osr`, `push block`): every TX word comes back on RX.
 
 ```
-0xC000  0xC070 0x8085 0xC050   IMEM_WR SM 0 from 0: the three instructions
-0x4001  0x0200                 REG_WR WRAP: wrap_top = 2
-0x4020  0x0011                 REG_WR CTRL: reset and enable SM 0
-0x8000  0x1234                 TX_PUSH
-0xA001  0x0000                 RX_POP of 1 word: MISO returns 0x1234
+0xC000  0x0000 0xC070 0x8085 0xC050   IMEM_WR SM 0 from address 0: the three instructions
+0x4001  0x0200                        REG_WR WRAP: wrap_top = 2
+0x4020  0x0011                        REG_WR CTRL: reset and enable SM 0
+0x8000  0x1234                        TX_PUSH
+0xA001  0x0000                        RX_POP of 1 word: MISO returns 0x1234
 ```
 
 ## External hardware

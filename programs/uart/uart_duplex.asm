@@ -7,7 +7,7 @@
 .out_pins 0
 .set_pins 0 1
 .in_pins 1
-.pau enc=nrz baud=4
+.pau code=nrz baud=4
 
     set pins, 1             ; TX idles high
     set pindirs, 1

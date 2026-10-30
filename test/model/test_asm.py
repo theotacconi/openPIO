@@ -61,7 +61,7 @@ class Errors(unittest.TestCase):
         "duplicate label": "a:\nnop\na:\nnop",
         "set value": "set x, 32",
         "five conditions": "jmp !x 1, 0\njmp !x 2, 0\njmp !x 3, 0\njmp !x 4, 0\njmp !x 5, 0",
-        "too long": "nop\n" * 65,
+        "too long": "nop\n" * 257,
         "pin out of range": ".pin_mask 1, 16",
         "base out of range": ".in_pins 16",
         "condition pin out of range": "jmp !gpio 16, 0",
@@ -70,7 +70,8 @@ class Errors(unittest.TestCase):
         "threshold": ".push_thresh 17",
         "clkdiv": ".clkdiv 65536",
         "start label": ".start nowhere\nnop",
-        "pau encoding": ".pau enc=fm",
+        "pau code": ".pau code=fm",
+        "pau run": ".pau run=6",
         "crc width": ".crc width=33 poly=1",
     }
 
@@ -106,12 +107,12 @@ class Directives(unittest.TestCase):
         self.assertEqual({k: cfg[k] for k in unset}, {k: CONFIG_RESET[k] for k in unset})
 
     def test_jmp_conditions_take_their_slots_first(self):
-        """The WAIT comes first but takes no slot of its own: it uses the JMP's `!se0` slot
+        """The WAIT comes first but takes no slot of its own: it uses the JMP's `!line_00` slot
         with the other polarity (a JMP can only use a slot as it is)."""
-        prog = assemble("wait 0 pau se0\njmp pau rx_ready, 0\njmp pau se1, 0\njmp !pau se0, 0\n"
-                        "jmp pau crc_ok, 0")
-        self.assertEqual(prog.cfg["cond_cfg"], [0x73, 0x79, 0xF8, 0x74])
-        self.assertEqual(prog[0] & 0x3F, 0b100010, "SE0 low = !se0 high: level 1 on slot 2")
+        prog = assemble("wait 0 pau line_00\njmp pau rx_ready, 0\njmp pau line_11, 0\n"
+                        "jmp !pau line_00, 0\njmp pau crc_ok, 0")
+        self.assertEqual(prog.cfg["cond_cfg"], [0x73, 0x7B, 0xF8, 0x74])
+        self.assertEqual(prog[0] & 0x3F, 0b100010, "line_00 low = !line_00 high: level 1 on slot 2")
 
     def test_condition_for_the_host(self):
         self.assertEqual([condition(t) for t in ("!gpio 12", "irq 2", "pau crc_ok", "x_zero")],
@@ -122,7 +123,7 @@ class Directives(unittest.TestCase):
     def test_every_program_assembles(self):
         for path in sorted(Path(__file__).resolve().parents[2].glob("programs/*/*.asm")):
             with self.subTest(path.name):
-                self.assertLessEqual(len(assemble(path.read_text())), 64)
+                self.assertLessEqual(len(assemble(path.read_text())), 256)
 
 
 if __name__ == "__main__":

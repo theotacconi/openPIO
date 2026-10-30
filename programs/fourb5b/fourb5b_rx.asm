@@ -6,7 +6,7 @@
 ; RX FIFO: one symbol a word, in bits 15:11 (the host decodes the K-codes and 4b5b), until the
 ; line is idle for 2 bit times. A frame the RX FIFO could not take (PAU overrun) raises IRQ 0.
 .in_pins 0
-.pau enc=bmc baud=4
+.pau code=bmc baud=4
 .push_thresh 5
 
     jmp start
