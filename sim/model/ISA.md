@@ -19,7 +19,7 @@ openPIO rests on two ideas; everything else is the least that serves them.
    and proved, not only measured.
 2. **A parametric line layer.** Between the SM and the pins, the PAU does the parts of serial
    protocols an SM cannot do in software at speed: line codes, an external bit clock, bit
-   stuffing, sync words, CRCs, clock recovery, monitoring a wired-AND bus. Each is a parameter, not a protocol (the admission rule
+   stuffing, CRCs, clock recovery, monitoring a wired-AND bus. Each is a parameter, not a protocol (the admission rule
    for a PAU feature is in AGENT.md), so a protocol of this family is a point in a small space:
    it can be written, checked, and found from a recording.
 
@@ -224,12 +224,12 @@ The condition is the selected signal, inverted when `Inv` = 1.
 
 | Index | SM status | PAU status | Pair |
 |---|---|---|---|
-| 0 | X == 0 | TX idle: queue empty, last bit sent, pins released if TX is off | X / Y; TX / RX |
+| 0 | X == 0 | TX idle: queue empty, CRC sent, last bit sent, pins released if TX is off | X / Y; TX / RX |
 | 1 | Y == 0 | RX idle: no input edge for 2 bit times | |
-| 2 | X == Y | TX queue has room for 16 bits | |
+| 2 | X == Y | TX queue has room for 16 bits (it is empty) | |
 | 3 | timeout flag | RX queue not empty | |
-| 4 | OSR empty (`osr_count >= pull threshold`) | CRC == CRC_RES | shift registers; CRC, sync |
-| 5 | ISR full (`isr_count >= push threshold`) | sync seen (Receiver) | |
+| 4 | OSR empty (`osr_count >= pull threshold`) | CRC == CRC_RES | shift registers; CRC |
+| 5 | ISR full (`isr_count >= push threshold`) | 0 | |
 | 6 | TX FIFO empty | stuff error (sticky) | FIFOs; RX errors |
 | 7 | RX FIFO full | RX overrun (sticky) | |
 | 8 | a pin changed: `gpio_in` differs from the previous strobe's | line state 0: pins `in_base + 1`, `in_base` are 0, 0 | pins; line states |
@@ -270,7 +270,7 @@ CTRL.RESET compares its values with themselves (no edge).
 ## PAU (Protocol Acceleration Unit)
 
 A serial transmitter and receiver between OUT / IN PINS and the pins, with its own bit timing,
-line code, bit stuffing, sync word and CRC. The program feeds and drains bits and does the
+line code, bit stuffing and CRC. The program feeds and drains bits and does the
 framing; the PAU keeps the line timing exact. Each part is a parameter, not a protocol: the
 table below is the whole space, and a serial protocol of the family is one point in it.
 
@@ -281,18 +281,18 @@ table below is the whole space, and a serial protocol of the family is one point
 | second pin | not driven, the complement of the line, or the bit clock (PIN2) |
 | polarity | INV |
 | stuffing | STUFF_LEN, STUFF_MODE |
-| frame start | the sync word (SYNC, SYNC_LEN) |
 | integrity | the CRC (CRC_CFG, CRC_POLY, CRC_RES) |
 | bus access | push-pull, or open drain (HOST.md GPIO) with the line monitor |
 
 USB: NRZI, complement, stuffing `00` after 6, CRC-16 0x8005. CAN: NRZ, stuffing `10` after 5,
-CRC-15 0x4599, monitor. HDLC: NRZI, stuffing `00` after 5, sync 0x7E, CRC-16 0x1021.
+CRC-15 0x4599, monitor. HDLC: NRZI, stuffing `00` after 5, CRC-16 0x1021.
 10BASE-T: Manchester, complement, CRC-32. SD card commands: NRZ, bit clock, CRC-7 0x09. A
 floppy disk: MFM (Miller).
 
 ```
- OUT PINS -> TX queue (32 bits) -> stuffing -> encoder -> pin out_base (out_base + 1: PIN2)
- IN PINS  <- RX queue (32 bits) <- destuffing <- sync hunt <- decoder <- pin in_base
+ OUT PINS -> TX queue (16 bits) -> stuffing -> encoder -> pin out_base (out_base + 1: PIN2)
+              CRC append ----^
+ IN PINS  <- RX queue (16 bits) <- destuffing <- decoder <- pin in_base
                  CRC: the data bits on the wire, a bit at a time (TX as sent, before
                       stuffing; RX as decoded, after destuffing)
 ```
@@ -314,8 +314,6 @@ Protocol parameters, written by the host (PAU_CFG also gives the reset value of 
 | PAU_CODE | 16 bits | the line code (below); reset value 0x00FA, NRZ |
 | PAU_CFG | [4:0] BAUD | PAU_BAUD after CTRL.RESET |
 | | [6:5] RUN | transition codes: the longest run of half-bits at one level is RUN + 2 (2..5) |
-| | [13:8] SYNC_LEN | sync word length, 1..32 bits (0: no sync) |
-| SYNC | 32 bits | the sync word, its first bit in time in bit 0 (two 16-bit registers) |
 | CRC_CFG | [4:0] | CRC width - 1 (1..32 bits) |
 | | [5] | initial value all ones (0: all zeros) |
 | | [6] | CRC append sends the complement |
@@ -378,8 +376,8 @@ The program controls the PAU with SET PAU_BAUD, SET PAU_CTL and the PAU actions:
     pin's current level, with the previous bit p = 0. Turning it off drains: the queued bits are still sent and the pins
     return to `gpio_out` at the end of the last one (turning it on again before that continues
     the stream).
-  - [1] RX on: turning it on clears the RX queue, the decoder (p = 0), the sticky errors and
-    sync seen, arms the decoder for the first input edge and starts a sync hunt (Receiver).
+  - [1] RX on: turning it on clears the RX queue, the decoder (p = 0) and the sticky errors,
+    and arms the decoder for the first input edge (Receiver).
   - [2] stuffing: TX bits queued while it is on are stuffed (a stuffed bit owed after the last
     of them is still sent); RX removes stuffed bits while it is on.
   - [3] CRC: TX bits queued while it is on feed the CRC when the transmitter starts them; RX
@@ -395,8 +393,11 @@ The program controls the PAU with SET PAU_BAUD, SET PAU_CTL and the PAU actions:
 - **CRC reset**: CRC = initial value; the sticky RX errors (stuff error, overrun) clear: a new
   frame starts. **CRC append**: while the TX queue holds bits it issues again every strobe;
   once the transmitter has started the last of them, every data bit has fed the CRC, and the
-  append queues it (width bits, MSB first, complemented if configured). Appended bits do not
-  feed the CRC and are stuffed and monitored like data.
+  transmitter sends it next, before the bits queued after the append: width bits, MSB first,
+  complemented if configured, stuffed and monitored as PAU_CTL was at the append. They come
+  from the CRC register itself: each one is its top bit, and feeding the CRC its own top bit
+  only shifts it, so the CRC reads 0 once they are sent. Until the last has started, a CRC
+  reset, feed or append issues again every strobe.
 - **TX abort**: discards the TX queue and the bit in progress; the pins return to `gpio_out`
   now and TX is off.
 - **CRC feed** Count: feeds the CRC with the last Count bits shifted into the ISR, oldest first
@@ -441,10 +442,10 @@ code decodes 0. The first bit after an ALIGN start ends no previous bit: its pre
 its first half's. NRZ decodes the sample, NRZI a 1 when it equals the previous sample,
 Manchester the second half's level.
 
-**Sync hunt** (SYNC_LEN > 0): from RX on, decoded bits go nowhere until the last SYNC_LEN of
-them equal SYNC (the oldest in bit 0); then sync seen (PAU status 5) is set until RX is
-turned on again, and the bits after the sync word pass on. Turning RX on again starts a new
-hunt. Without a sync word every bit passes on and sync seen is 0.
+**Sync words** are the program's: it takes decoded bits one at a time and compares the last
+ones in the ISR with the word (`in pins, 1`, `mov x, isr`, `and x, osr` for a word shorter
+than 16 bits, `jmp x!=y`), with the CRC on and reset after each bit, so that the CRC holds the
+bits after the word when it matches. Four instructions a bit: any H >= 2.
 
 Destuffing (stuffing on) drops the bit that follows STUFF_LEN qualifying bits; when that bit is
 not the expected stuffed value the stuff error flag is set and the bit is kept. Either way that
@@ -501,10 +502,10 @@ RX: PUSH -> front (4) -> SRAM ring -> OUT register -> host
   highest-numbered SM wins. The PAU TX of an SM drives its pins over the latch, also within
   PIN_MASK and with the same priority. An instruction sees the latches as they were at the
   start of the clock, with the writes it made itself (side-set) applied.
-- **Pins count mod 16**: IN / OUT PINS and PINDIRS, SET and side-set use consecutive pins
-  upward from their base, pin 15 followed by pin 0, as single pins (`in_base + Index` in
-  conditions, `out_base + 1` and `in_base + 1` of the PAU): `in_base + 15` is the pin below
-  `in_base`.
+- **Pin groups**: IN / OUT PINS and PINDIRS, SET and side-set use consecutive pins upward from
+  their base and stop at pin 15 (bits beyond it are not written and read 0). Single pins
+  (`in_base + Index` in conditions, `out_base + 1` and `in_base + 1` of the PAU) count mod 16:
+  `in_base + 15` is the pin below `in_base`.
 - **Open drain** (chip, HOST.md GPIO; bidirectional pads only): a pin in the open-drain mask
   never drives high: it is pulled low when its direction bit is 1 and its latch bit 0, and floats
   otherwise. Writing 1 to the latch releases the line, 0 pulls it low once the program has
@@ -543,7 +544,7 @@ the latches with each driving PAU TX line over them, then open drain (Multiple s
 
 Independent of the instruction stream, written over SPI (HOST.md): wrap, side-set, pin bases,
 PIN_MASK, MISC (shift directions, push / pull thresholds, 0 = 16), CLKDIV, COND_CFG, PAU_MODE,
-PAU_CODE, PAU_CFG, SYNC, CRC_CFG, CRC_POLY, CRC_RES. With the SM stopped the host can also write PC, X, Y, ISR, OSR and
+PAU_CODE, PAU_CFG, CRC_CFG, CRC_POLY, CRC_RES. With the SM stopped the host can also write PC, X, Y, ISR, OSR and
 the shift counts. A program carries all of it as assembler directives (`sim/model/asm.py`);
 `sim/model/host.py` writes it over SPI.
 
@@ -578,14 +579,16 @@ dimension a parameter and none a protocol, and room for longer programs.
 - An external bit clock (EXT, CPOL, CPHA, the SPI modes) and the bit clock on the second pin:
   PIN2 (not driven, complement, clock) replaces DIFF, and the receiver no longer treats SE0 as
   the end of a frame (a USB program checks the line state).
-- A sync word (SYNC, SYNC_LEN): the receiver hunts for it from RX on and passes on the bits
-  after it; PAU status 5, sync seen, replaces CRC == 0 (CRC == CRC_RES with CRC_RES = 0).
+- PAU status 5, CRC == 0, removed: CRC == CRC_RES with CRC_RES = 0 is the same.
+- The PAU queues hold 16 bits, one word (v2: 32); the CRC append sends the CRC from its
+  register instead of queuing it, so a CRC of up to 32 bits still follows the data.
 - PAU status 8..11 is the line state of pins `in_base + 1`, `in_base` (all four values),
   instead of SE0 and SE1 (USB's names for 0, 0 and 1, 1); the bit error moves to 12.
-- Pin groups count mod 16 like single pins (v2: they stopped at pin 15).
 - PAU_MODE fields rearranged (STUFF_MODE is one bit, the reserved `01` and `11` dropped); BAUD
-  moves to the new PAU_CFG with RUN and SYNC_LEN. HOST.md: SM registers 0x30..0x33 (PAU_CODE,
-  SYNC, PAU_CFG), chip registers 0x20..0x2F.
+  moves to the new PAU_CFG with RUN. HOST.md: SM registers 0x30 and 0x31 (PAU_CODE,
+  PAU_CFG), chip registers 0x20..0x2F.
+- Within 6x4 tiles (2026-10-30), dropped from the proposal: a sync hunt in the receiver (the
+  program hunts: Receiver), pin groups that wrap past pin 15, and PAU queues of 32 bits.
 
 ### Changes from ISA v1
 

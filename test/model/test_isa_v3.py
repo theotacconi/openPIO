@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """ISA v3 checks of the golden model (sim/model/emu.py): the line code table against waveforms
 written from each code's definition, a transmitter looped back into a receiver for every named
-code, the sync hunt, the bit clock (own, on PIN2, and external, in the four SPI modes) and the
+code (Miller found by a sync hunt in software), the bit clock (own, on PIN2, and external, in the four SPI modes) and the
 line states. References come from the definitions, not from the model.
 
     python3 test/model/test_isa_v3.py
@@ -96,12 +96,9 @@ class Loopback(unittest.TestCase):
     """
     RX = """
         .pau code={code} baud=3
-        {sync}
         .crc width=16 poly=0x1021 init=ones
         .push_thresh 8
-            set pau_ctl, rx
-{skip}            pau crc_reset
-            set pau_ctl, rx|crc
+{skip}            mov isr, null
             set x, 4
         byte:
             in pins, 8 auto         ; 3 data bytes and the 2 CRC bytes
@@ -114,10 +111,34 @@ class Loopback(unittest.TestCase):
             jmp end
     """
 
-    def check(self, code: str, preamble: list[int], sync: str = ""):
+    SKIP = """\
+            set pau_ctl, rx
+{take}            pau crc_reset
+            set pau_ctl, rx|crc
+"""
+    # the sync hunt in software: Y = the sync byte, OSR = its mask; the ISR shifts right, so
+    # the last 8 bits decoded are bits 15:8. The CRC, on from the start, is reset after each
+    # bit hunted: it holds the bits after the sync word.
+    HUNT = """\
+            pull block
+            mov y, osr
+            pull block
+            set pau_ctl, rx|crc
+        hunt:
+            in pins, 1
+            pau crc_reset
+            mov x, isr
+            and x, osr
+            jmp x!=y, hunt
+"""
+
+    def check(self, code: str, preamble: list[int], sync: int | None = None):
         tx = StateMachine(assemble(self.TX.format(code=code, pre=len(preamble) - 1)))
-        skip = "" if sync else "            in pins, 8               ; the preamble\n" * len(preamble)
-        rx = StateMachine(assemble(self.RX.format(code=code, sync=sync, skip=skip)))
+        skip = (self.HUNT if sync is not None else self.SKIP.format(
+            take="            in pins, 8               ; the preamble\n" * len(preamble)))
+        rx = StateMachine(assemble(self.RX.format(code=code, skip=skip)))
+        if sync is not None:
+            rx.tx_fifo.extend([sync << 8, 0xFF00])
         data = [0xA7, 0x00, 0xFF]
         words, got = [*preamble, *data], []
         for _ in range(2000):
@@ -139,30 +160,8 @@ class Loopback(unittest.TestCase):
 
     def test_miller_with_a_sync_word(self):
         """Miller has no edge it always makes: a preamble of 0s, then the sync byte 0x5A
-        (sent LSB first), found by the hunt; the receiver passes on the bits after it."""
-        self.check("miller", [0x00, 0x5A], ".sync word=0x5A len=8")
-
-
-class SyncHunt(unittest.TestCase):
-
-    def test_bits_pass_on_after_the_sync_word(self):
-        rx = StateMachine(assemble("""
-            .pau code=nrz baud=2
-            .sync word=0b1011 len=4
-            .push_thresh 8
-                set pau_ctl, rx
-            byte:
-                in pins, 8 auto
-                jmp byte
-        """))
-        # noise, the sync word 1011 in time order from bit 0 (1, 1, 0, 1), then 0xE5 LSB first
-        stream = [1, 1, 1, 0, 1, 1, 0, 0, 1] + [1, 1, 0, 1] + [1, 0, 1, 0, 0, 1, 1, 1] + [0] * 4
-        levels = [b for b in stream for _ in range(4)]          # a bit = 2H = 4 strobes
-        for lv in levels:
-            rx.gpio_in = lv
-            rx.step()
-        self.assertTrue(rx._pau_status(5), "sync seen")
-        self.assertEqual([w >> 8 for w in rx.rx_fifo][:1], [0b11100101], "the byte after it")
+        (sent LSB first), found by the program's hunt; the CRC starts after it."""
+        self.check("miller", [0x00, 0x5A], 0x5A)
 
 
 class BitClock(unittest.TestCase):

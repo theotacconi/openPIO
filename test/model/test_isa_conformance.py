@@ -148,15 +148,15 @@ class Out(unittest.TestCase):
                    out_base=14)
         sm.osr, sm.osr_count = 0b000111_10_10101_01_111, 0      # pc 7, null, isr 0x15, dirs 01, pins 111
         run(sm, 6)
-        self.assertEqual(sm.gpio_out, 0b11 << 14 | 1, "pins 14, 15, then pin 0: mod 16")
+        self.assertEqual(sm.gpio_out, 0b11 << 14, "pins 14, 15; pin 16 does not exist")
         self.assertEqual(sm.pindirs, 0b01 << 14)
         self.assertEqual((sm.isr, sm.isr_count), (0x15, 5))
         self.assertEqual(sm.x, 1, "OUT PC jumped to 7")
 
-    def test_pins_count_mod_16(self):
+    def test_pin_groups_stop_at_pin_15_single_pins_wrap(self):
         sm = sm_of("set pins, 7\nwait 1 in_base 15\nset x, 1" + HALT, set_base=14, set_count=3, in_base=1)
         run(sm, 2)
-        self.assertEqual((sm.gpio_out, sm.x), (0b11 << 14 | 1, 0), "SET wraps to pin 0; in_base + 15 = pin 0")
+        self.assertEqual((sm.gpio_out, sm.x), (0b11 << 14, 0), "SET stops at pin 15; in_base + 15 = pin 0")
         sm.gpio_in = 1
         run(sm, 2)
         self.assertEqual(sm.x, 1)
@@ -309,8 +309,15 @@ class CrcOfTheWire(unittest.TestCase):
         run(sm, 1)
         ref = self.crc8([0xA5 >> i & 1 for i in range(8)])
         self.assertEqual((sm.pc, sm.crc >> 24), (3, ref))
-        self.assertEqual([q[0] for q in sm.tx_queue], [ref >> i & 1 for i in range(7, -1, -1)])
-        self.assertFalse(any(q[3] for q in sm.tx_queue), "appended bits never feed the CRC")
+        self.assertEqual(sm.tx_append, 8, "sent from the CRC register, not the queue")
+        sent = []
+        while sm.tx_append or sm.tx_active:
+            left = sm.tx_append
+            run(sm, 1)
+            if sm.tx_append < left:
+                sent.append(sm.tx_bit)
+        self.assertEqual(sent, [ref >> i & 1 for i in range(7, -1, -1)], "MSB first")
+        self.assertEqual(sm.crc, 0, "shifted out: fed its own top bit, the CRC only shifts")
 
     def test_the_flag_of_a_bit_is_taken_when_queued(self):
         sm = sm_of(self.PAU + "set pau_ctl, tx\nout pins, 8\nset pau_ctl, tx|crc" + HALT)

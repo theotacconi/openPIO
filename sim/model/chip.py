@@ -18,7 +18,7 @@ STATUS, WRAP, SIDESET, PINBASE, PIN_MASK, MISC, CLKDIV, COND_CFG = range(8)
 COND_CFG01, COND_CFG23, PAU_MODE, CRC_CFG, CRC_POLY_LO, CRC_POLY_HI, CRC_RES_LO, CRC_RES_HI = range(8, 16)
 (IRQ, PC, X, Y, ISR, OSR, COUNTS, COND01, COND23, CRC_LO, CRC_HI, SM_STATUS, FIFO_LEVEL, IRQ_MASK,
  CLKDIV_FRAC, TIME) = range(16, 32)
-PAU_CODE, SYNC_LO, SYNC_HI, PAU_CFG = range(0x30, 0x34)
+PAU_CODE, PAU_CFG = 0x30, 0x31
 # Chip registers
 CTRL, GPIO, PINS, PINS_OE, PINS_IN, IRQ_SUM, ID, PADS_OUT, PADS_IN, PADS_BIDIR = range(0x20, 0x2A)
 
@@ -26,7 +26,7 @@ CTRL, GPIO, PINS, PINS_OE, PINS_IN, IRQ_SUM, ID, PADS_OUT, PADS_IN, PADS_BIDIR =
 OP_NOP, OP_REG_WR, OP_REG_RD, OP_TX_PUSH, OP_RX_POP, OP_IMEM_WR, OP_IMEM_RD = 0, 2, 3, 4, 5, 6, 7
 
 ISA_VERSION = 3
-PAU_MODE_BITS, PAU_CFG_BITS, CRC_CFG_BITS = 0x0FFF, 0x3F7F, 0x7F     # the defined fields
+PAU_MODE_BITS, PAU_CFG_BITS, CRC_CFG_BITS = 0x0FFF, 0x007F, 0x7F     # the defined fields
 
 # Pads of the 16 pin positions (HOST.md, Pins), Tiny Tapeout chip: pin k = uio[k] (k < 8), pin 8 + k
 # = uo_out[k] out, ui_in[k] in; uo_out[1:0] and ui_in[2:0] belong to the host.
@@ -51,8 +51,6 @@ def sm_register(sm: StateMachine, addr: int, irq_mask: int) -> int:
         COND_CFG23: lambda: c[3] << 8 | c[2],
         PAU_MODE: lambda: sm.pau_mode,
         PAU_CODE: lambda: sm.pau_code,
-        SYNC_LO: lambda: sm.sync & 0xFFFF,
-        SYNC_HI: lambda: sm.sync >> 16,
         PAU_CFG: lambda: sm.pau_cfg,
         CRC_CFG: lambda: sm.crc_cfg,
         CRC_POLY_LO: lambda: sm.crc_poly & 0xFFFF,
@@ -202,10 +200,6 @@ class Chip:
             sm.pau_mode = val & PAU_MODE_BITS
         elif addr == PAU_CODE:
             sm.pau_code = val & 0xFFFF
-        elif addr == SYNC_LO:
-            sm.sync = sm.sync & 0xFFFF0000 | val & 0xFFFF
-        elif addr == SYNC_HI:
-            sm.sync = sm.sync & 0xFFFF | (val & 0xFFFF) << 16
         elif addr == PAU_CFG:
             sm.pau_cfg = val & PAU_CFG_BITS
         elif addr == CRC_CFG:

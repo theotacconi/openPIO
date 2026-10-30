@@ -266,17 +266,17 @@ class PauErrors(unittest.TestCase):
         self.assertEqual((rx.x >> 14 & 1, rx.y >> 14 & 1), (1, 0), "stuff_err, then cleared")
 
     def test_overrun(self):
-        """Nobody reads the 32-bit queue: the 33rd bit time sets the sticky overrun."""
+        """Nobody reads the 16-bit queue: the 17th bit time sets the sticky overrun."""
         src = """
             .pau code=nrz baud=2
                 set pau_ctl, rx
             end:
                 jmp end
         """
-        rx = self.loop(src, [0xAAAA, 0xAAAA], 120)
-        self.assertEqual((len(rx.rx_queue) < 32, rx._pau_status(7)), (True, 0))
+        rx = self.loop(src, [0xAAAA, 0xAAAA], 50)
+        self.assertEqual((len(rx.rx_queue) < 16, rx._pau_status(7)), (True, 0))
         rx = self.loop(src, [0xAAAA, 0xAAAA], 300)
-        self.assertEqual((len(rx.rx_queue), rx._pau_status(7)), (32, 1))
+        self.assertEqual((len(rx.rx_queue), rx._pau_status(7)), (16, 1))
 
     def test_tx_abort(self):
         sm = StateMachine(assemble("""
@@ -284,8 +284,8 @@ class PauErrors(unittest.TestCase):
                 set pins, 1
                 set pindirs, 1
                 set pau_ctl, tx
-                out pins, 16          ; 0x0000: the line goes low
-                out pins, 16
+                out pins, 8           ; 0x00: the line goes low
+                out pins, 8
                 nop [7]
                 pau tx_abort
             end:
@@ -294,7 +294,7 @@ class PauErrors(unittest.TestCase):
         sm.tx_fifo.extend([0, 0])
         for _ in range(8):
             sm.step()
-        self.assertEqual((sm.pins & 1, len(sm.tx_queue) > 16), (0, True), "sending")
+        self.assertEqual((sm.pins & 1, len(sm.tx_queue) > 8), (0, True), "sending")
         for _ in range(9):
             sm.step()
         self.assertEqual((sm.pins & 1, sm.tx_queue, sm.pau_ctl & 1, sm._pau_status(0)),
