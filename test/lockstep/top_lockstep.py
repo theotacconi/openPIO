@@ -102,13 +102,16 @@ class SpiTop:
             miso.append(got)
         self.cs = 1
         reads += self.step(2 * HALF)
-        if op in (OP_REG_RD, OP_IMEM_RD):
+        if op == OP_REG_RD:
             expect += reads[:len(words)]
+        elif op == OP_IMEM_RD:                           # the first word is the address
+            expect += [None] + reads[:len(words) - 1]
         elif op == OP_RX_POP:
             pops = addr or 64
             expect += reads[:min(pops, len(words))] + [0] * max(0, len(words) - pops)
         for k, (got, want) in enumerate(zip(miso, expect)):
-            self._check(f"MISO word {k} of {hdr:#06x}", got, want)
+            if want is not None:
+                self._check(f"MISO word {k} of {hdr:#06x}", got, want)
         return miso
 
     def _check(self, what: str, rtl: int, model: int) -> None:
@@ -132,7 +135,7 @@ def run(seed: int, cycles: int) -> None:
             count = rng.randrange(1, 6)
             top.spi(header(OP_RX_POP, n, count), [0] * (count + rng.randrange(3)))
         elif k < .65:
-            host.read(n, rng.randrange(0x2A), rng.randrange(1, 4))
+            host.read(n, rng.choice([rng.randrange(0x2A), rng.randrange(0x30, 0x3E)]), rng.randrange(1, 4))
         elif k < .7:
             host.read(n, 0x26)
         else:

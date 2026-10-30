@@ -126,7 +126,7 @@ class Board:
 async def test_id_and_registers(dut):
     board = Board(dut)
     await board.start()
-    assert await board.read(0, ID) == [0x2250], "ISA v2, 2 SMs, 'P'"
+    assert await board.read(0, ID) == [0x3250], "ISA v3, 2 SMs, 'P'"
     model = Chip(2)
     for sm in range(2):
         got = await board.read(sm, 1, 31)                     # registers 0x01..0x1F
@@ -135,7 +135,7 @@ async def test_id_and_registers(dut):
     await board.load(1, "loop:\njmp loop")                      # SM 1 runs only words written
     await board.write(1, WRAP, 0x2A05, 0x0F1B)                 # WRAP, SIDESET
     assert await board.read(1, WRAP, 2) == [0x2A05, 0x0F1B]
-    assert await board.read(0, WRAP) == [0x3F00], "SM 0 untouched"
+    assert await board.read(0, WRAP) == [0xFF00], "SM 0 untouched"
     await board.write(0, CTRL, 0b10)                           # SM 1 runs: STATUS bit 5
     # the header's MISO is the STATUS of the previous transaction's SM
     assert (await board.spi(header(OP_REG_RD, 1, PC), [0]))[0] >> 5 & 1 == 0, "SM 0's"
