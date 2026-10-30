@@ -1,7 +1,6 @@
 """asm.py - Assembler for the openPIO ISA v3 (ISA.md).
 
-Converts assembly text into 16-bit instruction words (max 256, four pages of 64; `.page n`
-continues at page n), plus the per-SM configuration
+Converts assembly text into 16-bit instruction words (max 64), plus the per-SM configuration
 the program needs as Program.cfg: every register host.Host.load writes comes from the source.
 Configuration directives (a field not set keeps its reset value, HOST.md):
 
@@ -39,8 +38,7 @@ class AssemblerError(Exception):
         super().__init__(f"{prefix}{message}{context}")
 
 
-IMEM_WORDS = 256
-PAGE_WORDS = 64
+IMEM_WORDS = 64
 
 # Opcodes (bits [15:13]); JMP and ALU take two (bit 13 = target bit 5 / operation bit 2)
 OP_JMP = 0
@@ -54,7 +52,7 @@ OP_SET = 7
 CT_IRQ, CT_FIFO, CT_WAIT, CT_PAU = 0, 1, 2, 3
 
 # JMP conditions (bits [7:5])
-JC_ALWAYS, JC_FAR, JC_XDEC, JC_YDEC = 0, 1, 2, 3     # 4..7 = COND0..COND3
+JC_ALWAYS, JC_FAR, JC_XDEC, JC_YDEC = 0, 1, 2, 3     # 4..7 = COND0..COND3; FAR reserved: a NOP
 
 # Operand codes (IN source, OUT destination, ALU source / destination)
 R_PINS, R_PINDIRS, R_X, R_Y, R_ISR, R_OSR, R_NULL, R_SPECIAL = range(8)
@@ -101,7 +99,7 @@ NAMED_CONDS = {
 
 # Chip reset values of COND_CFG (ISA.md, Conditions)
 COND_RESET = [0x60, 0x61, 0x00, 0xE4]
-JMP_PLAIN = {"": JC_ALWAYS, "always": JC_ALWAYS, "far": JC_FAR,
+JMP_PLAIN = {"": JC_ALWAYS, "always": JC_ALWAYS,
              "x--": JC_XDEC, "x-": JC_XDEC, "y--": JC_YDEC, "y-": JC_YDEC}
 
 # PAU line codes (ISA.md, Line code): PAU_CODE values
@@ -216,7 +214,7 @@ def disassemble(word: int, side_set_count: int = 0, side_set_opt: bool = False) 
         cond = (args >> 5) & 7
         target = ((opcode & 1) << 5) | (args & 0x1F)
         if cond == JC_FAR:
-            return f"jmp far, {(target >> 4) * PAGE_WORDS + (target & 15)}{suffix}"
+            return f".word {word:#06x}"                     # reserved
         cond_str = ["", "far", "x--", "y--", "cond0", "cond1", "cond2", "cond3"][cond]
         return f"jmp {cond_str + ', ' if cond_str else ''}{target}{suffix}"
     if opcode in (OP_IN, OP_OUT):
@@ -349,7 +347,7 @@ def _kv(parts: list[str], line_num: int, text: str) -> dict[str, str]:
 
 
 def assemble(source_code: str) -> Program:
-    """Assemble source code text into a Program (list of 16-bit words, max 256)."""
+    """Assemble source code text into a Program (list of 16-bit words, max 64)."""
     lines = source_code.splitlines()
     cfg: dict = {}
     prog_name = "program"
@@ -464,13 +462,6 @@ def assemble(source_code: str) -> Program:
                 cfg["wrap_bottom"] = current_addr
             elif directive == ".wrap":
                 cfg["wrap_top"] = max(0, current_addr - 1)
-            elif directive == ".page":
-                n = _parse_int(parts[1], line_num, raw_line) if len(parts) == 2 else -1
-                if not 0 <= n < IMEM_WORDS // PAGE_WORDS or n * PAGE_WORDS < current_addr:
-                    raise AssemblerError(".page <n>: a later page, 0..3", line_num, raw_line)
-                for a in range(current_addr, n * PAGE_WORDS):      # the gap: NOPs
-                    instructions.append((a, "nop", line_num))
-                current_addr = n * PAGE_WORDS
             elif directive == ".word":
                 if len(parts) < 2:
                     raise AssemblerError(".word requires a value argument", line_num, raw_line)
@@ -534,18 +525,7 @@ def assemble(source_code: str) -> Program:
             return t
 
         def jmp(cond_code: int, target: int) -> int:
-            """A JMP to `target`: in this page, or FAR to an entry of any page."""
-            if cond_code == JC_FAR:
-                if target % PAGE_WORDS >= 16:
-                    raise AssemblerError(f"jmp far: {target} is not a page entry (0..15 of a page)",
-                                         line_num, clean)
-                field = (target // PAGE_WORDS) << 4 | target % PAGE_WORDS
-            elif target // PAGE_WORDS != _addr // PAGE_WORDS:
-                raise AssemblerError(f"JMP to {target} leaves page {_addr // PAGE_WORDS}: jmp far",
-                                     line_num, clean)
-            else:
-                field = target % PAGE_WORDS
-            return ((OP_JMP | field >> 5) << 13) | dss | cond_code << 5 | (field & 0x1F)
+            return ((OP_JMP | target >> 5) << 13) | dss | cond_code << 5 | (target & 0x1F)
 
         if mnem == "nop":
             if args:

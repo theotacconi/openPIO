@@ -5,10 +5,10 @@ Exact rules: sim/model/ISA.md (instruction set) and sim/model/HOST.md (host inte
 
 ## How it works
 
-openPIO is a programmable I/O co-processor: two state machines (SMs), each a tiny 16-bit processor whose instruction set only moves bits between pins and FIFOs with cycle-exact timing. A host microcontroller loads programs of up to 256 instructions per SM (four pages of 64) over SPI; the SMs then run serial protocols on up to 14 pins (8 bidirectional) with no software jitter.
+openPIO is a programmable I/O co-processor: two state machines (SMs), each a tiny 16-bit processor whose instruction set only moves bits between pins and FIFOs with cycle-exact timing. A host microcontroller loads programs of up to 64 instructions per SM over SPI; the SMs then run serial protocols on up to 14 pins (8 bidirectional) with no software jitter.
 
 - **Datapath per SM:** 16-bit X and Y registers, input and output shift registers (ISR / OSR) with autopush / autopull, an 8-operation ALU (MOV, REV, AND, OR, XOR, XNOR, ADD, SUB). Each instruction has a 5-bit field shared between a delay and side-set pins.
-- **Instructions:** JMP on four programmable conditions (any pin, IRQ flag, register bit, SM or PAU status) within a page, JMP FAR to the 16 entries of any page, WAIT on a level or an edge with an optional timeout, IN, OUT (also to the PC: jump tables), ALU, PUSH / PULL, IRQ and SET.
+- **Instructions:** JMP on four programmable conditions (any pin, IRQ flag, register bit, SM or PAU status), WAIT on a level or an edge with an optional timeout, IN, OUT (also to the PC: jump tables), ALU, PUSH / PULL, IRQ and SET.
 - **PAU (Protocol Acceleration Unit):** a serial transmitter and receiver between OUT / IN PINS and the pins, where a protocol is a point in a space of parameters: the bit clock (its own, an external clock pin, or put out on a second pin, in the four SPI modes), the line code as a table of half-bit actions (NRZ, NRZI, Manchester, differential Manchester, biphase mark and space, Miller / MFM, ...), a second pin (complement or clock), programmable bit stuffing, a CRC of 1 to 32 bits, clock recovery, and a line monitor that stops the transmitter at the first bit another node overrides (CAN, LIN, 1-Wire arbitration).
 - **Clocking:** a 16-bit integer + 8-bit fractional prescaler per SM (from 50 MHz down to 763 Hz); delays and timeouts count strobes times a delay multiplier.
 - **FIFOs:** 133-word TX (host to SM) and RX (SM to host) FIFOs per SM, in an SRAM.
@@ -28,7 +28,7 @@ A transaction is CS_N low, a 16-bit header `{Op[15:13], SM[12:11], 0[10:6], Addr
 | 011 | REG_RD | MISO = register `Addr` |
 | 100 | TX_PUSH | TX FIFO <= word (dropped when full) |
 | 101 | RX_POP | MISO = RX FIFO head, popped (0 when empty); `Addr` = words to pop, 1..63 (0 = 64) |
-| 110 | IMEM_WR | the first word is an address A (0..255), then instruction A <= word, A + 1, ... (SM stopped) |
+| 110 | IMEM_WR | the first word is an address A (0..63), then instruction A <= word, A + 1, ... (SM stopped) |
 | 111 | IMEM_RD | the first word is an address A, then MISO = instruction A, A + 1, ... (SM stopped) |
 
 Registers 0x00-0x1F, 0x30 and 0x31 belong to the SM named in the header (configuration, line code, PC, X, Y, CRC, FIFO levels, IRQ flags); 0x20-0x29 are chip registers: CTRL (0x20: [3:0] enable, [7:4] reset, [11:8] single step, one bit per SM), GPIO (open-drain mask), pin state, ID (0x26, reads 0x3250) and the pads of each pin.

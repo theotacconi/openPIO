@@ -1,8 +1,7 @@
 # openPIO ISA v3
 
 Revised from ISA v2 (frozen on 2026-10-28) by the user's decisions of 2026-10-30: the line
-layer as a complete space of parameters, and a 256-word IMEM in four pages (History, Changes
-from ISA v2). It changes only by the user's decision, in one commit with HOST.md, the model and
+layer as a complete space of parameters (History, Changes from ISA v2). It changes only by the user's decision, in one commit with HOST.md, the model and
 the tests.
 
 ![openPIO architecture](../../docs/architecture.svg)
@@ -12,7 +11,7 @@ the tests.
 openPIO rests on two ideas; everything else is the least that serves them.
 
 1. **A deterministic state machine.** Each state machine (SM) executes one 16-bit instruction per
-   strobe from its own 256-word memory; CLKDIV (16-bit integer, 8-bit fraction) makes every Nth
+   strobe from its own 64-word memory; CLKDIV (16-bit integer, 8-bit fraction) makes every Nth
    clock a strobe. Every instruction takes a known number of strobes, and nothing on the SM's
    path waits for anything it cannot see: no cache, no shared bus, inputs through a fixed
    2-clock synchronizer. The timing of a program is a property of its text: it can be computed
@@ -40,8 +39,8 @@ only in their least significant bit.
 
 | Opcode | Instruction | Pair |
 |---|---|---|
-| `000` | JMP, target 0..31 in the page | JMP: bit 13 is target bit 5 |
-| `001` | JMP, target 32..63 in the page | |
+| `000` | JMP, target 0..31 | JMP: bit 13 is target bit 5 |
+| `001` | JMP, target 32..63 | |
 | `010` | IN | IN / OUT: opposite |
 | `011` | OUT | |
 | `100` | ALU, operations 0..3 | ALU: bit 13 is operation bit 2 |
@@ -91,16 +90,12 @@ indices 0..7 of the Conditions tables, bit i = index i.
  0   0   A | delay / side-set | C2  C1  C0 | A4  A3  A2  A1  A0
 ```
 
-The IMEM is four pages of 64 words; PC [7:6] is the page. Target = `{A, A4..A0}` is an
-address in the JMP's own page: PC = 64 x page + target. FAR leaves the page: it jumps to entry
-`{A3..A0}` (0..15) of page `{A, A4}`, the first 16 words of every page being its entries. A
-program within one page runs unchanged in any page. The condition is evaluated on the state
-before the instruction.
+Target = `{A, A4..A0}` (0..63). The condition is evaluated on the state before the instruction.
 
 | Code | Condition | Jumps when | Pair |
 |---|---|---|---|
-| `000` | always | always, in the page | near / far |
-| `001` | far | always, to entry `{A3..A0}` of page `{A, A4}` | |
+| `000` | always | always | always / far |
+| `001` | far | reserved: a NOP (delay and side-set apply); FAR of a larger, paged IMEM | |
 | `010` | X-- | X != 0, then X = X - 1 | X-- / Y-- |
 | `011` | Y-- | Y != 0, then Y = Y - 1 | |
 | `100` | COND0 | programmable condition 0 is true | programmable, see Conditions |
@@ -123,7 +118,7 @@ In time order the bits of a `count`-bit value go from bit 0 up when shifting rig
   - Auto (autopush): then, if `isr_count >= push threshold`, pushes the ISR to the RX FIFO
     (ISR and count cleared); on a full RX FIFO it stalls until there is room, then pushes.
 - **OUT**: shifts `count` bits out of the OSR into the destination; `osr_count += count`
-  (max 16). OUT PC jumps to the low 8 bits (any page). OUT PINS feeds the PAU TX queue instead of the
+  (max 16). OUT PC jumps to the low 6 bits. OUT PINS feeds the PAU TX queue instead of the
   pins while the PAU transmitter is on.
   - Auto (autopull): if `osr_count >= pull threshold` when the OUT issues, it stalls until the
     TX FIFO has a word, loads it into the OSR (count cleared) and issues again on the next
@@ -429,8 +424,8 @@ below are in strobes; H = PAU_BAUD.
 - **Transition codes**: half-bits by edge timing. After RX on the decoder waits for an input
   edge: a bit boundary, or with ALIGN mid-bit (the half before it, at the line's level before
   the edge, is then the first bit's first half). Every edge starts a half-bit; with no edge, a
-  further half-bit at the same level is taken 1.5H, 2.5H, ... after the last edge's (an edge
-  up to H / 2 late still starts its half on time). More than RUN + 2 half-bits at one level
+  further half-bit at the same level is taken 1.5H, 2.5H, ... after the last edge's, each 2H
+  (H at the time) after the one before (an edge up to H / 2 late still starts its half on time). More than RUN + 2 half-bits at one level
   end the frame: the decoder drops a bit whose second half has not come and waits for an edge
   again. A bit is decoded when its second half starts.
 
@@ -567,10 +562,9 @@ the shift counts. A program carries all of it as assembler directives (`sim/mode
 Decided by the user on 2026-10-30: the line layer as a complete space of parameters, each
 dimension a parameter and none a protocol, and room for longer programs.
 
-- 256-word IMEM in four pages of 64, 8-bit PC, WRAP and OUT PC. JMP stays in its page (a v2
-  program runs unchanged in any page); condition `001`, never (a NOP like `mov null, null`),
-  is now FAR: one instruction to entry 0..15 of any page. HOST.md: IMEM_WR / IMEM_RD take the
-  address in their first data word.
+- JMP condition `001`, never, is reserved for FAR, the jump between the pages of a larger
+  IMEM: it is still a NOP, and `nop` assembles as `mov null, null`. HOST.md: IMEM_WR /
+  IMEM_RD take the address in their first data word, the same protocol for any IMEM size.
 - The line code is a table, PAU_CODE (the action of each half-bit for the bit and the one
   before it), instead of the ENC field (NRZ, NRZI, Manchester, biphase mark). The four are rows
   of it, with FM0, differential Manchester and Miller (MFM); the receiver has one decoder per
@@ -587,8 +581,10 @@ dimension a parameter and none a protocol, and room for longer programs.
 - PAU_MODE fields rearranged (STUFF_MODE is one bit, the reserved `01` and `11` dropped); BAUD
   moves to the new PAU_CFG with RUN. HOST.md: SM registers 0x30 and 0x31 (PAU_CODE,
   PAU_CFG), chip registers 0x20..0x2F.
-- Within 6x4 tiles (2026-10-30), dropped from the proposal: a sync hunt in the receiver (the
-  program hunts: Receiver), pin groups that wrap past pin 15, and PAU queues of 32 bits.
+- Within 6x4 tiles (2026-10-30), dropped from the proposal: a 256-word IMEM in four pages
+  with JMP FAR (taller SRAM macros did not route; back if the tiles grow), a sync hunt in
+  the receiver (the program hunts: Receiver), pin groups that wrap past pin 15, and PAU
+  queues of 32 bits.
 
 ### Changes from ISA v1
 

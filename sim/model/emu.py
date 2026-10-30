@@ -338,7 +338,8 @@ class StateMachine:
         self.rx_armed = True
         self.rx_cnt = 0
         self.rx_since = 0
-        self.rx_k = self.rx_run = 0                     # transition codes: half-bits since the edge
+        self.rx_run = 0                                 # transition codes: half-bits since the edge
+        self.rx_thr = 0                                 # 2 x rx_since that takes the next one
         self.rx_half = self.rx_h0 = self.rx_end = 0
         self.rx_quiet = 0
         self.rx_last_sample = 0
@@ -658,7 +659,7 @@ class StateMachine:
             return
         if self.rx_armed:                               # transition codes: half-bits by edges
             if edge:
-                self.rx_armed, self.rx_since, self.rx_k, self.rx_run = False, 0, 1, 1
+                self.rx_armed, self.rx_since, self.rx_thr, self.rx_run = False, 0, 3 * h, 1
                 self.rx_end = before
                 if self.pau_mode >> 3 & 1:              # ALIGN: the first edge is mid-bit
                     self.rx_h0 = before
@@ -668,10 +669,10 @@ class StateMachine:
             return
         self.rx_since += 1
         if edge:
-            self.rx_since, self.rx_k, self.rx_run = 0, 1, 1
+            self.rx_since, self.rx_thr, self.rx_run = 0, 3 * h, 1
             self._rx_half(1 - self.rx_half, inp)
-        elif 2 * self.rx_since >= (2 * self.rx_k + 1) * h:     # a half-bit without an edge
-            self.rx_k += 1
+        elif 2 * self.rx_since >= self.rx_thr:          # a half-bit without an edge, 1.5H,
+            self.rx_thr += 2 * h                        # 2.5H, ... after the edge (H as it was)
             self.rx_run += 1
             if self.rx_run > (self.pau_cfg >> 5 & 3) + 2:     # longer than the code's run
                 self.rx_armed = True                    # the frame ends
@@ -901,8 +902,8 @@ class StateMachine:
             target = ((opcode & 1) << 5) | (args & 0x1F)
             if cond == JC_ALWAYS:
                 taken = True
-            elif cond == JC_FAR:                        # entry {A3..A0} of page {A, A4}
-                taken, target = True, (target >> 4) * 64 + (target & 15)
+            elif cond == JC_FAR:                        # reserved (FAR of a paged IMEM): a NOP
+                taken = False
             elif cond == JC_XDEC:
                 taken, self.x = self.x != 0, (self.x - 1) & 0xFFFF
             elif cond == JC_YDEC:
@@ -910,7 +911,7 @@ class StateMachine:
             else:
                 taken = bool(self._cond_value(cond - 4))
             if taken:
-                next_pc = target if cond == JC_FAR else self.pc & 0xC0 | target
+                next_pc = target
 
         elif opcode == OP_IN:
             src, auto = (args >> 5) & 7, (args >> 4) & 1
@@ -979,7 +980,7 @@ class StateMachine:
             elif dest == R_OSR:                         # PAU_BAUD
                 self.pau_baud = val & 0x1F
             elif dest == R_SPECIAL:
-                next_pc = val & 0xFF
+                next_pc = val % IMEM_WORDS
 
         elif opcode >> 1 == OP_ALU >> 1:
             op = ((opcode & 1) << 2) | ((args >> 3) & 3)

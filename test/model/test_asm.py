@@ -30,7 +30,7 @@ class RoundTrip(unittest.TestCase):
                 again = disassemble(assemble(header + text)[0], count, opt)
                 if again != text:
                     self.fail(f"0x{word:04x}: {text!r} -> {again!r} (side_set {count})")
-            self.assertEqual(valid, 61280, "93.5 % of the words are instructions, the rest reserved")
+            self.assertEqual(valid, 59232, "90.4 % of the words are instructions, the rest reserved")
 
     def test_reserved_words_are_nops(self):
         """What the disassembler calls reserved, the emulator executes as a NOP."""

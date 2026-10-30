@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "sim" / "model"))
-from asm import AssemblerError, assemble   # noqa: E402
+from asm import JC_FAR, AssemblerError, assemble, disassemble   # noqa: E402
 from emu import StateMachine      # noqa: E402
 
 
@@ -37,20 +37,16 @@ class Jmp(unittest.TestCase):
         sm = run(StateMachine(assemble("jmp 40\n" + "nop\n" * 40)), 1)
         self.assertEqual(sm.pc, 40)
 
-    def test_pages_and_far(self):
-        """JMP stays in its page; FAR goes to an entry (0..15) of any page; code runs on
-        across a page end."""
-        sm = run(sm_of("jmp far, p1\nnop\n.page 1\np1: jmp 70\nnop\nnop\nnop\nnop\n"
-                       "nop\nnop\njmp far, 0"), 1)
-        self.assertEqual(sm.pc, 64)
-        self.assertEqual(run(sm, 1).pc, 70, "a JMP in page 1 targets page 1")
-        self.assertEqual(run(sm, 2).pc, 0, "FAR to entry 0 of page 0")
-        word = assemble("jmp far, 193\n")[0]
-        self.assertEqual((word >> 13, word >> 5 & 7, word & 0x1F), (1, 1, 0b10001), "page 3, entry 1")
-        sm = run(StateMachine(assemble(".page 1\n" + "nop\n" * 64 + "end: jmp end")), 64 + 64)
-        self.assertEqual(sm.pc, 128, "page 0's NOPs, page 1, then page 2")
-        for bad in ("jmp 64\n", ".page 1\njmp 0\n", "jmp far, 16\n"):
-            with self.subTest(bad), self.assertRaises(AssemblerError):
+    def test_far_is_reserved(self):
+        """Condition 001, FAR of a larger paged IMEM, is reserved: a NOP whose delay applies;
+        the assembler has no `jmp far` and no pages."""
+        word = 1 << 13 | 3 << 8 | JC_FAR << 5 | 5               # target 37, delay 3
+        sm = run(sm_of(f".word {word:#x}\nset x, 1" + HALT), 4)
+        self.assertEqual((sm.pc, sm.x), (1, 0), "no jump, then the delay")
+        self.assertEqual(run(sm, 1).x, 1)
+        self.assertEqual(disassemble(word), f".word {word:#06x}")
+        for bad in ("jmp 64\n", "jmp far, 0\n", ".page 1\nnop\n", "nop\n" * 65):
+            with self.subTest(bad[:12]), self.assertRaises(AssemblerError):
                 assemble(bad)
 
     def test_x_and_y_post_decrement(self):
