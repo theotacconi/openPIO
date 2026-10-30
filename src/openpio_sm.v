@@ -26,7 +26,7 @@ module openpio_sm (
     input  wire        reset,         // CTRL.RESET, at the end of this clock
     output wire        strobe,        // this clock is a strobe of the running SM
 
-    output wire [7:0]  imem_addr,     // read at the clock edge
+    output wire [5:0]  imem_addr,     // read at the clock edge
     input  wire [15:0] instr,         // mem[pc]
 
     input  wire        h_we,          // host register write, at the end of the clock
@@ -63,12 +63,12 @@ module openpio_sm (
     input  wire        in_val,
 
     output reg  [9:0]  irq_mask,      // IRQ_MASK
-    output reg  [7:0]  pc,
+    output reg  [5:0]  pc,
     output reg         stalled
 );
 
     // ================================================================== host configuration
-    reg  [7:0]  wrap_bot, wrap_top;
+    reg  [5:0]  wrap_bot, wrap_top;
     reg  [2:0]  ss_count;
     reg         ss_opt, ss_pdir;
     reg  [3:0]  ss_base, in_base, out_base, set_base;
@@ -89,7 +89,7 @@ module openpio_sm (
     reg  [31:0] crc_poly, crc_res;
 
     // ================================================================== state
-    reg  [7:0]  stage;                // PC after the delay
+    reg  [5:0]  stage;                // PC after the delay
     reg  [15:0] x, y, isr, osr;
     reg  [4:0]  isr_cnt, osr_cnt;
     reg  [9:0]  cnt;                  // delay, WAIT timeout or CRC feed bits left
@@ -133,9 +133,7 @@ module openpio_sm (
     wire [2:0] alu_op  = {instr[13], instr[4:3]};
     wire [2:0] alu_src = instr[2:0];
     wire [1:0] c_type  = instr[7:6];
-    wire [5:0] target  = {instr[13], instr[4:0]};          // in the page; FAR: page, entry
-    wire [7:0] near    = {pc[7:6], target};
-    wire [7:0] far     = {target[5:4], 2'd0, target[3:0]};
+    wire [5:0] target  = {instr[13], instr[4:0]};
     wire [4:0] imm     = instr[4:0];
 
     localparam OP_IN = 3'b010, OP_OUT = 3'b011, OP_CTRL = 3'b110, OP_SET = 3'b111;
@@ -160,7 +158,7 @@ module openpio_sm (
     wire [15:0] ss_m    = {11'd0, ~(5'h1F << ss_count)} << ss_base;
     wire [15:0] ss_v    = ({11'd0, ss_field} << ss_base) & ss_m;
 
-    wire [7:0] pc_next  = (pc == wrap_top) ? wrap_bot : pc + 8'd1;
+    wire [5:0] pc_next  = (pc == wrap_top) ? wrap_bot : pc + 6'd1;
     wire [4:0] pull_at  = {pull_thr == 4'd0, pull_thr};
     wire [4:0] push_at  = {push_thr == 4'd0, push_thr};
     wire [15:0] m_n     = ~(16'hFFFF << n);                 // the low n bits
@@ -282,7 +280,7 @@ module openpio_sm (
     wire [9:0] dly_x = mul_a * dlymul;
 
     // ================================================================== next state
-    reg  [7:0]  pc_d, stage_d;
+    reg  [5:0]  pc_d, stage_d;
     reg  [15:0] x_d, y_d, isr_d, osr_d;
     reg  [4:0]  isr_cnt_d, osr_cnt_d;
     reg  [9:0]  cnt_d;
@@ -292,7 +290,7 @@ module openpio_sm (
     reg  [31:0] cond_d;
     reg  [15:0] wo_m, wo_v, wd_m, wd_v;    // the instruction's pin writes
     reg         done;                       // the instruction completes: PC or a delay
-    reg  [7:0]  done_pc;
+    reg  [5:0]  done_pc;
 
     wire        irq_sel  = instr[3] ? peer_irq[instr[2:0]] : irq[instr[2:0]];
 
@@ -356,17 +354,17 @@ module openpio_sm (
             done = 1'b1;
             if (is_jmp) begin
                 case (f_hi)
-                    3'd0: done_pc = near;
-                    3'd1: done_pc = far;
+                    3'd0: done_pc = target;
+                    3'd1: ;                                     // reserved (FAR): a NOP
                     3'd2: begin
-                        if (x != 16'd0) done_pc = near;
+                        if (x != 16'd0) done_pc = target;
                         x_d = x - 16'd1;
                     end
                     3'd3: begin
-                        if (y != 16'd0) done_pc = near;
+                        if (y != 16'd0) done_pc = target;
                         y_d = y - 16'd1;
                     end
-                    default: if (cond_seen[f_hi[1:0]]) done_pc = near;
+                    default: if (cond_seen[f_hi[1:0]]) done_pc = target;
                 endcase
 
             end else if (op == OP_IN) begin
@@ -415,7 +413,7 @@ module openpio_sm (
                         R_Y:       y_d = out_v;
                         R_ISR:     begin isr_d = out_v; isr_cnt_d = n; end
                         R_OSR:     p_baud_we = 1'b1;                // PAU_BAUD
-                        R_SPECIAL: done_pc = out_v[7:0];
+                        R_SPECIAL: done_pc = out_v[5:0];
                         default:   ;
                     endcase
                 end
@@ -598,7 +596,7 @@ module openpio_sm (
 
     always @(*) begin
         case (h_addr)
-            6'h01: h_rdata = {wrap_top, wrap_bot};
+            6'h01: h_rdata = {2'd0, wrap_top, 2'd0, wrap_bot};
             6'h02: h_rdata = {4'd0, ss_base, 3'd0, ss_pdir, ss_opt, ss_count};
             6'h03: h_rdata = {1'b0, set_count, set_base, out_base, in_base};
             6'h04: h_rdata = pin_mask;
@@ -613,7 +611,7 @@ module openpio_sm (
             6'h0E: h_rdata = crc_res[15:0];
             6'h0F: h_rdata = crc_res[31:16];
             6'h10: h_rdata = {8'd0, irq};
-            6'h11: h_rdata = {8'd0, pc};
+            6'h11: h_rdata = {10'd0, pc};
             6'h12: h_rdata = x;
             6'h13: h_rdata = y;
             6'h14: h_rdata = isr;
@@ -640,11 +638,11 @@ module openpio_sm (
     wire [4:0] hcnt_i = h_wdata[4:0] > 5'd16 ? 5'd16 : h_wdata[4:0];
     wire [4:0] hcnt_o = h_wdata[12:8] > 5'd16 ? 5'd16 : h_wdata[12:8];
 
-    assign imem_addr = (!rst_n | reset) ? 8'd0 : (hw & stopped & h_addr == 6'h11) ? h_wdata[7:0] : pc_d;
+    assign imem_addr = (!rst_n | reset) ? 6'd0 : (hw & stopped & h_addr == 6'h11) ? h_wdata[5:0] : pc_d;
 
     always @(posedge clk) begin
         if (!rst_n) begin
-            wrap_bot <= 8'd0;   wrap_top <= 8'd255;
+            wrap_bot <= 6'd0;   wrap_top <= 6'd63;
             ss_count <= 3'd0;   ss_opt <= 1'b0;   ss_pdir <= 1'b0;   ss_base <= 4'd0;
             in_base <= 4'd0;    out_base <= 4'd0; set_base <= 4'd0;  set_count <= 3'd5;
             pin_mask <= 16'hFFFF;
@@ -658,7 +656,7 @@ module openpio_sm (
             irq_mask <= 10'h0FF;
         end else if (hw) begin
             case (h_addr)
-                6'h01: {wrap_top, wrap_bot} <= h_wdata;
+                6'h01: {wrap_top, wrap_bot} <= {h_wdata[13:8], h_wdata[5:0]};
                 6'h02: {ss_base, ss_pdir, ss_opt, ss_count} <= {h_wdata[11:8], h_wdata[4:0]};
                 6'h03: {set_count, set_base, out_base, in_base} <= h_wdata[14:0];
                 6'h04: pin_mask <= h_wdata;
@@ -680,7 +678,7 @@ module openpio_sm (
         end
 
         if (!rst_n || reset) begin
-            pc <= 8'd0;          stage <= 8'd0;
+            pc <= 6'd0;          stage <= 6'd0;
             x <= 16'd0;          y <= 16'd0;          isr <= 16'd0;        osr <= 16'd0;
             isr_cnt <= 5'd0;     osr_cnt <= 5'd16;
             cnt <= 10'd0;        delaying <= 1'b0;    stalled <= 1'b0;     retry <= 1'b0;
@@ -720,7 +718,7 @@ module openpio_sm (
             end
             if (hw & stopped) begin
                 case (h_addr)
-                    6'h11: pc <= h_wdata[7:0];
+                    6'h11: pc <= h_wdata[5:0];
                     6'h12: x <= h_wdata;
                     6'h13: y <= h_wdata;
                     6'h14: isr <= h_wdata;

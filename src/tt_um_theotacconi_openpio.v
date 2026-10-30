@@ -6,7 +6,7 @@
 //   pin 10 output only (its input pad is CS_N), pins 11..15 output and input, pins 8, 9 none
 //
 // The chip core (openpio.v) is chip.py; its pin inputs pass its 2-flip-flop synchronizer, the
-// SPI pins spi.v's. Each SM has an IMEM (256 x 16) and a FIFO SRAM (256 x 16): imem.v and
+// SPI pins spi.v's. Each SM has an IMEM (64 x 16) and a FIFO SRAM (256 x 16): imem.v and
 // fifo_ram.v here, the IHP macros in the ASIC build (imem_sram.v, fifo_ram_sram.v, same ports).
 
 `default_nettype none
@@ -27,12 +27,12 @@ module tt_um_theotacconi_openpio (
     wire        h_valid;
     wire [2:0]  h_op;
     wire [1:0]  h_sm;
-    wire [7:0]  h_addr;
+    wire [5:0]  h_addr;
     wire [15:0] h_wdata, h_rdata, h_imem_rdata, h_status;
     wire        host_irq, miso;
     wire [15:0] pin_out, pin_oe;
 
-    wire [8*N_SM-1:0]  imem_addr;
+    wire [6*N_SM-1:0]  imem_addr;
     wire [N_SM-1:0]    imem_we, ram_we, ram_re;
     wire [15:0]        imem_wdata;
     wire [16*N_SM-1:0] imem_rdata, ram_wdata, ram_rdata;
@@ -82,9 +82,9 @@ module tt_um_theotacconi_openpio (
     );
 
     // one IMEM and one FIFO SRAM an SM, named for the macro placement (src/config.json)
-    imem u_imem0 (.clk(clk), .addr(imem_addr[7:0]), .we(imem_we[0]), .wdata(imem_wdata),
+    imem u_imem0 (.clk(clk), .addr(imem_addr[5:0]), .we(imem_we[0]), .wdata(imem_wdata),
                   .rdata(imem_rdata[15:0]));
-    imem u_imem1 (.clk(clk), .addr(imem_addr[15:8]), .we(imem_we[1]), .wdata(imem_wdata),
+    imem u_imem1 (.clk(clk), .addr(imem_addr[11:6]), .we(imem_we[1]), .wdata(imem_wdata),
                   .rdata(imem_rdata[31:16]));
     fifo_ram u_ram0 (.clk(clk), .addr(ram_addr[7:0]), .we(ram_we[0]), .re(ram_re[0]),
                      .wdata(ram_wdata[15:0]), .rdata(ram_rdata[15:0]));

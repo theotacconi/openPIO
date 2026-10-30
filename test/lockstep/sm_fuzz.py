@@ -1,8 +1,8 @@
 """Random-program lockstep of one state machine: src/openpio_sm.v (with src/pau.v) against
 sim/model/emu.py's StateMachine, compared every clock.
 
-Random configurations (written through the host registers, as HOST.md) and programs: 256
-random instruction words (four pages), or (half of them) a loop of PAU work (OUT and IN through the PAU with
+Random configurations (written through the host registers, as HOST.md) and programs: 64
+random instruction words, or (half of them) a loop of PAU work (OUT and IN through the PAU with
 autopull and autopush, CRC append and feed, PAU_CTL changes, waits on PAU status) with the TX pin
 looped back to the RX pin, so the line codes, stuffing, monitor and CRC run on real traffic.
 Between clocks random input pins (sometimes the PAU TX pin looped back to
