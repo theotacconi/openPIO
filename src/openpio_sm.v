@@ -85,8 +85,6 @@ module openpio_sm (
     reg  [15:0] p_code;               // PAU_CODE
     reg  [4:0]  p_baud_rst;           // PAU_CFG fields
     reg  [1:0]  p_run;
-    reg  [5:0]  p_sync_len;
-    reg  [31:0] p_sync;               // SYNC
     reg  [6:0]  crc_cfg;
     reg  [31:0] crc_poly, crc_res;
 
@@ -158,15 +156,9 @@ module openpio_sm (
     wire [4:0] delay_f  = ds & ~(5'h1F << dbits);
     wire [4:0] ss_field = ds >> dbits;
     wire       ss_on    = (ss_count != 3'd0) & (~ss_opt | |(ss_field & (5'd1 << ss_count)));
-    // pin groups from a base count mod 16 (ISA.md, Multiple state machines)
-    function [15:0] rotl16;
-        input [15:0] v;
-        input [3:0]  b;
-        rotl16 = (v << b) | (v >> (5'd16 - {1'b0, b}));
-    endfunction
-
-    wire [15:0] ss_m    = rotl16({11'd0, ~(5'h1F << ss_count)}, ss_base);
-    wire [15:0] ss_v    = rotl16({11'd0, ss_field}, ss_base) & ss_m;
+    // pin groups from a base stop at pin 15 (ISA.md, Multiple state machines)
+    wire [15:0] ss_m    = {11'd0, ~(5'h1F << ss_count)} << ss_base;
+    wire [15:0] ss_v    = ({11'd0, ss_field} << ss_base) & ss_m;
 
     wire [7:0] pc_next  = (pc == wrap_top) ? wrap_bot : pc + 8'd1;
     wire [4:0] pull_at  = {pull_thr == 4'd0, pull_thr};
@@ -180,7 +172,8 @@ module openpio_sm (
     wire       pau_tx, pau_rx;    // PAU_CTL TX, RX on
     wire [12:0] pau_status;           // after the PAU step
     wire [7:0]  pau_status_r;         // at the clock start (host reads)
-    wire [5:0] tx_len_s, rx_len_s;
+    wire [4:0] tx_len_s, rx_len_s;
+    wire       crc_busy;
     wire [15:0] rx_bits_s;
     wire       pau_drive, pau_line, pau_clk;
     wire [31:0] crc;
@@ -231,7 +224,7 @@ module openpio_sm (
     // time order: the LSB shifting right, the MSB shifting left)
     wire        in_pau  = f_hi == R_PINS & pau_rx;
     wire [15:0] in_src  = in_pau ? (in_shr ? rx_bits_s : rev16(rx_bits_s) >> (5'd16 - n))
-                        : f_hi == R_PINS    ? rotl16(gpio_in, 4'd0 - in_base)
+                        : f_hi == R_PINS    ? gpio_in >> in_base
                         : f_hi == R_PINDIRS ? time_r
                         : operand(f_hi);
     wire [15:0] in_v    = in_src & m_n;
@@ -271,8 +264,8 @@ module openpio_sm (
         endcase
     end
 
-    wire [15:0] out_m = rotl16(m_n, out_base);
-    wire [15:0] set_m = rotl16({11'd0, ~(5'h1F << set_count)}, set_base);
+    wire [15:0] out_m = m_n << out_base;
+    wire [15:0] set_m = {11'd0, ~(5'h1F << set_count)} << set_base;
 
     // CRC feed: bit r of the last n, r = bits left (n at issue): oldest first
     wire [3:0]  feed_r   = (stalled & ~retry) ? cnt[3:0] : instr[3:0];   // 0: 16
@@ -377,7 +370,7 @@ module openpio_sm (
                 endcase
 
             end else if (op == OP_IN) begin
-                if (in_pau & (rx_len_s < {1'b0, n})) begin
+                if (in_pau & (rx_len_s < n)) begin
                     retry_d = 1'b1;
                 end else begin
                     p_rx_take = in_pau;
@@ -404,7 +397,7 @@ module openpio_sm (
                         osr_cnt_d = 5'd0;
                     end
                     retry_d = 1'b1;
-                end else if (f_hi == R_PINS & pau_tx & (6'd32 - tx_len_s < {1'b0, n})) begin
+                end else if (f_hi == R_PINS & pau_tx & (5'd16 - tx_len_s < n)) begin
                     retry_d = 1'b1;
                 end else begin
                     osr_d = osr_out;
@@ -416,8 +409,8 @@ module openpio_sm (
                     end
                     case (f_hi)
                         R_PINS: if (pau_tx) p_tx_push = 1'b1;
-                                else begin wo_m = out_m; wo_v = rotl16(out_v, out_base); end
-                        R_PINDIRS: begin wd_m = out_m; wd_v = rotl16(out_v, out_base); end
+                                else begin wo_m = out_m; wo_v = out_v << out_base; end
+                        R_PINDIRS: begin wd_m = out_m; wd_v = out_v << out_base; end
                         R_X:       x_d = out_v;
                         R_Y:       y_d = out_v;
                         R_ISR:     begin isr_d = out_v; isr_cnt_d = n; end
@@ -487,10 +480,11 @@ module openpio_sm (
 
             end else if (is_pau) begin
                 case (instr[5:4])
-                    2'd0: p_crc_reset = 1'b1;
-                    2'd1: if (tx_len_s != 6'd0) retry_d = 1'b1; else p_append = 1'b1;
+                    // while the CRC is being sent (an append), only TX abort proceeds
+                    2'd0: if (crc_busy) retry_d = 1'b1; else p_crc_reset = 1'b1;
+                    2'd1: if (crc_busy | (tx_len_s != 5'd0)) retry_d = 1'b1; else p_append = 1'b1;
                     2'd2: p_abort = 1'b1;
-                    default: begin                              // CRC feed, a bit a strobe
+                    default: if (crc_busy) retry_d = 1'b1; else begin   // CRC feed, a bit a strobe
                         p_feed = 1'b1;
                         if (n != 5'd1) begin
                             cnt_d = {5'd0, n} - 10'd1;
@@ -502,8 +496,8 @@ module openpio_sm (
 
             end else if (op == OP_SET) begin
                 case (f_hi)
-                    3'd0: begin wo_m = set_m; wo_v = rotl16({11'd0, imm}, set_base); end
-                    3'd1: begin wd_m = set_m; wd_v = rotl16({11'd0, imm}, set_base); end
+                    3'd0: begin wo_m = set_m; wo_v = {11'd0, imm} << set_base; end
+                    3'd1: begin wd_m = set_m; wd_v = {11'd0, imm} << set_base; end
                     3'd2: x_d = {11'd0, imm};
                     3'd3: y_d = {11'd0, imm};
                     3'd4: dlymul_d = (imm == 5'd0) ? 5'd1 : imm;
@@ -564,8 +558,6 @@ module openpio_sm (
         .sequal     (p_sequal),
         .baud_rst   (p_baud_rst),
         .run        (p_run),
-        .sync_len   (p_sync_len),
-        .sync       (p_sync),
         .crc_cfg    (crc_cfg),
         .crc_poly   (crc_poly),
         .crc_res    (crc_res),
@@ -592,6 +584,7 @@ module openpio_sm (
         .status_r   (pau_status_r),
         .tx_len_s   (tx_len_s),
         .rx_len_s   (rx_len_s),
+        .crc_busy   (crc_busy),
         .rx_bits_s  (rx_bits_s),
         .drive      (pau_drive),
         .line       (pau_line),
@@ -635,9 +628,7 @@ module openpio_sm (
             6'h1E: h_rdata = {8'd0, frac_cfg};
             6'h1F: h_rdata = time_r;
             6'h30: h_rdata = p_code;
-            6'h31: h_rdata = p_sync[15:0];
-            6'h32: h_rdata = p_sync[31:16];
-            6'h33: h_rdata = {2'd0, p_sync_len, 1'b0, p_run, p_baud_rst};
+            6'h31: h_rdata = {9'd0, p_run, p_baud_rst};
             default: h_rdata = 16'd0;
         endcase
     end
@@ -662,8 +653,7 @@ module openpio_sm (
             cond_cfg <= 32'hE400_6160;
             {p_slen, p_sequal, p_cpha, p_cpol, p_ext, p_align, p_inv, p_pin2} <= 12'd0;
             p_code <= 16'h00FA;
-            {p_sync_len, p_run, p_baud_rst} <= 13'd0;
-            p_sync <= 32'd0;
+            {p_run, p_baud_rst} <= 7'd0;
             crc_cfg <= 7'd0;  crc_poly <= 32'd0;  crc_res <= 32'd0;
             irq_mask <= 10'h0FF;
         end else if (hw) begin
@@ -684,9 +674,7 @@ module openpio_sm (
                 6'h1D: irq_mask <= h_wdata[9:0];
                 6'h1E: frac_cfg <= h_wdata[7:0];
                 6'h30: p_code <= h_wdata;
-                6'h31: p_sync[15:0] <= h_wdata;
-                6'h32: p_sync[31:16] <= h_wdata;
-                6'h33: {p_sync_len, p_run, p_baud_rst} <= {h_wdata[13:8], h_wdata[6:0]};
+                6'h31: {p_run, p_baud_rst} <= h_wdata[6:0];
                 default: ;
             endcase
         end

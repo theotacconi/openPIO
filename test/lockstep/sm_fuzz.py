@@ -23,14 +23,13 @@ from netlist import Core, Netlist, build
 import chip
 from chip import (CLKDIV, CLKDIV_FRAC, COND_CFG, CRC_CFG, CRC_POLY_HI, CRC_POLY_LO, CRC_RES_HI,
                   CRC_RES_LO, FIFO_LEVEL, IRQ, IRQ_MASK, MISC, PAU_CFG, PAU_CODE, PAU_MODE, PIN_MASK,
-                  PINBASE, SIDESET, SYNC_HI, SYNC_LO, WRAP, sm_register)
+                  PINBASE, SIDESET, WRAP, sm_register)
 from asm import IMEM_WORDS, PAU_CODES, PAU_STATUS_NAMES, assemble
 from emu import StateMachine
 
 SOURCES = ["pau.v", "openpio_sm.v"]
 CONFIG_REGS = [WRAP, SIDESET, PINBASE, PIN_MASK, MISC, CLKDIV, CLKDIV_FRAC, PAU_MODE, CRC_CFG,
-               CRC_POLY_LO, CRC_POLY_HI, CRC_RES_LO, CRC_RES_HI, IRQ_MASK, PAU_CODE, SYNC_LO,
-               SYNC_HI, PAU_CFG]
+               CRC_POLY_LO, CRC_POLY_HI, CRC_RES_LO, CRC_RES_HI, IRQ_MASK, PAU_CODE, PAU_CFG]
 FIFO_DEPTH = 4
 
 
@@ -96,9 +95,7 @@ def random_sm(rng: random.Random) -> tuple[StateMachine, int]:
         push_thresh=rng.randrange(16), pull_thresh=rng.randrange(16),
         pau_mode=rng.randrange(1 << 16) & chip.PAU_MODE_BITS,
         pau_code=rng.choice([*PAU_CODES.values(), rng.randrange(1 << 16)]),
-        pau_cfg=rng.randrange(1, 4) | rng.randrange(4) << 5
-        | rng.choice([0, 0, rng.randrange(1, 9), rng.randrange(33)]) << 8,
-        sync=rng.randrange(1 << 32),
+        pau_cfg=rng.randrange(1, 4) | rng.randrange(4) << 5,
         crc_cfg=(width - 1) | rng.randrange(4) << 5, crc_poly=rng.randrange(1 << 32),
         crc_res=rng.randrange(1 << 32), pin_mask=rng.choice([0xFFFF, rng.randrange(1 << 16)]))
     if pau:
@@ -186,6 +183,7 @@ def compare_state(c: Core, sm: StateMachine) -> list[str]:
         ("pau_ctl", g("u_pau.ctl"), sm.pau_ctl), ("pau_baud", g("u_pau.baud"), sm.pau_baud),
         ("tx_queue", g("u_pau.tq_len"), len(sm.tx_queue)),
         ("rx_queue", g("u_pau.rq_len"), len(sm.rx_queue)),
+        ("crc_append", g("u_pau.a_cnt"), sm.tx_append),
         ("crc", g("u_pau.crc_a"), sm.crc),
     ]
     if sm.cond_prev is not None:
