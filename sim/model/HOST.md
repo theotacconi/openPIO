@@ -76,10 +76,8 @@ except RX_POP, which pops only its `Addr` words, so a burst never loses one.
 | 0x1E | CLKDIV_FRAC | RW | strobe divider, fraction [7:0] / 256 (0): a strobe every CLKDIV + CLKDIV_FRAC / 256 clocks on average; loaded on RESET |
 | 0x1F | TIME | R | IN TIME: strobes since RESET, 16 bits |
 | 0x30 | PAU_CODE | RW | the line code table (ISA.md, PAU) (0x00FA: NRZ) |
-| 0x31 | SYNC_LO | RW | SYNC [15:0], the first bit in time in bit 0 (0) |
-| 0x32 | SYNC_HI | RW | SYNC [31:16] (0) |
-| 0x33 | PAU_CFG | RW | [4:0] BAUD, [6:5] RUN, [13:8] SYNC_LEN (ISA.md, PAU) (0) |
-| 0x34..0x3F | - | - | reserved: read 0, writes ignored |
+| 0x31 | PAU_CFG | RW | [4:0] BAUD, [6:5] RUN (ISA.md, PAU) (0) |
+| 0x32..0x3F | - | - | reserved: read 0, writes ignored |
 
 RW*: written only while the SM is stopped (CTRL EN = 0); writes while it runs are ignored.
 Bits outside the fields above read 0.

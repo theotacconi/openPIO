@@ -26,7 +26,7 @@ from asm import (
 HEADER = "CYC  | PC | INSTR              | DLY | X      | Y      | OSR    | ISR    | PIN_IN | PIN_OUT | STALL"
 SEPARATOR = "-----+----+--------------------+-----+--------+--------+--------+--------+--------+---------+------"
 
-PAU_QUEUE_BITS = 32
+PAU_QUEUE_BITS = 16                 # each PAU queue holds one word
 PIN_BITS = 16                       # pin positions (ISA.md, Pins)
 PIN_ALL = (1 << PIN_BITS) - 1
 BUFFER_WORDS = 128                  # SRAM part of each FIFO (ISA.md, FIFOs)
@@ -38,10 +38,9 @@ def _act(action: int, level: int) -> int:
     return (level, level ^ 1, 0, 1)[action]
 
 
-def _rotl(v: int, n: int) -> int:
-    """Bits of a pin group from base n: pins count mod 16 (ISA.md, Multiple state machines)."""
-    n &= 15
-    return ((v << n) | (v >> (16 - n))) & PIN_ALL
+def _group(v: int, n: int) -> int:
+    """Bits of a pin group from base n: they stop at pin 15 (ISA.md, Multiple state machines)."""
+    return (v << (n & 15)) & PIN_ALL
 
 
 def _rev16(v: int) -> int:
@@ -146,7 +145,6 @@ class StateMachine:
         pau_mode: int = 0,
         pau_code: int = 0x00FA,
         pau_cfg: int = 0,
-        sync: int = 0,
         crc_cfg: int = 0,
         crc_poly: int = 0,
         crc_res: int = 0,
@@ -179,7 +177,7 @@ class StateMachine:
         self.push_thresh, self.pull_thresh = push_thresh & 0xF, pull_thresh & 0xF
         self.cond_cfg: list[int] = list(cond_cfg if cond_cfg is not None else COND_RESET)
         self.pau_mode, self.crc_cfg = pau_mode & 0xFFFF, crc_cfg & 0xFFFF
-        self.pau_code, self.pau_cfg, self.sync = pau_code & 0xFFFF, pau_cfg & 0xFFFF, sync & 0xFFFFFFFF
+        self.pau_code, self.pau_cfg = pau_code & 0xFFFF, pau_cfg & 0x7F
         self.crc_poly, self.crc_res = crc_poly & 0xFFFFFFFF, crc_res & 0xFFFFFFFF
 
         self.fifo_depth = fifo_depth
@@ -245,8 +243,12 @@ class StateMachine:
         """The PAU drives the TX pins: TX on, or off and still draining its queue."""
         if self.tx_bit_err:
             return False
-        return (bool(self.pau_ctl & 1) or self.tx_active or bool(self.tx_queue)
-                or self.tx_stuff_pending is not None)
+        return (bool(self.pau_ctl & 1) or self.tx_active or self._tx_pending)
+
+    @property
+    def _tx_pending(self) -> bool:
+        """Bits still to start: a stuffed bit owed, CRC bits being appended, the queue."""
+        return self.tx_stuff_pending is not None or self.tx_append > 0 or bool(self.tx_queue)
 
     def pau_override(self, out: int) -> int:
         """Pin values with this SM's PAU TX line on out_base (+1) while it drives, in PIN_MASK."""
@@ -319,6 +321,8 @@ class StateMachine:
         self.pau_baud = self.pau_cfg & 0x1F
         self.crc = self._crc_mask if self.crc_cfg >> 5 & 1 else 0
         self.tx_queue: deque[tuple[int, bool, bool, bool]] = deque()   # (bit, stuffed, monitored, CRC)
+        self.tx_append = 0                              # CRC bits still to send, before the queue
+        self.tx_append_flags = (False, False)           # their stuffing and monitor flags
         self.tx_monitor = False                         # the bit on the line is monitored
         self.tx_bit_err = False
         self.tx_line = 0
@@ -339,8 +343,6 @@ class StateMachine:
         self.rx_quiet = 0
         self.rx_last_sample = 0
         self.rx_p = 0                                   # the previous decoded bit
-        self.rx_synced = False
-        self.rx_sync_reg = self.rx_sync_count = 0
         self.ext_prev = (self.gpio_in >> ((self.in_base + 1) & 15)) & 1
         self.ext_sample = self.ext_shift = False
         self.rx_stuff = _Stuffer()
@@ -503,8 +505,6 @@ class StateMachine:
             self.rx_p = 0
             self.rx_stuff = _Stuffer()
             self.rx_stuff_err = self.rx_overrun = False
-            self.rx_synced = False
-            self.rx_sync_reg = self.rx_sync_count = 0
         if not val & 4:
             self.rx_stuff = _Stuffer()
 
@@ -516,9 +516,16 @@ class StateMachine:
             self.tx_stuff_pending = None
             self.tx_stuff.stuffed(b, mode)
         else:
-            b, stuffed, self.tx_monitor, crc = self.tx_queue.popleft()
-            if crc:
-                self._crc_feed(b)                       # the CRC of the bits on the wire
+            if self.tx_append:                          # the CRC's top bit, shifted out of it:
+                top = self.crc >> 31 & 1                # fed its own top bit, the CRC shifts
+                b = top ^ (self.crc_cfg >> 6 & 1)
+                stuffed, self.tx_monitor = self.tx_append_flags
+                self._crc_feed(top)
+                self.tx_append -= 1
+            else:
+                b, stuffed, self.tx_monitor, crc = self.tx_queue.popleft()
+                if crc:
+                    self._crc_feed(b)                   # the CRC of the bits on the wire
             if stuffed:
                 self.tx_stuff.count(b, mode)
                 self.tx_stuff_pending = self.tx_stuff.due(mode, length)
@@ -534,6 +541,7 @@ class StateMachine:
             return False
         self.tx_bit_err = True
         self.tx_queue.clear()
+        self.tx_append = 0
         self.tx_active = False
         self.tx_stuff_pending = None
         return True
@@ -541,7 +549,7 @@ class StateMachine:
     def _pau_tx_strobe(self) -> None:
         if not self.tx_drives:
             return
-        pending = self.tx_queue or self.tx_stuff_pending is not None
+        pending = self._tx_pending
         if self._ext:                                   # bits from shift edge to sampling edge
             if self.tx_active and self.ext_sample:
                 if self._tx_monitor_fails():
@@ -566,6 +574,7 @@ class StateMachine:
 
     def _tx_abort(self) -> None:
         self.tx_queue.clear()
+        self.tx_append = 0
         self.tx_active = False
         self.tx_stuff_pending = None
         self.pau_ctl &= ~1
@@ -574,19 +583,8 @@ class StateMachine:
         return ((self.gpio_in >> (self.in_base & 15)) & 1) ^ (self.pau_mode >> 2 & 1)
 
     def _rx_decoded(self, b: int) -> None:
-        """A decoded bit: the sync hunt, then destuffing, the CRC and the queue."""
+        """A decoded bit: destuffing, the CRC, the queue."""
         self.rx_p = b
-        n = min(self.pau_cfg >> 8 & 0x3F, 32)
-        if n and not self.rx_synced:
-            mask = (1 << n) - 1
-            self.rx_sync_reg = (self.rx_sync_reg >> 1 | b << (n - 1)) & mask   # oldest in bit 0
-            self.rx_sync_count = min(self.rx_sync_count + 1, 32)
-            self.rx_synced = self.rx_sync_count >= n and self.rx_sync_reg == self.sync & mask
-            return
-        self._rx_bit(b)
-
-    def _rx_bit(self, b: int) -> None:
-        """A bit past the sync hunt: destuff, CRC, queue."""
         on, mode, length = self._stuff_cfg()
         if on:
             due = self.rx_stuff.due(mode, length)
@@ -682,7 +680,7 @@ class StateMachine:
 
     def _pau_status(self, idx: int) -> int:
         if idx == 0:
-            return int(not self.tx_active and not self.tx_queue and self.tx_stuff_pending is None)
+            return int(not self.tx_active and not self._tx_pending)
         if idx == 1:
             return int(not self.pau_ctl & 2 or self.rx_quiet >= 4 * self._half)
         if idx == 2:
@@ -691,8 +689,6 @@ class StateMachine:
             return int(bool(self.rx_queue))
         if idx == 4:
             return int(self.crc == self.crc_res & self._crc_mask)
-        if idx == 5:
-            return int(self.rx_synced)
         if idx == 6:
             return int(self.rx_stuff_err)
         if idx == 7:
@@ -767,8 +763,8 @@ class StateMachine:
     def _apply_sideset(self, side_val: int | None) -> None:
         if side_val is None or self.side_set_count == 0:
             return
-        mask = _rotl((1 << self.side_set_count) - 1, self.sideset_base)
-        val = _rotl(side_val, self.sideset_base) & mask
+        mask = _group((1 << self.side_set_count) - 1, self.sideset_base)
+        val = _group(side_val, self.sideset_base) & mask
         if self.side_set_pindirs:
             self._write_dirs(mask, val)
         else:
@@ -928,7 +924,7 @@ class StateMachine:
                     bits.reverse()
                 val = sum(b << i for i, b in enumerate(bits))
             elif src == R_PINS:
-                val = _rotl(self.gpio_in, 16 - (self.in_base & 15)) & mask
+                val = (self.gpio_in >> (self.in_base & 15)) & mask
             elif src == R_PINDIRS:                      # TIME
                 val = self.time & mask
             else:
@@ -971,9 +967,9 @@ class StateMachine:
                     self.tx_queue.append((b, bool(self.pau_ctl & 4), bool(self.pau_ctl & 16),
                                           bool(self.pau_ctl & 8)))
             elif dest == R_PINS:
-                self._write_pins(_rotl(mask, self.out_base), _rotl(val, self.out_base))
+                self._write_pins(_group(mask, self.out_base), _group(val, self.out_base))
             elif dest == R_PINDIRS:
-                self._write_dirs(_rotl(mask, self.out_base), _rotl(val, self.out_base))
+                self._write_dirs(_group(mask, self.out_base), _group(val, self.out_base))
             elif dest == R_X:
                 self.x = val
             elif dest == R_Y:
@@ -1047,6 +1043,8 @@ class StateMachine:
                                        delay=delay, next_pc=next_pc)
             elif ctype == CT_PAU and (a >> 4 == 3 or not a & 0xF):
                 action = a >> 4
+                if action != 2 and self.tx_append:      # the CRC is busy: it is being sent
+                    return self._stall("RETRY")
                 if action == 3:                         # CRC feed: last bits into the ISR, oldest first
                     n = (a & 0xF) or 16
                     order = list(range(16 - n, 16) if self.shift_in_right else range(n - 1, -1, -1))
@@ -1061,16 +1059,15 @@ class StateMachine:
                 elif action == 1:                       # after the data bits: the CRC is complete
                     if self.tx_queue:
                         return self._stall("RETRY")
-                    out = self.crc ^ (self._crc_mask if self.crc_cfg >> 6 & 1 else 0)
-                    if not self.tx_bit_err:
-                        self.tx_queue.extend((out >> (31 - i) & 1, bool(self.pau_ctl & 4), bool(self.pau_ctl & 16),
-                                              False) for i in range(self._crc_width))
+                    if not self.tx_bit_err:             # sent from the CRC register, MSB first
+                        self.tx_append = self._crc_width
+                        self.tx_append_flags = bool(self.pau_ctl & 4), bool(self.pau_ctl & 16)
 
         else:  # SET
             dest, val = (args >> 5) & 7, args & 0x1F
             if dest in (0, 1):
-                m = _rotl(((1 << self.set_count) - 1) & 0x1F, self.set_base)
-                (self._write_dirs if dest else self._write_pins)(m, _rotl(val, self.set_base))
+                m = _group(((1 << self.set_count) - 1) & 0x1F, self.set_base)
+                (self._write_dirs if dest else self._write_pins)(m, _group(val, self.set_base))
             elif dest == 2:
                 self.x = val
             elif dest == 3:

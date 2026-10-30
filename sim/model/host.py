@@ -64,8 +64,7 @@ class Host:
             self.write(n, COND_CFG, slot << 8 | byte)
         self.write(n, PAU_MODE, c["pau_mode"], c["crc_cfg"], c["crc_poly"] & 0xFFFF,   # .. CRC_RES_HI
                    c["crc_poly"] >> 16, c["crc_res"] & 0xFFFF, c["crc_res"] >> 16)
-        self.write(n, PAU_CODE, c["pau_code"], c["sync"] & 0xFFFF, c["sync"] >> 16,   # .. PAU_CFG
-                   c["pau_cfg"])
+        self.write(n, PAU_CODE, c["pau_code"], c["pau_cfg"])                    # PAU_CODE, PAU_CFG
         if c["open_drain_mask"]:
             self.write(0, GPIO, self.read(0, GPIO)[0] | c["open_drain_mask"])
         self.write(0, CTRL, en | 1 << (4 + n))                   # RESET

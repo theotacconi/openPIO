@@ -66,7 +66,7 @@
 * `scripts/`: `dev.sh` (container), `area.sh` (CMOS5L cell area of a design), `tt_signoff.py` (checks a gds run's logs).
 * `.github/workflows/`: `model` (Python model and programs), `test` (cocotb on the RTL), `gds` (hardening, precheck, gate-level test, sign-off), `docs`.
 
-Status (2026-10-29): ISA v2 frozen (revised from the RTL with the user: the CRC of the wire, MSB-aligned CRC registers, no WAIT edge after RESET, RX_POP's count); the model, the 31 programs, the learner (async serial), the docs and the RTL are v2, the RTL in lockstep with the model. Tag `v2-baseline` (b2f5003) is the first green tape-out candidate: gds, precheck, gate-level test and sign-off pass on 6x4 tiles (429k um2 of cells, 50 MHz typical, 36 MHz slow corner). Next: a proposed ISA revision that makes the line layer a complete parameter space (the user decides which parts), then `test/formal/` and `fpga/`, still v1.
+Status (2026-10-30): ISA v3 on branch `isa-v2-line-space`: the model, the programs, the docs and the RTL are v3, the RTL in lockstep with the model. On 6x4 tiles global routing passes only up to about 312k um2 of synthesized cells (v2: 312k, no overflow; the whole v3 proposal: 348k, 33k overflows; the IMEM macro size does not matter), so v3 left out the receiver's sync hunt (programs hunt), pin groups past pin 15 and 32-bit PAU queues: about 302k. Tag `v2-baseline` (b2f5003) is the first green tape-out candidate: gds, precheck, gate-level test and sign-off pass on 6x4 tiles (429k um2 of cells, 50 MHz typical, 36 MHz slow corner). Next: the v3 gds run, then `test/formal/` and `fpga/`, still v1.
 
 ## Testing
 

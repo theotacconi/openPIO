@@ -14,7 +14,7 @@ Configuration directives (a field not set keeps its reset value, HOST.md):
     .shift_in / .shift_out left|right, .push_thresh / .pull_thresh <1..16>       MISC
     .clkdiv <int> [<frac>]          CLKDIV
     .cond0 .. .cond3 <condition>    COND_CFG (other conditions get a free slot)
-    .pau ..., .sync ..., .crc ...   PAU_MODE, PAU_CODE, PAU_CFG, SYNC, CRC_CFG, CRC_POLY, CRC_RES
+    .pau ..., .crc ...   PAU_MODE, PAU_CODE, PAU_CFG, CRC_CFG, CRC_POLY, CRC_RES
     .wrap_target, .wrap             WRAP
     .start <label>, .x <v>, .y <v>  PC, X, Y preset after RESET
 """
@@ -86,7 +86,7 @@ REV_COND_SRC = ["gpio", "in_base", "irq", "peer_irq", "x", "y", "status", "pau"]
 STATUS_NAMES = {"x_zero": 0, "y_zero": 1, "x_eq_y": 2, "timeout": 3,
                 "osr_empty": 4, "isr_full": 5, "tx_empty": 6, "rx_full": 7, "pins_changed": 8}
 PAU_STATUS_NAMES = {"tx_idle": 0, "rx_idle": 1, "tx_ready": 2, "rx_ready": 3,
-                    "crc_ok": 4, "sync": 5, "stuff_err": 6, "overrun": 7,
+                    "crc_ok": 4, "stuff_err": 6, "overrun": 7,
                     "line_00": 8, "line_01": 9, "line_10": 10, "line_11": 11,   # in_base + 1, in_base
                     "bit_err": 12}
 
@@ -134,7 +134,7 @@ CONFIG_RESET = dict(
     side_set_pindirs=False, sideset_base=0, in_base=0, out_base=0, set_base=0, set_count=5,
     pin_mask=0xFFFF, shift_in_right=True, shift_out_right=True, push_thresh=0, pull_thresh=0,
     clkdiv_int=1, clkdiv_frac=0, cond_cfg=tuple(COND_RESET), pau_mode=0, pau_code=0x00FA,
-    pau_cfg=0, sync=0, crc_cfg=0, crc_poly=0, crc_res=0, open_drain_mask=0, start=0, x=0, y=0)
+    pau_cfg=0, crc_cfg=0, crc_poly=0, crc_res=0, open_drain_mask=0, start=0, x=0, y=0)
 
 
 class Program(list[int]):
@@ -448,17 +448,8 @@ def assemble(source_code: str) -> Program:
                 run = _parse_int(run, line_num, raw_line)
                 if not 2 <= run <= 5:
                     raise AssemblerError("run=2..5", line_num, raw_line)
-                cfg["pau_cfg"] = (cfg.get("pau_cfg", 0) & ~0x7F
-                                  | _parse_int(kv.get("baud", "0"), line_num, raw_line) & 0x1F
+                cfg["pau_cfg"] = (_parse_int(kv.get("baud", "0"), line_num, raw_line) & 0x1F
                                   | (run - 2) << 5)
-            elif directive == ".sync":
-                # .sync word=<value> len=1..32: the word as sent, its first bit in bit 0
-                kv = _kv(parts[1:], line_num, raw_line)
-                n = _parse_int(kv.get("len", "0"), line_num, raw_line)
-                if not 1 <= n <= 32 or "word" not in kv:
-                    raise AssemblerError(".sync word=<value> len=1..32", line_num, raw_line)
-                cfg["sync"] = _parse_int(kv["word"], line_num, raw_line) & ((1 << n) - 1)
-                cfg["pau_cfg"] = cfg.get("pau_cfg", 0) & 0x7F | n << 8
             elif directive == ".crc":
                 kv = _kv(parts[1:], line_num, raw_line)
                 width = _parse_int(kv.get("width", "0"), line_num, raw_line)

@@ -9,18 +9,29 @@
 .out_pins 0              ; write data
 .in_pins 1               ; read data
 .pau code=mfm baud=4
-.sync word=0x8500 len=16 ; 8 zeros, then 0xA1 (1, 0, 1, 0, 0, 0, 0, 1), first bit in bit 0
 .crc width=16 poly=0x1021 init=ones
 .shift_out left
 .shift_in left
 
 command:
-    pull block
+    pull block              ; the command stays in the OSR
     mov x, osr
     jmp x 15, write         ; to the writer's page
-    pau crc_reset           ; read: the CRC from the first bit after the address mark
-    set pau_ctl, rx|crc     ; hunts for the sync word
-    wait 1 pau sync
+    mov isr, null           ; Y = 0x00A1: 8 zeros, then the address mark
+    set y, 0b1010
+    in y, 4
+    set y, 0b0001
+    in y, 4
+    mov y, isr
+    mov isr, null
+    set pau_ctl, rx|crc
+hunt:                       ; the sync hunt: the last 16 bits decoded, in the ISR
+    in pins, 1
+    pau crc_reset           ; after each bit hunted: the CRC starts after the address mark
+    mov x, isr
+    jmp x!=y, hunt
+    mov isr, null
+    mov x, osr
     set y, 2                ; n + 2 bytes with the CRC
     add x, y
 read:

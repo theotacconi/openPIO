@@ -2,7 +2,7 @@
 """MFM disk controller against a reference drive: sectors written are decoded from the write
 line by the drive (every transition on the half-cell grid, the MFM rule at every cell boundary,
 address mark, data, CRC-16/CCITT); a sector the drive plays (gap, zeros, 0xA1, data, CRC) is
-found by the sync hunt and read back with its CRC verdict, a corrupted one too. Two pages: the
+found by a sync hunt in software and read back with its CRC verdict, a corrupted one too. Two pages: the
 writer in page 1, reached and left by JMP FAR. A protocol written after the ISA v3 revision."""
 import random
 import sys
