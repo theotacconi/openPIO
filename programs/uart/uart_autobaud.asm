@@ -7,7 +7,7 @@
 ; RX FIFO: first the 8 bit times in strobes, then each byte in bits 15:8. A stop bit received
 ; low raises IRQ 0.
 .in_pins 0
-.pau enc=nrz
+.pau code=nrz
 
     wait 1 in_base 0        ; an idle line
     wait 0 in_base 0        ; 0x55: the start bit

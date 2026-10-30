@@ -11,7 +11,7 @@
 .out_pins 0
 .set_pins 0 1
 .in_pins 1
-.pau enc=manchester inv baud=8
+.pau code=manchester inv baud=8
 .shift_out left
 .shift_in left
 

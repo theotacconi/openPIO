@@ -7,7 +7,7 @@
 ; The host cancels the frame in progress by setting IRQ 1: the queued bits are dropped at once
 ; (TX abort), the line holds for 9 bit times (the abort: seven 1s or more), then IRQ 0 and the
 ; program stops; the host loads it again (its RESET drops the frame's bytes left in the TX FIFO).
-.pau enc=nrzi stuff=5 baud=4
+.pau code=nrzi stuff=5 baud=4
 .crc width=16 poly=0x1021 init=ones xorout=1 res=0x1D0F
 .out_pins 0
 .set_pins 0 1

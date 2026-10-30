@@ -8,7 +8,7 @@
 .out_pins 0              ; TD+
 .set_pins 0 2            ; TD+, TD-
 .y 0x5555                ; the preamble pattern
-.pau enc=manchester diff baud=2
+.pau code=manchester pin2=complement baud=2
 .crc width=32 poly=0x04C11DB7 init=ones xorout=1
 
     set pindirs, 3

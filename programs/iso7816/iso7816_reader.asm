@@ -37,7 +37,7 @@ rbit:
     jmp x--, rbit
     in pins, 1                  ; parity, at 9.5 ETU
     pau crc_feed, 9             ; even parity: 0
-    jmp pau crc_zero, good
+    jmp pau crc_ok, good
     nop [4]
     set pins, 4 [23]            ; error signal: I/O low from 10.5 ETU, 1.5 ETU
     set pins, 5
@@ -60,7 +60,7 @@ again:
 tbit:
     out pins, 1 [14]
     jmp !status osr_empty, tbit
-    jmp pau crc_zero, even
+    jmp pau crc_ok, even
     set pins, 5 [14]            ; parity 1
     jmp check
 even:

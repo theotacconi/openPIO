@@ -1,4 +1,4 @@
-"""emu.py - Cycle-accurate emulator of one openPIO state machine, ISA v2 (ISA.md).
+"""emu.py - Cycle-accurate emulator of one openPIO state machine, ISA v3 (ISA.md).
 
 step() is one clock. On a strobe (every Nth clock, CLKDIV), in order: the PAU advances (TX line, RX
 sampling), then the SM delays, re-evaluates a stall, or executes the instruction at PC; at the
@@ -17,7 +17,7 @@ import asm
 from asm import (
     CS_GPIO, CS_INBASE, CS_IRQ, CS_PEER, CS_STATUS, CS_XBIT, CS_YBIT,
     COND_RESET, CT_FIFO, CT_IRQ, CT_PAU, CT_WAIT, IMEM_WORDS,
-    JC_ALWAYS, JC_NEVER, JC_XDEC, JC_YDEC,
+    JC_ALWAYS, JC_FAR, JC_XDEC, JC_YDEC,
     OP_ALU, OP_CTRL, OP_IN, OP_JMP, OP_OUT,
     R_ISR, R_OSR, R_PINDIRS, R_PINS, R_SPECIAL, R_X, R_Y,
     disassemble,
@@ -31,6 +31,17 @@ PIN_BITS = 16                       # pin positions (ISA.md, Pins)
 PIN_ALL = (1 << PIN_BITS) - 1
 BUFFER_WORDS = 128                  # SRAM part of each FIFO (ISA.md, FIFOs)
 SRAM_TX_REFILL, SRAM_TX_STORE, SRAM_RX_STORE, SRAM_RX_FETCH = range(4)   # SRAM port requests
+
+
+def _act(action: int, level: int) -> int:
+    """A PAU_CODE action on the line: hold, toggle, 0, 1 (ISA.md, Line code)."""
+    return (level, level ^ 1, 0, 1)[action]
+
+
+def _rotl(v: int, n: int) -> int:
+    """Bits of a pin group from base n: pins count mod 16 (ISA.md, Multiple state machines)."""
+    n &= 15
+    return ((v << n) | (v >> (16 - n))) & PIN_ALL
 
 
 def _rev16(v: int) -> int:
@@ -133,6 +144,9 @@ class StateMachine:
         push_thresh: int = 0,
         pull_thresh: int = 0,
         pau_mode: int = 0,
+        pau_code: int = 0x00FA,
+        pau_cfg: int = 0,
+        sync: int = 0,
         crc_cfg: int = 0,
         crc_poly: int = 0,
         crc_res: int = 0,
@@ -165,6 +179,7 @@ class StateMachine:
         self.push_thresh, self.pull_thresh = push_thresh & 0xF, pull_thresh & 0xF
         self.cond_cfg: list[int] = list(cond_cfg if cond_cfg is not None else COND_RESET)
         self.pau_mode, self.crc_cfg = pau_mode & 0xFFFF, crc_cfg & 0xFFFF
+        self.pau_code, self.pau_cfg, self.sync = pau_code & 0xFFFF, pau_cfg & 0xFFFF, sync & 0xFFFFFFFF
         self.crc_poly, self.crc_res = crc_poly & 0xFFFFFFFF, crc_res & 0xFFFFFFFF
 
         self.fifo_depth = fifo_depth
@@ -240,9 +255,15 @@ class StateMachine:
         line = self.tx_line ^ (self.pau_mode >> 2 & 1)
         val = line << (self.out_base & 15)
         mask = 1 << (self.out_base & 15)
-        if self.pau_mode >> 3 & 1:
-            val |= (1 - line) << ((self.out_base + 1) & 15)
-            mask |= 1 << ((self.out_base + 1) & 15)
+        pin2, second = self.pau_mode & 3, (self.out_base + 1) & 15
+        if pin2 == 1:                                   # the complement of the line
+            val |= (1 - line) << second
+            mask |= 1 << second
+        elif pin2 == 2 and not self._ext:               # the bit clock
+            cpol = self.pau_mode >> 5 & 1
+            clk = cpol ^ (self.pau_mode >> 6 & 1) ^ self.tx_half if self.tx_active else cpol
+            val |= clk << second
+            mask |= 1 << second
         mask &= self.pin_mask
         return (out & ~mask) | (val & mask)
 
@@ -265,7 +286,7 @@ class StateMachine:
 
     def reset(self, pc: int = 0) -> None:
         """CTRL.RESET: SM registers, IRQ flags, FIFOs, PAU; COND = COND_CFG, PAU_BAUD =
-        PAU_MODE.BAUD, CRC = its initial value."""
+        PAU_CFG.BAUD, CRC = its initial value."""
         self.x = self.y = self.isr = self.osr = 0
         self.irq_flags[:] = [False] * 8                 # in place: the peer reads this list
         self.isr_count = 0
@@ -295,7 +316,7 @@ class StateMachine:
         self.history.clear()
         # PAU
         self.pau_ctl = 0
-        self.pau_baud = (self.pau_mode >> 10) & 0x1F
+        self.pau_baud = self.pau_cfg & 0x1F
         self.crc = self._crc_mask if self.crc_cfg >> 5 & 1 else 0
         self.tx_queue: deque[tuple[int, bool, bool, bool]] = deque()   # (bit, stuffed, monitored, CRC)
         self.tx_monitor = False                         # the bit on the line is monitored
@@ -307,14 +328,21 @@ class StateMachine:
         self.tx_bit = 0
         self.tx_stuff = _Stuffer()
         self.tx_stuff_pending: int | None = None
+        self.tx_prev_bit = self.tx_p = 0                # the bit before the one sent, before this
         self.rx_queue: deque[int] = deque()
         self.rx_prev_in = 0
         self.rx_armed = True
         self.rx_cnt = 0
         self.rx_since = 0
+        self.rx_k = self.rx_run = 0                     # transition codes: half-bits since the edge
+        self.rx_half = self.rx_h0 = self.rx_end = 0
         self.rx_quiet = 0
-        self.rx_mid = False
         self.rx_last_sample = 0
+        self.rx_p = 0                                   # the previous decoded bit
+        self.rx_synced = False
+        self.rx_sync_reg = self.rx_sync_count = 0
+        self.ext_prev = (self.gpio_in >> ((self.in_base + 1) & 15)) & 1
+        self.ext_sample = self.ext_shift = False
         self.rx_stuff = _Stuffer()
         self.rx_stuff_err = False
         self.rx_overrun = False
@@ -433,7 +461,29 @@ class StateMachine:
 
     def _stuff_cfg(self) -> tuple[bool, int, int]:
         on = bool(self.pau_ctl & 4)
-        return on, bool(self.pau_mode >> 9 & 1), ((self.pau_mode >> 4) & 0xF) or 16   # [8] reserved
+        return on, self.pau_mode >> 7 & 1, (self.pau_mode >> 8 & 0xF) or 16
+
+    def _action(self, half: int, b: int, p: int) -> int:
+        """PAU_CODE's action at the start of a half-bit, for bit b after bit p (ISA.md, Line code)."""
+        return self.pau_code >> 2 * (4 * half + 2 * b + p) & 3
+
+    @property
+    def _level_code(self) -> bool:
+        """Every second-half action holds: the line changes only at bit boundaries."""
+        return not self.pau_code >> 8
+
+    @property
+    def _ext(self) -> bool:
+        return bool(self.pau_mode >> 4 & 1)
+
+    def _clock_edges(self) -> None:
+        """The external clock's sampling and shift edges this strobe (ISA.md, Bit timing)."""
+        clk = (self.gpio_in >> ((self.in_base + 1) & 15)) & 1
+        edge, self.ext_prev = clk != self.ext_prev, clk
+        cpol, cpha = self.pau_mode >> 5 & 1, self.pau_mode >> 6 & 1
+        rising_samples = cpol == cpha
+        self.ext_sample = edge and clk == rising_samples
+        self.ext_shift = edge and clk != rising_samples
 
     def _set_pau_ctl(self, val: int) -> None:
         draining = self.tx_drives
@@ -444,19 +494,22 @@ class StateMachine:
             self.tx_line = ((self.gpio_out >> (self.out_base & 15)) & 1) ^ (self.pau_mode >> 2 & 1)
             self.tx_stuff = _Stuffer()
             self.tx_stuff_pending = None
+            self.tx_prev_bit = 0
         if val & 2 and not old & 2:
             self.rx_queue.clear()
             self.rx_armed = True
-            self.rx_mid = False
             self.rx_cnt = self.rx_since = self.rx_quiet = 0
             self.rx_prev_in = self.rx_last_sample = self._rx_input()
+            self.rx_p = 0
             self.rx_stuff = _Stuffer()
             self.rx_stuff_err = self.rx_overrun = False
+            self.rx_synced = False
+            self.rx_sync_reg = self.rx_sync_count = 0
         if not val & 4:
             self.rx_stuff = _Stuffer()
 
     def _tx_start_bit(self) -> None:
-        """Start the next bit (a stuffed one first) and drive its first half."""
+        """Start the next bit (a stuffed one first) with its first-half action."""
         _, mode, length = self._stuff_cfg()
         if self.tx_stuff_pending is not None:
             b = self.tx_stuff_pending                   # monitored like the bit before it
@@ -471,40 +524,44 @@ class StateMachine:
                 self.tx_stuff_pending = self.tx_stuff.due(mode, length)
             else:
                 self.tx_stuff = _Stuffer()
+        self.tx_p, self.tx_prev_bit = self.tx_prev_bit, b
         self.tx_bit, self.tx_half, self.tx_cnt, self.tx_active = b, 0, self._half, True
-        enc = self.pau_mode & 3
-        if enc == 0:
-            self.tx_line = b
-        elif enc == 1:
-            self.tx_line ^= 1 - b
-        elif enc == 2:
-            self.tx_line = 1 - b
-        else:
-            self.tx_line ^= 1
+        self.tx_line = _act(self._action(0, b, self.tx_p), self.tx_line)
+
+    def _tx_monitor_fails(self) -> bool:
+        """Monitor: a monitored bit read back different makes the PAU quiet until TX on."""
+        if not self.tx_monitor or self._rx_input() == self.tx_line:
+            return False
+        self.tx_bit_err = True
+        self.tx_queue.clear()
+        self.tx_active = False
+        self.tx_stuff_pending = None
+        return True
 
     def _pau_tx_strobe(self) -> None:
         if not self.tx_drives:
+            return
+        pending = self.tx_queue or self.tx_stuff_pending is not None
+        if self._ext:                                   # bits from shift edge to sampling edge
+            if self.tx_active and self.ext_sample:
+                if self._tx_monitor_fails():
+                    return
+                self.tx_active = False
+            if not self.tx_active and pending and (self.ext_shift or not self.pau_mode >> 6 & 1):
+                self._tx_start_bit()
             return
         if self.tx_active:
             self.tx_cnt -= 1
             if self.tx_cnt:
                 return
             if self.tx_half == 0:                       # middle of the bit
-                if self.tx_monitor and self._rx_input() != self.tx_line:
-                    self.tx_bit_err = True              # quiet until TX is turned on again
-                    self.tx_queue.clear()
-                    self.tx_active = False
-                    self.tx_stuff_pending = None
+                if self._tx_monitor_fails():
                     return
                 self.tx_half, self.tx_cnt = 1, self._half
-                enc = self.pau_mode & 3
-                if enc == 2:
-                    self.tx_line = self.tx_bit
-                elif enc == 3 and self.tx_bit:
-                    self.tx_line ^= 1
+                self.tx_line = _act(self._action(1, self.tx_bit, self.tx_p), self.tx_line)
                 return
             self.tx_active = False                      # end of the bit
-        if self.tx_queue or self.tx_stuff_pending is not None:
+        if pending:
             self._tx_start_bit()
 
     def _tx_abort(self) -> None:
@@ -516,8 +573,20 @@ class StateMachine:
     def _rx_input(self) -> int:
         return ((self.gpio_in >> (self.in_base & 15)) & 1) ^ (self.pau_mode >> 2 & 1)
 
+    def _rx_decoded(self, b: int) -> None:
+        """A decoded bit: the sync hunt, then destuffing, the CRC and the queue."""
+        self.rx_p = b
+        n = min(self.pau_cfg >> 8 & 0x3F, 32)
+        if n and not self.rx_synced:
+            mask = (1 << n) - 1
+            self.rx_sync_reg = (self.rx_sync_reg >> 1 | b << (n - 1)) & mask   # oldest in bit 0
+            self.rx_sync_count = min(self.rx_sync_count + 1, 32)
+            self.rx_synced = self.rx_sync_count >= n and self.rx_sync_reg == self.sync & mask
+            return
+        self._rx_bit(b)
+
     def _rx_bit(self, b: int) -> None:
-        """A decoded bit: destuff, CRC, queue."""
+        """A bit past the sync hunt: destuff, CRC, queue."""
         on, mode, length = self._stuff_cfg()
         if on:
             due = self.rx_stuff.due(mode, length)
@@ -535,20 +604,49 @@ class StateMachine:
         else:
             self.rx_queue.append(b)
 
+    def _rx_sample(self, level: int) -> None:
+        """Level codes: a sample is a bit, decoded against the previous sample."""
+        b = int(_act(self._action(0, 1, self.rx_p), self.rx_last_sample) == level)
+        self.rx_last_sample = level
+        self._rx_decoded(b)
+
+    def _symbol(self, b: int, end: int) -> tuple[int, int]:
+        """The two half-bit levels PAU_CODE gives bit b after a bit that ended at `end`."""
+        l0 = _act(self._action(0, b, self.rx_p), end)
+        return l0, _act(self._action(1, b, self.rx_p), l0)
+
+    def _rx_half(self, half: int, level: int) -> None:
+        """Transition codes: a half-bit starts at `level`; a bit is decoded with its second,
+        and halves that are no bit's (a code violation) end the frame."""
+        self.rx_half = half
+        if half == 0:
+            self.rx_h0 = level
+            return
+        seen = (self.rx_h0, level)
+        if seen == self._symbol(1, self.rx_end):
+            b = 1
+        elif seen == self._symbol(0, self.rx_end):
+            b = 0
+        else:
+            self.rx_armed = True
+            return
+        self.rx_end = level
+        self._rx_decoded(b)
+
     def _pau_rx_strobe(self) -> None:
         if not self.pau_ctl & 2:
             return
         inp = self._rx_input()
-        if self.pau_mode >> 3 & 1 and self._pau_status(8):   # DIFF: SE0 ends the frame
-            self.rx_prev_in, self.rx_armed, self.rx_quiet = inp, True, 0
-            return
-        edge = inp != self.rx_prev_in
-        rising = edge and inp == 1
+        before = self.rx_prev_in
+        edge = inp != before
         self.rx_prev_in = inp
         self.rx_quiet = 0 if edge else self.rx_quiet + 1
         h = self._half
-        enc = self.pau_mode & 3
-        if enc < 2:                                     # NRZ / NRZI: sample mid-bit
+        if self._ext:                                   # a bit at each sampling edge
+            if self.ext_sample:
+                self._rx_sample(inp)
+            return
+        if self._level_code:                            # sample mid-bit
             if edge:
                 self.rx_armed, self.rx_cnt = False, h
                 return
@@ -558,35 +656,29 @@ class StateMachine:
             if self.rx_cnt:
                 return
             self.rx_cnt = 2 * h
-            if enc == 0:
-                self._rx_bit(inp)
-            else:
-                self._rx_bit(1 if inp == self.rx_last_sample else 0)
-            self.rx_last_sample = inp
+            self._rx_sample(inp)
             return
-        if self.rx_armed:                               # Manchester / biphase mark: edge timing
+        if self.rx_armed:                               # transition codes: half-bits by edges
             if edge:
-                self.rx_armed, self.rx_since, self.rx_mid = False, 0, False
-                if enc == 2:
-                    self._rx_bit(1 if rising else 0)
+                self.rx_armed, self.rx_since, self.rx_k, self.rx_run = False, 0, 1, 1
+                self.rx_end = before
+                if self.pau_mode >> 3 & 1:              # ALIGN: the first edge is mid-bit
+                    self.rx_h0 = before
+                    self._rx_half(1, inp)
+                else:
+                    self._rx_half(0, inp)
             return
         self.rx_since += 1
-        t2 = 2 * self.rx_since                          # compare in half-H units
         if edge:
-            if enc == 2:
-                if 3 * h <= t2 <= 5 * h:
-                    self._rx_bit(1 if rising else 0)
-                    self.rx_since = 0
-            elif h <= t2 < 3 * h:
-                self.rx_mid = True
-            elif 3 * h <= t2 <= 5 * h:
-                self._rx_bit(1 if self.rx_mid else 0)
-                self.rx_since, self.rx_mid = 0, False
-            return
-        if t2 > 5 * h:                                  # no edge in time: end of frame
-            if enc == 3:
-                self._rx_bit(1 if self.rx_mid else 0)   # the last bit has no closing boundary
-            self.rx_armed = True
+            self.rx_since, self.rx_k, self.rx_run = 0, 1, 1
+            self._rx_half(1 - self.rx_half, inp)
+        elif 2 * self.rx_since >= (2 * self.rx_k + 1) * h:     # a half-bit without an edge
+            self.rx_k += 1
+            self.rx_run += 1
+            if self.rx_run > (self.pau_cfg >> 5 & 3) + 2:     # longer than the code's run
+                self.rx_armed = True                    # the frame ends
+            else:
+                self._rx_half(1 - self.rx_half, inp)
 
     def _pau_status(self, idx: int) -> int:
         if idx == 0:
@@ -600,17 +692,15 @@ class StateMachine:
         if idx == 4:
             return int(self.crc == self.crc_res & self._crc_mask)
         if idx == 5:
-            return int(self.crc == 0)
+            return int(self.rx_synced)
         if idx == 6:
             return int(self.rx_stuff_err)
         if idx == 7:
             return int(self.rx_overrun)
-        pair = (self.gpio_in >> (self.in_base & 15)) & 1, (self.gpio_in >> ((self.in_base + 1) & 15)) & 1
-        if idx == 8:
-            return int(pair == (0, 0))
-        if idx == 9:
-            return int(pair == (1, 1))
-        if idx == 10:
+        if 8 <= idx <= 11:                              # line state of in_base + 1, in_base
+            pair = ((self.gpio_in >> ((self.in_base + 1) & 15)) & 1) << 1 | (self.gpio_in >> (self.in_base & 15)) & 1
+            return int(pair == idx - 8)
+        if idx == 12:
             return int(self.tx_bit_err)
         return 0
 
@@ -677,8 +767,8 @@ class StateMachine:
     def _apply_sideset(self, side_val: int | None) -> None:
         if side_val is None or self.side_set_count == 0:
             return
-        mask = ((1 << self.side_set_count) - 1) << self.sideset_base
-        val = (side_val << self.sideset_base) & mask & PIN_ALL
+        mask = _rotl((1 << self.side_set_count) - 1, self.sideset_base)
+        val = _rotl(side_val, self.sideset_base) & mask
         if self.side_set_pindirs:
             self._write_dirs(mask, val)
         else:
@@ -718,6 +808,7 @@ class StateMachine:
             self.clkdiv_counter = 0
 
         self.strobed = True
+        self._clock_edges()
         self._pau_tx_strobe()
         self._pau_rx_strobe()
         self._cond_seen = [self._cond_value(s) for s in range(4)]   # what this strobe sees
@@ -811,10 +902,11 @@ class StateMachine:
 
         if opcode >> 1 == OP_JMP >> 1:
             cond = (args >> 5) & 7
+            target = ((opcode & 1) << 5) | (args & 0x1F)
             if cond == JC_ALWAYS:
                 taken = True
-            elif cond == JC_NEVER:
-                taken = False
+            elif cond == JC_FAR:                        # entry {A3..A0} of page {A, A4}
+                taken, target = True, (target >> 4) * 64 + (target & 15)
             elif cond == JC_XDEC:
                 taken, self.x = self.x != 0, (self.x - 1) & 0xFFFF
             elif cond == JC_YDEC:
@@ -822,7 +914,7 @@ class StateMachine:
             else:
                 taken = bool(self._cond_value(cond - 4))
             if taken:
-                next_pc = ((opcode & 1) << 5) | (args & 0x1F)
+                next_pc = target if cond == JC_FAR else self.pc & 0xC0 | target
 
         elif opcode == OP_IN:
             src, auto = (args >> 5) & 7, (args >> 4) & 1
@@ -836,7 +928,7 @@ class StateMachine:
                     bits.reverse()
                 val = sum(b << i for i, b in enumerate(bits))
             elif src == R_PINS:
-                val = (self.gpio_in >> (self.in_base & 15)) & mask
+                val = _rotl(self.gpio_in, 16 - (self.in_base & 15)) & mask
             elif src == R_PINDIRS:                      # TIME
                 val = self.time & mask
             else:
@@ -879,9 +971,9 @@ class StateMachine:
                     self.tx_queue.append((b, bool(self.pau_ctl & 4), bool(self.pau_ctl & 16),
                                           bool(self.pau_ctl & 8)))
             elif dest == R_PINS:
-                self._write_pins(mask << (self.out_base & 15), val << (self.out_base & 15))
+                self._write_pins(_rotl(mask, self.out_base), _rotl(val, self.out_base))
             elif dest == R_PINDIRS:
-                self._write_dirs(mask << (self.out_base & 15), val << (self.out_base & 15))
+                self._write_dirs(_rotl(mask, self.out_base), _rotl(val, self.out_base))
             elif dest == R_X:
                 self.x = val
             elif dest == R_Y:
@@ -891,7 +983,7 @@ class StateMachine:
             elif dest == R_OSR:                         # PAU_BAUD
                 self.pau_baud = val & 0x1F
             elif dest == R_SPECIAL:
-                next_pc = val % IMEM_WORDS
+                next_pc = val & 0xFF
 
         elif opcode >> 1 == OP_ALU >> 1:
             op = ((opcode & 1) << 2) | ((args >> 3) & 3)
@@ -977,8 +1069,8 @@ class StateMachine:
         else:  # SET
             dest, val = (args >> 5) & 7, args & 0x1F
             if dest in (0, 1):
-                m = (((1 << self.set_count) - 1) & 0x1F) << (self.set_base & 15)
-                (self._write_dirs if dest else self._write_pins)(m, val << (self.set_base & 15))
+                m = _rotl(((1 << self.set_count) - 1) & 0x1F, self.set_base)
+                (self._write_dirs if dest else self._write_pins)(m, _rotl(val, self.set_base))
             elif dest == 2:
                 self.x = val
             elif dest == 3:
@@ -1009,7 +1101,7 @@ class StateMachine:
 
 def main() -> None:
     """CLI entry point for emu.py."""
-    parser = argparse.ArgumentParser(description="openPIO emulator (ISA v2)")
+    parser = argparse.ArgumentParser(description="openPIO emulator (ISA v3)")
     parser.add_argument("input", help="Binary (.bin) or Assembly (.asm) file")
     parser.add_argument("-c", "--cycles", type=int, default=32, help="Number of cycles to run")
     args = parser.parse_args()

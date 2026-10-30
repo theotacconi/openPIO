@@ -21,7 +21,7 @@ CRC_OK = 1 << 4                                          # on the CRC nibble's w
 
 
 def frames_from(words: list[int]) -> list[tuple[int, int, list[int], int, bool]]:
-    """(8 S, status, data, crc, CRC == 0) for every sync word (> 31) followed by 8 nibbles."""
+    """(8 S, status, data, crc, CRC good) for every sync word (> 31) followed by 8 nibbles."""
     out = []
     for i, w in enumerate(words):
         nib = words[i + 1:i + 9]

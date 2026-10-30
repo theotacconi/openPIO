@@ -41,7 +41,7 @@ zero:
 byte:
     pau crc_feed, 8         ; the byte, LSB first (its order on DQ)
     mov x, isr
-    jmp !pau crc_zero, result
+    jmp !pau crc_ok, result
     set y, 1
     or x, y                 ; bit 0: CRC8 is 0
 result:

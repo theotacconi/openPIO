@@ -9,7 +9,7 @@
 .set_pins 0 1
 .in_pins 1               ; RX
 .shift_out left
-.pau enc=nrz stuff=5 stuff_mode=equal baud=4
+.pau code=nrz stuff=5 stuff_mode=equal baud=4
 .crc width=15 poly=0x4599
 
     set pins, 1             ; recessive

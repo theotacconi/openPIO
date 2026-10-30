@@ -1,6 +1,7 @@
-"""asm.py - Assembler for the openPIO ISA v2 (ISA.md).
+"""asm.py - Assembler for the openPIO ISA v3 (ISA.md).
 
-Converts assembly text into 16-bit instruction words (max 64), plus the per-SM configuration
+Converts assembly text into 16-bit instruction words (max 256, four pages of 64; `.page n`
+continues at page n), plus the per-SM configuration
 the program needs as Program.cfg: every register host.Host.load writes comes from the source.
 Configuration directives (a field not set keeps its reset value, HOST.md):
 
@@ -13,7 +14,7 @@ Configuration directives (a field not set keeps its reset value, HOST.md):
     .shift_in / .shift_out left|right, .push_thresh / .pull_thresh <1..16>       MISC
     .clkdiv <int> [<frac>]          CLKDIV
     .cond0 .. .cond3 <condition>    COND_CFG (other conditions get a free slot)
-    .pau ..., .crc ...              PAU_MODE, CRC_CFG, CRC_POLY, CRC_RES
+    .pau ..., .sync ..., .crc ...   PAU_MODE, PAU_CODE, PAU_CFG, SYNC, CRC_CFG, CRC_POLY, CRC_RES
     .wrap_target, .wrap             WRAP
     .start <label>, .x <v>, .y <v>  PC, X, Y preset after RESET
 """
@@ -38,7 +39,8 @@ class AssemblerError(Exception):
         super().__init__(f"{prefix}{message}{context}")
 
 
-IMEM_WORDS = 64
+IMEM_WORDS = 256
+PAGE_WORDS = 64
 
 # Opcodes (bits [15:13]); JMP and ALU take two (bit 13 = target bit 5 / operation bit 2)
 OP_JMP = 0
@@ -52,7 +54,7 @@ OP_SET = 7
 CT_IRQ, CT_FIFO, CT_WAIT, CT_PAU = 0, 1, 2, 3
 
 # JMP conditions (bits [7:5])
-JC_ALWAYS, JC_NEVER, JC_XDEC, JC_YDEC = 0, 1, 2, 3   # 4..7 = COND0..COND3
+JC_ALWAYS, JC_FAR, JC_XDEC, JC_YDEC = 0, 1, 2, 3     # 4..7 = COND0..COND3
 
 # Operand codes (IN source, OUT destination, ALU source / destination)
 R_PINS, R_PINDIRS, R_X, R_Y, R_ISR, R_OSR, R_NULL, R_SPECIAL = range(8)
@@ -84,8 +86,9 @@ REV_COND_SRC = ["gpio", "in_base", "irq", "peer_irq", "x", "y", "status", "pau"]
 STATUS_NAMES = {"x_zero": 0, "y_zero": 1, "x_eq_y": 2, "timeout": 3,
                 "osr_empty": 4, "isr_full": 5, "tx_empty": 6, "rx_full": 7, "pins_changed": 8}
 PAU_STATUS_NAMES = {"tx_idle": 0, "rx_idle": 1, "tx_ready": 2, "rx_ready": 3,
-                    "crc_ok": 4, "crc_zero": 5, "stuff_err": 6, "overrun": 7, "se0": 8, "se1": 9,
-                    "bit_err": 10}
+                    "crc_ok": 4, "sync": 5, "stuff_err": 6, "overrun": 7,
+                    "line_00": 8, "line_01": 9, "line_10": 10, "line_11": 11,   # in_base + 1, in_base
+                    "bit_err": 12}
 
 # ISA v1 condition names: (inverted, source, index)
 NAMED_CONDS = {
@@ -98,12 +101,20 @@ NAMED_CONDS = {
 
 # Chip reset values of COND_CFG (ISA.md, Conditions)
 COND_RESET = [0x60, 0x61, 0x00, 0xE4]
-JMP_PLAIN = {"": JC_ALWAYS, "always": JC_ALWAYS, "never": JC_NEVER,
+JMP_PLAIN = {"": JC_ALWAYS, "always": JC_ALWAYS, "far": JC_FAR,
              "x--": JC_XDEC, "x-": JC_XDEC, "y--": JC_YDEC, "y-": JC_YDEC}
 
-# PAU_MODE fields
-PAU_ENC = {"nrz": 0, "nrzi": 1, "manchester": 2, "bmc": 3, "biphase_mark": 3}
-STUFF_MODES = {"ones": 0, "equal": 2}
+# PAU line codes (ISA.md, Line code): PAU_CODE values
+PAU_CODES = {"nrz": 0x00FA, "nrzi": 0x0005, "manchester": 0xFAAF, "bmc": 0x5055,
+             "biphase_mark": 0x5055, "fm0": 0x0555, "diff_manchester": 0x5505, "miller": 0x5001,
+             "mfm": 0x5001}
+# A named code's own alignment and run (ISA.md, Receiver): Manchester's first edge is mid-bit,
+# Miller (MFM) holds a level for up to 4 half-bits; `align=` and `run=` override them.
+PAU_CODE_RX = {"manchester": ("mid", 2), "diff_manchester": ("mid", 2), "miller": ("edge", 4),
+               "mfm": ("edge", 4)}
+PIN2_ROLES = {"none": 0, "complement": 1, "clock": 2}
+STUFF_MODES = {"ones": 0, "equal": 1}
+NOP_WORD = (OP_ALU << 13) | R_NULL << 5 | R_NULL      # mov null, null
 
 
 def cond_byte(inv: int, src: int, idx: int) -> int:
@@ -122,8 +133,8 @@ CONFIG_RESET = dict(
     wrap_bottom=0, wrap_top=IMEM_WORDS - 1, side_set_count=0, side_set_opt=False,
     side_set_pindirs=False, sideset_base=0, in_base=0, out_base=0, set_base=0, set_count=5,
     pin_mask=0xFFFF, shift_in_right=True, shift_out_right=True, push_thresh=0, pull_thresh=0,
-    clkdiv_int=1, clkdiv_frac=0, cond_cfg=tuple(COND_RESET), pau_mode=0, crc_cfg=0, crc_poly=0,
-    crc_res=0, open_drain_mask=0, start=0, x=0, y=0)
+    clkdiv_int=1, clkdiv_frac=0, cond_cfg=tuple(COND_RESET), pau_mode=0, pau_code=0x00FA,
+    pau_cfg=0, sync=0, crc_cfg=0, crc_poly=0, crc_res=0, open_drain_mask=0, start=0, x=0, y=0)
 
 
 class Program(list[int]):
@@ -199,12 +210,14 @@ def disassemble(word: int, side_set_count: int = 0, side_set_opt: bool = False) 
             side = ss_field & ((1 << side_set_count) - 1)
     suffix = (f" side {side}" if side is not None else "") + (f" [{delay}]" if delay else "")
 
+    if word & ~0x1F00 == NOP_WORD:
+        return f"nop{suffix}"
     if opcode >> 1 == OP_JMP >> 1:
         cond = (args >> 5) & 7
         target = ((opcode & 1) << 5) | (args & 0x1F)
-        if cond == JC_NEVER:
-            return f"nop{suffix}"
-        cond_str = ["", "never", "x--", "y--", "cond0", "cond1", "cond2", "cond3"][cond]
+        if cond == JC_FAR:
+            return f"jmp far, {(target >> 4) * PAGE_WORDS + (target & 15)}{suffix}"
+        cond_str = ["", "far", "x--", "y--", "cond0", "cond1", "cond2", "cond3"][cond]
         return f"jmp {cond_str + ', ' if cond_str else ''}{target}{suffix}"
     if opcode in (OP_IN, OP_OUT):
         operand = (args >> 5) & 7
@@ -336,7 +349,7 @@ def _kv(parts: list[str], line_num: int, text: str) -> dict[str, str]:
 
 
 def assemble(source_code: str) -> Program:
-    """Assemble source code text into a Program (list of 16-bit words, max 64)."""
+    """Assemble source code text into a Program (list of 16-bit words, max 256)."""
     lines = source_code.splitlines()
     cfg: dict = {}
     prog_name = "program"
@@ -412,18 +425,40 @@ def assemble(source_code: str) -> Program:
                     raise AssemblerError("A condition cannot be another slot", line_num, raw_line)
                 conds.fix(int(directive[5]), c)
             elif directive == ".pau":
+                # .pau [code=<name>|<value>] [inv] [pin2=none|complement|clock] [align=mid] [ext]
+                #      [cpol=0|1] [cpha=0|1] [stuff=1..16 [stuff_mode=ones|equal]] [baud=0..31]
+                #      [run=2..5]
                 kv = _kv(parts[1:], line_num, raw_line)
-                if kv.get("enc") not in PAU_ENC:
-                    raise AssemblerError(f".pau enc= one of {list(PAU_ENC)}", line_num, raw_line)
-                mode = PAU_ENC[kv["enc"]] | ("inv" in kv) << 2 | ("diff" in kv) << 3
+                code = kv.get("code", "nrz")
+                cfg["pau_code"] = PAU_CODES[code] if code in PAU_CODES else \
+                    _parse_int(code, line_num, raw_line) & 0xFFFF
+                align, run = PAU_CODE_RX.get(code, ("edge", 2))
+                align, run = kv.get("align", align), kv.get("run", str(run))
+                if kv.get("pin2", "none") not in PIN2_ROLES or align not in ("edge", "mid"):
+                    raise AssemblerError(f"pin2= one of {list(PIN2_ROLES)}, align=edge|mid", line_num, raw_line)
+                mode = (PIN2_ROLES[kv.get("pin2", "none")] | ("inv" in kv) << 2
+                        | (align == "mid") << 3 | ("ext" in kv) << 4
+                        | (kv.get("cpol") == "1") << 5 | (kv.get("cpha") == "1") << 6)
                 if "stuff" in kv:
                     n = _parse_int(kv["stuff"], line_num, raw_line)
                     if not 1 <= n <= 16 or kv.get("stuff_mode", "ones") not in STUFF_MODES:
                         raise AssemblerError("stuff=1..16, stuff_mode=ones|equal", line_num, raw_line)
-                    mode |= (n & 0xF) << 4 | STUFF_MODES[kv.get("stuff_mode", "ones")] << 8
-                if "baud" in kv:
-                    mode |= (_parse_int(kv["baud"], line_num, raw_line) & 0x1F) << 10
+                    mode |= STUFF_MODES[kv.get("stuff_mode", "ones")] << 7 | (n & 0xF) << 8
                 cfg["pau_mode"] = mode
+                run = _parse_int(run, line_num, raw_line)
+                if not 2 <= run <= 5:
+                    raise AssemblerError("run=2..5", line_num, raw_line)
+                cfg["pau_cfg"] = (cfg.get("pau_cfg", 0) & ~0x7F
+                                  | _parse_int(kv.get("baud", "0"), line_num, raw_line) & 0x1F
+                                  | (run - 2) << 5)
+            elif directive == ".sync":
+                # .sync word=<value> len=1..32: the word as sent, its first bit in bit 0
+                kv = _kv(parts[1:], line_num, raw_line)
+                n = _parse_int(kv.get("len", "0"), line_num, raw_line)
+                if not 1 <= n <= 32 or "word" not in kv:
+                    raise AssemblerError(".sync word=<value> len=1..32", line_num, raw_line)
+                cfg["sync"] = _parse_int(kv["word"], line_num, raw_line) & ((1 << n) - 1)
+                cfg["pau_cfg"] = cfg.get("pau_cfg", 0) & 0x7F | n << 8
             elif directive == ".crc":
                 kv = _kv(parts[1:], line_num, raw_line)
                 width = _parse_int(kv.get("width", "0"), line_num, raw_line)
@@ -438,6 +473,13 @@ def assemble(source_code: str) -> Program:
                 cfg["wrap_bottom"] = current_addr
             elif directive == ".wrap":
                 cfg["wrap_top"] = max(0, current_addr - 1)
+            elif directive == ".page":
+                n = _parse_int(parts[1], line_num, raw_line) if len(parts) == 2 else -1
+                if not 0 <= n < IMEM_WORDS // PAGE_WORDS or n * PAGE_WORDS < current_addr:
+                    raise AssemblerError(".page <n>: a later page, 0..3", line_num, raw_line)
+                for a in range(current_addr, n * PAGE_WORDS):      # the gap: NOPs
+                    instructions.append((a, "nop", line_num))
+                current_addr = n * PAGE_WORDS
             elif directive == ".word":
                 if len(parts) < 2:
                     raise AssemblerError(".word requires a value argument", line_num, raw_line)
@@ -501,12 +543,23 @@ def assemble(source_code: str) -> Program:
             return t
 
         def jmp(cond_code: int, target: int) -> int:
-            return ((OP_JMP | target >> 5) << 13) | dss | cond_code << 5 | (target & 0x1F)
+            """A JMP to `target`: in this page, or FAR to an entry of any page."""
+            if cond_code == JC_FAR:
+                if target % PAGE_WORDS >= 16:
+                    raise AssemblerError(f"jmp far: {target} is not a page entry (0..15 of a page)",
+                                         line_num, clean)
+                field = (target // PAGE_WORDS) << 4 | target % PAGE_WORDS
+            elif target // PAGE_WORDS != _addr // PAGE_WORDS:
+                raise AssemblerError(f"JMP to {target} leaves page {_addr // PAGE_WORDS}: jmp far",
+                                     line_num, clean)
+            else:
+                field = target % PAGE_WORDS
+            return ((OP_JMP | field >> 5) << 13) | dss | cond_code << 5 | (field & 0x1F)
 
         if mnem == "nop":
             if args:
                 raise AssemblerError("NOP takes no arguments", line_num, clean)
-            words.append(jmp(JC_NEVER, 0))
+            words.append(NOP_WORD | dss)
 
         elif mnem == "jmp":
             if not args:
@@ -660,7 +713,7 @@ def assemble(source_code: str) -> Program:
 
 def main() -> None:
     """CLI entry point for asm.py."""
-    parser = argparse.ArgumentParser(description="openPIO Assembler (ISA v2)")
+    parser = argparse.ArgumentParser(description="openPIO Assembler (ISA v3)")
     parser.add_argument("input", help="Source assembly file (.asm)")
     parser.add_argument("-o", "--output", help="Output binary file (.bin)")
     args = parser.parse_args()

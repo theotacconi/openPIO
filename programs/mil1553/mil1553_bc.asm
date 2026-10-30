@@ -18,7 +18,7 @@
 .shift_out left
 .shift_in left
 .pull_thresh 16
-.pau enc=manchester inv baud=25
+.pau code=manchester inv baud=25
 .crc width=1 poly=1 res=1       ; CRC == CRC_RES: the XOR of the bits is 1
 
     set pins, 4                 ; transmitter off

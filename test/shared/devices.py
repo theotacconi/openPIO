@@ -1717,3 +1717,105 @@ class Mil1553Rt(Device):
             words += [("data", self.data[i], i in self.bad) for i in range(count)]
         self.out = mil1553_levels(words, self.bit // 2)
         self.out_t = parity_mid + round(self.response * self.bit) - 3 * self.bit // 2
+
+
+# ---------------------------------------------------------------------------------- MFM
+
+def crc16_ccitt(data: list[int]) -> int:
+    """CRC-16/CCITT-FALSE (poly 0x1021, init 0xFFFF, MSB first): the floppy sector CRC."""
+    crc = 0xFFFF
+    for byte in data:
+        crc ^= byte << 8
+        for _ in range(8):
+            crc = (crc << 1 ^ 0x1021 if crc & 0x8000 else crc << 1) & 0xFFFF
+    return crc
+
+
+def mfm_sector(data: list[int], preamble: int = 4) -> list[int]:
+    """The bits of a sector, MSB first: `preamble` 0x00 bytes, the address mark 0xA1, the data,
+    their CRC-16/CCITT."""
+    crc = crc16_ccitt(data)
+    return [b >> i & 1 for b in [0] * preamble + [0xA1, *data, crc >> 8, crc & 0xFF]
+            for i in range(7, -1, -1)]
+
+
+def mfm_halves(bits: list[int], level: int = 0) -> list[int]:
+    """MFM (modified frequency modulation): a 1 is a transition in the middle of its cell, a 0
+    a transition at the start of its cell when the bit before it was a 0 too. The line in each
+    half-cell, from `level` (the bit before the first is taken as a 0)."""
+    out, prev = [], 0
+    for b in bits:
+        if b == 0 and prev == 0:
+            level ^= 1
+        out.append(level)
+        if b:
+            level ^= 1
+        out.append(level)
+        prev = b
+    return out
+
+
+class MfmDisk(Device):
+    """A disk drive's data lines in MFM, a cell (bit) of `cell` clocks: it records what the
+    controller writes on `wr` and plays a sector on `rd` from clock `play` on.
+
+    Written: every transition must fall on the half-cell grid of the first one (within a
+    clock); the cells are decoded (a 1: a transition mid-cell), the MFM rule checked on every
+    cell boundary, and each sector (zeros, 0xA1, data, CRC) kept in `sectors` as (data, CRC
+    good)."""
+
+    def __init__(self, wr: int, rd: int, cell: int, play: int | None = None,
+                 sector: list[int] = ()) -> None:
+        super().__init__()
+        self.wr, self.rd, self.cell = wr, rd, cell
+        self.edges: list[int] = []
+        self._prev = None
+        self.out = [h for h in mfm_halves(mfm_sector(list(sector))) for _ in range(cell // 2)] \
+            if play is not None else []
+        self.play = play
+        self.sectors: list[tuple[list[int], bool]] = []
+        self.drive = {rd: 0}
+
+    def tick(self, t: int, levels: int) -> None:
+        lv = _bit(levels, self.wr)
+        if self._prev is not None and lv != self._prev:
+            self.edges.append(t)
+        self._prev = lv
+        k = t + 1 - self.play if self.play is not None else -1
+        self.drive = {self.rd: self.out[k] if 0 <= k < len(self.out) else
+                      (self.out[-1] if self.out and k >= len(self.out) else 0)}
+
+    def decode(self, n: int) -> None:
+        """Decode the recorded writes as sectors of `n` data bytes."""
+        if not self.edges:
+            return self.error(0, "nothing written")
+        t0, half = self.edges[0], self.cell // 2
+        marks = set()
+        for t in self.edges:
+            k, r = divmod(t - t0 + 1, half)
+            if r > 2:
+                self.error(t, f"transition off the half-cell grid ({r - 1} clocks)")
+            marks.add(k)
+        cells = (max(marks) + 2) // 2
+        bits = [int(2 * i + 1 in marks) for i in range(cells)]
+        for i in range(1, cells):                       # the boundary rule of MFM
+            if (2 * i in marks) != (bits[i] == 0 and bits[i - 1] == 0):
+                self.error(t0 + i * self.cell, f"cell {i}: boundary transition breaks MFM")
+        nbytes = [sum(b << (7 - j) for j, b in enumerate(bits[k:k + 8])) for k in range(0, len(bits) - 7, 8)]
+        if 0xA1 not in nbytes:
+            return self.error(t0, "no address mark 0xA1")
+        start = nbytes.index(0xA1) + 1
+        data = nbytes[start:start + n]
+        crc = nbytes[start + n:start + n + 2]
+        good = len(crc) == 2 and crc[0] << 8 | crc[1] == crc16_ccitt(data)
+        self.sectors.append((data, good))
+
+
+def crc7_sd(data: list[int]) -> int:
+    """CRC-7 of an SD card command (poly x^7 + x^3 + 1, init 0, MSB first)."""
+    crc = 0
+    for byte in data:
+        for i in range(7, -1, -1):
+            fb = (crc >> 6 & 1) ^ (byte >> i & 1)
+            crc = (crc << 1 & 0x7F) ^ (0x09 if fb else 0)
+    return crc

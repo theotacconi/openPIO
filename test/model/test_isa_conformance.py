@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "sim" / "model"))
-from asm import assemble          # noqa: E402
+from asm import AssemblerError, assemble   # noqa: E402
 from emu import StateMachine      # noqa: E402
 
 
@@ -37,10 +37,21 @@ class Jmp(unittest.TestCase):
         sm = run(StateMachine(assemble("jmp 40\n" + "nop\n" * 40)), 1)
         self.assertEqual(sm.pc, 40)
 
-    def test_always_and_never(self):
-        sm = run(sm_of("jmp never, 3\njmp 3\nnop\nnop"), 1)
-        self.assertEqual(sm.pc, 1)
-        self.assertEqual(run(sm, 1).pc, 3)
+    def test_pages_and_far(self):
+        """JMP stays in its page; FAR goes to an entry (0..15) of any page; code runs on
+        across a page end."""
+        sm = run(sm_of("jmp far, p1\nnop\n.page 1\np1: jmp 70\nnop\nnop\nnop\nnop\n"
+                       "nop\nnop\njmp far, 0"), 1)
+        self.assertEqual(sm.pc, 64)
+        self.assertEqual(run(sm, 1).pc, 70, "a JMP in page 1 targets page 1")
+        self.assertEqual(run(sm, 2).pc, 0, "FAR to entry 0 of page 0")
+        word = assemble("jmp far, 193\n")[0]
+        self.assertEqual((word >> 13, word >> 5 & 7, word & 0x1F), (1, 1, 0b10001), "page 3, entry 1")
+        sm = run(StateMachine(assemble(".page 1\n" + "nop\n" * 64 + "end: jmp end")), 64 + 64)
+        self.assertEqual(sm.pc, 128, "page 0's NOPs, page 1, then page 2")
+        for bad in ("jmp 64\n", ".page 1\njmp 0\n", "jmp far, 16\n"):
+            with self.subTest(bad), self.assertRaises(AssemblerError):
+                assemble(bad)
 
     def test_x_and_y_post_decrement(self):
         for reg in "xy":
@@ -137,15 +148,15 @@ class Out(unittest.TestCase):
                    out_base=14)
         sm.osr, sm.osr_count = 0b000111_10_10101_01_111, 0      # pc 7, null, isr 0x15, dirs 01, pins 111
         run(sm, 6)
-        self.assertEqual(sm.gpio_out, 0b11 << 14, "pins 14, 15; pin 16 does not exist")
+        self.assertEqual(sm.gpio_out, 0b11 << 14 | 1, "pins 14, 15, then pin 0: mod 16")
         self.assertEqual(sm.pindirs, 0b01 << 14)
         self.assertEqual((sm.isr, sm.isr_count), (0x15, 5))
         self.assertEqual(sm.x, 1, "OUT PC jumped to 7")
 
-    def test_pin_groups_stop_at_pin_15_single_pins_wrap(self):
+    def test_pins_count_mod_16(self):
         sm = sm_of("set pins, 7\nwait 1 in_base 15\nset x, 1" + HALT, set_base=14, set_count=3, in_base=1)
         run(sm, 2)
-        self.assertEqual((sm.gpio_out, sm.x), (0b11 << 14, 0), "SET stops at pin 15; in_base + 15 = pin 0")
+        self.assertEqual((sm.gpio_out, sm.x), (0b11 << 14 | 1, 0), "SET wraps to pin 0; in_base + 15 = pin 0")
         sm.gpio_in = 1
         run(sm, 2)
         self.assertEqual(sm.x, 1)
@@ -270,7 +281,7 @@ class CrcOfTheWire(unittest.TestCase):
     """The PAU CRC is fed with the data bits on the wire: a TX bit when it is sent (if it was
     queued with CRC on), an RX bit when it is decoded (CRC on, the PAU TX not driving)."""
 
-    PAU = ".pau enc=nrz baud=1\n.crc width=8 poly=0x07\n"     # a bit every 2 strobes
+    PAU = ".pau code=nrz baud=1\n.crc width=8 poly=0x07\n"     # a bit every 2 strobes
 
     @staticmethod
     def crc8(bits):

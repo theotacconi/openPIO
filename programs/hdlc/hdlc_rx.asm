@@ -7,7 +7,7 @@
 ; CRC then holds 0x53C5: CRC-16/X.25's residue 0x1D0F after the FCS, advanced by the flag's bits.
 ; RX FIFO: the frame's bytes, FCS included, one a word (bits 15:8, bits 7:0 = 0); then an end
 ; word 0x7E01 (FCS wrong) or 0x7E03 (right). Flags back to back (empty frames) give nothing.
-.pau enc=nrzi stuff=5 baud=4
+.pau code=nrzi stuff=5 baud=4
 .crc width=16 poly=0x1021 init=ones xorout=1 res=0x53C5
 .in_pins 0
 .shift_in right

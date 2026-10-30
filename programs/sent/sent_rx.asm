@@ -81,8 +81,8 @@ p4:
     mov isr, null
     in x, 4
     pau crc_feed, 4
-    rev isr, status             ; CRC == 0 (STATUS bit 13) to bit 2
-    in null, 13                 ; ... alone, to bit 15
+    rev isr, status             ; CRC == CRC_RES = 0 (STATUS bit 12) to bit 3
+    in null, 12                 ; ... alone, to bit 15
     rev isr, isr                ; ... to bit 0
     in x, 4                     ; ... to bit 4, the value below it
     push noblock

@@ -36,7 +36,7 @@ class Crc(unittest.TestCase):
 
     def crc_of(self, data: bytes, cfg: str, lsb_first: bool) -> StateMachine:
         sm = StateMachine(assemble(f"""
-            .pau enc=nrz baud=1
+            .pau code=nrz baud=1
             .crc {cfg}
             .pull_thresh 8
                 pau crc_reset
@@ -103,7 +103,7 @@ class LineCodes(unittest.TestCase):
         for enc in ("nrz", "nrzi", "manchester", "bmc"):
             with self.subTest(enc=enc):
                 sm = StateMachine(assemble(f"""
-                    .pau enc={enc} baud=2
+                    .pau code={enc} baud=2
                         set pau_ctl, tx
                         pull block
                         out pins, 12
@@ -115,7 +115,7 @@ class LineCodes(unittest.TestCase):
 
     def test_usb_stuffing_takes_a_bit_time(self):
         sm = StateMachine(assemble("""
-            .pau enc=nrz baud=1 stuff=6
+            .pau code=nrz baud=1 stuff=6
                 set pau_ctl, tx|stuff
                 pull block
                 out pins, 9
@@ -127,7 +127,7 @@ class LineCodes(unittest.TestCase):
 
     def test_can_stuffing_equal_bits(self):
         sm = StateMachine(assemble("""
-            .pau enc=nrz baud=1 stuff=5 stuff_mode=equal
+            .pau code=nrz baud=1 stuff=5 stuff_mode=equal
                 set pins, 1
                 set pau_ctl, tx|stuff
                 pull block
@@ -144,7 +144,7 @@ class Loopback(unittest.TestCase):
     """A PAU transmitter wired into a PAU receiver: bytes, stuffing and CRC come back."""
 
     TX = """
-        .pau enc={enc} baud=3 {stuff}
+        .pau code={enc} baud=3 {stuff}
         .crc width=16 poly=0x8005 init=ones xorout=1 res=0x800D
         .pull_thresh 8
             set pins, {idle}
@@ -161,7 +161,7 @@ class Loopback(unittest.TestCase):
             jmp end
     """
     RX = """
-        .pau enc={enc} baud=3 {stuff}
+        .pau code={enc} baud=3 {stuff}
         .crc width=16 poly=0x8005 init=ones xorout=1 res=0x800D
         .push_thresh 8
             pau crc_reset
@@ -215,7 +215,7 @@ class PauErrors(unittest.TestCase):
     """RX errors and TX abort, with a plain NRZ transmitter wired into the receiver."""
 
     TX = """
-        .pau enc=nrz baud=2
+        .pau code=nrz baud=2
             set pins, 1
             set pindirs, 1
             set pau_ctl, tx
@@ -239,7 +239,7 @@ class PauErrors(unittest.TestCase):
         """LSB first: five 1s then the stuffed 0 are right, six 1s are not (bits 1..6 of a word,
         zeros around; checked inside the 32 bits of 4 strobes)."""
         src = """
-            .pau enc=nrz baud=2 stuff=5
+            .pau code=nrz baud=2 stuff=5
                 set pau_ctl, rx|stuff
             end:
                 jmp end
@@ -251,7 +251,7 @@ class PauErrors(unittest.TestCase):
         """Stuffing 5: an HDLC flag 01111110 (LSB first: 0x7E) sets stuff_err but all 8 bits
         arrive, the wrong bit restarting the count; CRC reset clears the error."""
         rx = self.loop("""
-            .pau enc=nrz baud=2 stuff=5
+            .pau code=nrz baud=2 stuff=5
             .push_thresh 8
                 set pau_ctl, rx|stuff
                 in pins, 8 auto      ; 0x00, the first byte
@@ -268,7 +268,7 @@ class PauErrors(unittest.TestCase):
     def test_overrun(self):
         """Nobody reads the 32-bit queue: the 33rd bit time sets the sticky overrun."""
         src = """
-            .pau enc=nrz baud=2
+            .pau code=nrz baud=2
                 set pau_ctl, rx
             end:
                 jmp end
@@ -280,7 +280,7 @@ class PauErrors(unittest.TestCase):
 
     def test_tx_abort(self):
         sm = StateMachine(assemble("""
-            .pau enc=nrz baud=4
+            .pau code=nrz baud=4
                 set pins, 1
                 set pindirs, 1
                 set pau_ctl, tx

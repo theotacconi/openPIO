@@ -53,7 +53,7 @@ wr:
     out pins, 1 side 0 [1]
     jmp y--, wr side 1 [1]
     jmp x--, word side 0
-    jmp pau crc_zero, even
+    jmp pau crc_ok, even
     set pins, 1 side 0 [1]      ; parity 1
     jmp pend
 even:

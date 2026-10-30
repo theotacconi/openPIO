@@ -6,7 +6,7 @@
 .out_pins 0
 .set_pins 0 1
 .start start             ; after the table
-.pau enc=bmc baud=4
+.pau code=bmc baud=4
 
     set y, 0b11110        ; 0
     jmp emit

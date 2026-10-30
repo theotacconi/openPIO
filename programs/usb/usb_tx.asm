@@ -6,7 +6,7 @@
 ; IRQ 0 after each packet.
 .out_pins 0              ; D-, D+
 .set_pins 0 2
-.pau enc=nrzi diff stuff=6 baud=4
+.pau code=nrzi pin2=complement stuff=6 baud=4
 .crc width=16 poly=0x8005 init=ones xorout=1 res=0x800D
 
     set pins, 1             ; J idle (D- high)

@@ -1,4 +1,4 @@
-# openPIO host interface v2
+# openPIO host interface v3
 
 The host (a microcontroller, e.g. the RP2040 on the Tiny Tapeout demo board) loads programs,
 configures and runs the state machines (SMs) and moves data over an SPI slave. Instruction set:
@@ -26,25 +26,25 @@ header:  15  14  13 | 12  11 | 10 .. 6 | 5 .. 0
 | `011` | REG_RD | MISO = register `Addr`, then Addr + 1 |
 | `100` | TX_PUSH | TX FIFO <= word (dropped when full; ISA.md, FIFOs) |
 | `101` | RX_POP | MISO = RX FIFO head, popped (0 when empty); `Addr` = words to pop, 1..63 (0 = 64), words beyond them read 0 and pop nothing |
-| `110` | IMEM_WR | instruction `Addr` <= word, then Addr + 1 (SM stopped) |
-| `111` | IMEM_RD | MISO = instruction `Addr`, then Addr + 1 (SM stopped; 0 while it runs: the port fetches) |
+| `110` | IMEM_WR | the first word is an address A (0..255), then instruction A <= word, then A + 1 (SM stopped; `Addr` ignored) |
+| `111` | IMEM_RD | the first word is an address A, then MISO = instruction A, then A + 1 (SM stopped; 0 while it runs: the port fetches; `Addr` ignored) |
 
-MISO carries the read data during the data words of REG_RD, RX_POP and IMEM_RD (the value is
-taken when the word starts) and the SM's STATUS register during every other word. During the
+MISO carries the read data during the data words of REG_RD, RX_POP and IMEM_RD after its
+address (the value is taken when the word starts) and the SM's STATUS register during every other word. During the
 header MISO carries the STATUS of the previous transaction's SM (SM 0 after reset), taken when
-CS_N falls: the header's SM field arrives after MISO's top bits. Chip registers (`Addr` >= 0x20)
-ignore `SM`.
+CS_N falls: the header's SM field arrives after MISO's top bits. Chip registers (`Addr`
+0x20..0x2F) ignore `SM`; IMEM addresses take a data word because 256 do not fit the header.
 
 A read word's MSB is on MISO before its first SCLK edge, so the slave reads a word as the
 previous one ends, before it knows whether the master clocks it: reads have no side effect
 except RX_POP, which pops only its `Addr` words, so a burst never loses one.
 
-## Registers of an SM (`Addr` 0x00..0x1F)
+## Registers of an SM (`Addr` 0x00..0x1F, 0x30..0x3F)
 
 | Addr | Name | R/W | Fields (reset value) |
 |---|---|---|---|
-| 0x00 | STATUS | R | whole FIFOs (ISA.md, FIFOs): [0] TX empty, [1] TX full, [2] RX empty, [3] RX full, [4] stalled, [5] enabled, [13:8] PC |
-| 0x01 | WRAP | RW | [5:0] wrap_bottom (0), [13:8] wrap_top (63) |
+| 0x00 | STATUS | R | whole FIFOs (ISA.md, FIFOs): [0] TX empty, [1] TX full, [2] RX empty, [3] RX full, [4] stalled, [5] enabled, [15:8] PC |
+| 0x01 | WRAP | RW | [7:0] wrap_bottom (0), [15:8] wrap_top (255) |
 | 0x02 | SIDESET | RW | [2:0] count (0), [3] opt (0), [4] drives pindirs (0), [11:8] base (0) |
 | 0x03 | PINBASE | RW | [3:0] in_base, [7:4] out_base, [11:8] set_base (0), [14:12] set_count (5) |
 | 0x04 | PIN_MASK | RW | [15:0] pins this SM may change (0xFFFF) |
@@ -60,7 +60,7 @@ except RX_POP, which pops only its `Addr` words, so a burst never loses one.
 | 0x0E | CRC_RES_LO | RW | CRC_RES [15:0] |
 | 0x0F | CRC_RES_HI | RW | CRC_RES [31:16] |
 | 0x10 | IRQ | RW | read: flags [7:0]; write: [7:0] clear the flags whose bit is 1, then [15:8] set them (the host can start a program waiting on a flag) |
-| 0x11 | PC | RW* | [5:0] |
+| 0x11 | PC | RW* | [7:0] |
 | 0x12 | X | RW* | |
 | 0x13 | Y | RW* | |
 | 0x14 | ISR | RW* | |
@@ -75,11 +75,16 @@ except RX_POP, which pops only its `Addr` words, so a burst never loses one.
 | 0x1D | IRQ_MASK | RW | what reaches HOST_IRQ: [7:0] these flags when set (0xFF), [8] RX FIFO not empty (0), [9] TX FIFO at most 64 words (0) |
 | 0x1E | CLKDIV_FRAC | RW | strobe divider, fraction [7:0] / 256 (0): a strobe every CLKDIV + CLKDIV_FRAC / 256 clocks on average; loaded on RESET |
 | 0x1F | TIME | R | IN TIME: strobes since RESET, 16 bits |
+| 0x30 | PAU_CODE | RW | the line code table (ISA.md, PAU) (0x00FA: NRZ) |
+| 0x31 | SYNC_LO | RW | SYNC [15:0], the first bit in time in bit 0 (0) |
+| 0x32 | SYNC_HI | RW | SYNC [31:16] (0) |
+| 0x33 | PAU_CFG | RW | [4:0] BAUD, [6:5] RUN, [13:8] SYNC_LEN (ISA.md, PAU) (0) |
+| 0x34..0x3F | - | - | reserved: read 0, writes ignored |
 
 RW*: written only while the SM is stopped (CTRL EN = 0); writes while it runs are ignored.
-Bits outside the fields above read 0 (PAU_MODE bit 8 too: STUFF_MODE ignores it).
+Bits outside the fields above read 0.
 
-## Chip registers (`Addr` 0x20..0x3F, any `SM`)
+## Chip registers (`Addr` 0x20..0x2F, any `SM`)
 
 | Addr | Name | R/W | Fields |
 |---|---|---|---|
@@ -89,7 +94,7 @@ Bits outside the fields above read 0 (PAU_MODE bit 8 too: STUFF_MODE ignores it)
 | 0x23 | PINS_OE | R | output enables of the output pads |
 | 0x24 | PINS_IN | R | `gpio_in`, bit = pin |
 | 0x25 | IRQ_SUM | R | bit i: SM i requests HOST_IRQ (its IRQ_MASK) |
-| 0x26 | ID | R | [15:12] ISA version (2), [11:8] number of SMs, [7:0] 0x50 ('P') |
+| 0x26 | ID | R | [15:12] ISA version (3), [11:8] number of SMs, [7:0] 0x50 ('P') |
 | 0x27 | PADS_OUT | R | pins with an output pad (0xFCFF) |
 | 0x28 | PADS_IN | R | pins with an input pad (0xF8FF) |
 | 0x29 | PADS_BIDIR | R | pins whose output and input pads are one bidirectional line (0x00FF) |
