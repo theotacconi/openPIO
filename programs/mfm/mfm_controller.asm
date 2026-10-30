@@ -1,8 +1,7 @@
 .program mfm_controller
 ; A floppy-style disk controller in MFM (the Miller code), a cell (bit) of 2H = 8 strobes, MSB
 ; first. A sector on the disk: 0x00 bytes, the address mark 0xA1, the data, their CRC-16/CCITT,
-; then a gap. One SM, two pages: the dispatcher and the reader in page 0, the writer in page 1,
-; a JMP FAR between them.
+; then a gap. One SM: the dispatcher, the reader and the writer.
 ; TX FIFO: a command word, n - 1 in bits 14:0, bit 15 set to write: then n words, a data byte in
 ; bits 15:8 each. A read pushes the n data bytes and the two CRC bytes (bits 7:0) found after
 ; the next address mark, then STATUS (bit 12: the CRC is good).
@@ -16,7 +15,7 @@
 command:
     pull block              ; the command stays in the OSR
     mov x, osr
-    jmp x 15, write         ; to the writer's page
+    jmp x 15, writer
     mov isr, null           ; Y = 0x00A1: 8 zeros, then the address mark
     set y, 0b1010
     in y, 4
@@ -42,10 +41,6 @@ read:
     push block
     set pau_ctl, 0
     jmp command
-write:
-    jmp far, writer
-
-.page 1
 writer:
     mov osr, x
     out null, 1
@@ -80,4 +75,4 @@ data:
     out pins, 8             ; a gap byte
     set pau_ctl, 0          ; drain
     wait 1 pau tx_idle
-    jmp far, command
+    jmp command

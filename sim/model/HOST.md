@@ -26,14 +26,14 @@ header:  15  14  13 | 12  11 | 10 .. 6 | 5 .. 0
 | `011` | REG_RD | MISO = register `Addr`, then Addr + 1 |
 | `100` | TX_PUSH | TX FIFO <= word (dropped when full; ISA.md, FIFOs) |
 | `101` | RX_POP | MISO = RX FIFO head, popped (0 when empty); `Addr` = words to pop, 1..63 (0 = 64), words beyond them read 0 and pop nothing |
-| `110` | IMEM_WR | the first word is an address A (0..255), then instruction A <= word, then A + 1 (SM stopped; `Addr` ignored) |
+| `110` | IMEM_WR | the first word is an address A (0..63 in its low 6 bits), then instruction A <= word, then A + 1 (SM stopped; `Addr` ignored) |
 | `111` | IMEM_RD | the first word is an address A, then MISO = instruction A, then A + 1 (SM stopped; 0 while it runs: the port fetches; `Addr` ignored) |
 
 MISO carries the read data during the data words of REG_RD, RX_POP and IMEM_RD after its
 address (the value is taken when the word starts) and the SM's STATUS register during every other word. During the
 header MISO carries the STATUS of the previous transaction's SM (SM 0 after reset), taken when
 CS_N falls: the header's SM field arrives after MISO's top bits. Chip registers (`Addr`
-0x20..0x2F) ignore `SM`; IMEM addresses take a data word because 256 do not fit the header.
+0x20..0x2F) ignore `SM`; IMEM addresses take a data word, the same for any IMEM size.
 
 A read word's MSB is on MISO before its first SCLK edge, so the slave reads a word as the
 previous one ends, before it knows whether the master clocks it: reads have no side effect
@@ -43,8 +43,8 @@ except RX_POP, which pops only its `Addr` words, so a burst never loses one.
 
 | Addr | Name | R/W | Fields (reset value) |
 |---|---|---|---|
-| 0x00 | STATUS | R | whole FIFOs (ISA.md, FIFOs): [0] TX empty, [1] TX full, [2] RX empty, [3] RX full, [4] stalled, [5] enabled, [15:8] PC |
-| 0x01 | WRAP | RW | [7:0] wrap_bottom (0), [15:8] wrap_top (255) |
+| 0x00 | STATUS | R | whole FIFOs (ISA.md, FIFOs): [0] TX empty, [1] TX full, [2] RX empty, [3] RX full, [4] stalled, [5] enabled, [13:8] PC |
+| 0x01 | WRAP | RW | [5:0] wrap_bottom (0), [13:8] wrap_top (63) |
 | 0x02 | SIDESET | RW | [2:0] count (0), [3] opt (0), [4] drives pindirs (0), [11:8] base (0) |
 | 0x03 | PINBASE | RW | [3:0] in_base, [7:4] out_base, [11:8] set_base (0), [14:12] set_count (5) |
 | 0x04 | PIN_MASK | RW | [15:0] pins this SM may change (0xFFFF) |
@@ -60,7 +60,7 @@ except RX_POP, which pops only its `Addr` words, so a burst never loses one.
 | 0x0E | CRC_RES_LO | RW | CRC_RES [15:0] |
 | 0x0F | CRC_RES_HI | RW | CRC_RES [31:16] |
 | 0x10 | IRQ | RW | read: flags [7:0]; write: [7:0] clear the flags whose bit is 1, then [15:8] set them (the host can start a program waiting on a flag) |
-| 0x11 | PC | RW* | [7:0] |
+| 0x11 | PC | RW* | [5:0] |
 | 0x12 | X | RW* | |
 | 0x13 | Y | RW* | |
 | 0x14 | ISR | RW* | |

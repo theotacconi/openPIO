@@ -25,7 +25,7 @@ class HostInterface(unittest.TestCase):
     def test_reset_values_and_id(self):
         chip = Chip(2)
         regs = chip.spi(header(OP_REG_RD, 1, WRAP), [0] * 6)[1:]
-        self.assertEqual(regs, [0xFF00, 0, 0x5000, 0xFFFF, 0x0003, 0x0001])   # WRAP .. CLKDIV
+        self.assertEqual(regs, [0x3F00, 0, 0x5000, 0xFFFF, 0x0003, 0x0001])   # WRAP .. CLKDIV
         self.assertEqual(chip.reg_read(0, COND_CFG01), 0x6160)
         self.assertEqual(chip.reg_read(0, COND_CFG23), 0xE400)
         self.assertEqual(chip.reg_read(0, ID), 0x3250)
@@ -35,8 +35,8 @@ class HostInterface(unittest.TestCase):
         prog = assemble("pull block\nmov isr, osr\npush block")
         chip.spi(header(OP_IMEM_WR, 1), [0, *prog])        # the first word: the address
         self.assertEqual(chip.spi(header(OP_IMEM_RD, 1), [0] * 4)[2:], list(prog))
-        chip.spi(header(OP_IMEM_WR, 1), [200, 0x1234])     # page 3
-        self.assertEqual(chip.spi(header(OP_IMEM_RD, 1), [199, 0, 0])[2:], [0, 0x1234])
+        chip.spi(header(OP_IMEM_WR, 1), [0x0128, 0x1234])  # address 40: its low 6 bits
+        self.assertEqual(chip.spi(header(OP_IMEM_RD, 1), [39, 0, 0])[2:], [0, 0x1234])
         chip.reg_write(1, WRAP, 2 << 8)
         chip.spi(header(OP_TX_PUSH, 1), [0x1111, 0x2222, 0x3333, 0x4444, 0x5555])
         chip.reg_write(1, CTRL, 0b10)

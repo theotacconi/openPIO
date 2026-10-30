@@ -178,7 +178,7 @@ class Chip:
         sm = self.sms[n]
         stopped = not self.en >> n & 1
         if addr == WRAP:
-            sm.wrap_bottom, sm.wrap_top = val & 0xFF, val >> 8 & 0xFF
+            sm.wrap_bottom, sm.wrap_top = val & 0x3F, val >> 8 & 0x3F
         elif addr == SIDESET:
             sm.side_set_count, sm.side_set_opt = val & 7, bool(val >> 3 & 1)
             sm.side_set_pindirs, sm.sideset_base = bool(val >> 4 & 1), val >> 8 & 15
@@ -319,7 +319,7 @@ class Chip:
         pops = (addr or 64) if op == OP_RX_POP else 0
         self.step(self.spi_word_clocks)
         if op in (OP_IMEM_WR, OP_IMEM_RD) and words:        # the first data word: the address
-            addr = words[0] & 0xFF
+            addr = words[0] % IMEM_WORDS
             miso.append(self._sm_status_reg(self.sms[n]))
             self.step(self.spi_word_clocks)
             words = words[1:]

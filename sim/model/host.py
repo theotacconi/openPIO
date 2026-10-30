@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Sequence
 
-from asm import CONFIG_RESET, PAGE_WORDS, Program
+from asm import CONFIG_RESET, Program
 from chip import (CLKDIV_FRAC, COND_CFG, CTRL, GPIO, OP_IMEM_WR, OP_REG_RD, OP_REG_WR, OP_RX_POP,
                   OP_TX_PUSH, PADS_BIDIR, PAU_CODE, PAU_MODE, PC, WRAP, Chip, header)
 
@@ -29,15 +29,11 @@ class Host:
         """REG_RD burst of `count` registers from `addr`."""
         return self.chip.spi(header(OP_REG_RD, n, addr), [0] * count)[1:]
 
-    def load(self, n: int, program: Program, page: int = 0, **over) -> None:
+    def load(self, n: int, program: Program, **over) -> None:
         """Stop SM n, write its IMEM and every configuration register from the program (keyword
         arguments override its fields; jmp_pin moves the `pin` condition), RESET it and preset
         PC, X and Y. The SM is left stopped; the program's open-drain pins are added to GPIO.
-        Open drain on a pin without a bidirectional pad is refused (PADS_BIDIR). A program of one
-        page can go to any `page` (ISA.md, JMP): its wrap and start move with it."""
-        if page and len(program) > PAGE_WORDS:
-            raise ValueError("only a program of one page moves to another page")
-        base = page * PAGE_WORDS
+        Open drain on a pin without a bidirectional pad is refused (PADS_BIDIR)."""
         unknown = set(over) - set(CONFIG_RESET) - {"jmp_pin"}
         if unknown:
             raise TypeError(f"unknown configuration fields: {sorted(unknown)}")
@@ -49,9 +45,9 @@ class Host:
             raise ValueError(f"open drain on pins without a bidirectional pad: {c['open_drain_mask']:#06x}")
         en = self.read(0, CTRL)[0] & ~(1 << n)
         self.write(0, CTRL, en)
-        self.chip.spi(header(OP_IMEM_WR, n), [base, *program])
+        self.chip.spi(header(OP_IMEM_WR, n), [0, *program])     # from address 0
         self.write(n, WRAP,                                      # WRAP .. CLKDIV
-                   (c["wrap_top"] + base) << 8 | c["wrap_bottom"] + base,
+                   c["wrap_top"] << 8 | c["wrap_bottom"],
                    c["sideset_base"] << 8 | c["side_set_pindirs"] << 4 | c["side_set_opt"] << 3
                    | c["side_set_count"],
                    c["set_count"] << 12 | c["set_base"] << 8 | c["out_base"] << 4 | c["in_base"],
@@ -68,7 +64,7 @@ class Host:
         if c["open_drain_mask"]:
             self.write(0, GPIO, self.read(0, GPIO)[0] | c["open_drain_mask"])
         self.write(0, CTRL, en | 1 << (4 + n))                   # RESET
-        self.write(n, PC, c["start"] + base, c["x"], c["y"])     # PC, X, Y
+        self.write(n, PC, c["start"], c["x"], c["y"])            # PC, X, Y
 
     def start(self, mask: int) -> None:
         """Run the SMs of `mask` (bit i = SM i) from the same clock; stop the others."""
