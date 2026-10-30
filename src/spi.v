@@ -8,7 +8,7 @@
 // master never clocks then has no side effect. MISO comes from a flip-flop: the read word (an
 // IMEM_RD's a clock later, from the SRAM), else the STATUS of the transaction's SM, a clock after
 // the word before ends; during the header, that of the previous transaction's SM, at CS_N's fall.
-// IMEM_WR and IMEM_RD take their 8-bit address in the first data word (no access for it).
+// IMEM_WR and IMEM_RD take their address in the first data word (no access for it).
 
 `default_nettype none
 
@@ -23,7 +23,7 @@ module spi (
     output reg         h_valid,       // a host access this clock (openpio.v)
     output reg  [2:0]  h_op,
     output reg  [1:0]  h_sm,
-    output reg  [7:0]  h_addr,        // a register, or an IMEM word
+    output reg  [5:0]  h_addr,        // a register, or an IMEM word
     output wire [15:0] h_wdata,
     input  wire [15:0] h_rdata,
     input  wire [15:0] h_imem_rdata,  // an IMEM_RD's word, the clock after it
@@ -40,7 +40,7 @@ module spi (
     reg        hdr;                       // the header is in
     reg [2:0]  op;
     reg [1:0]  sm, last_sm;               // this transaction's SM, the previous one's
-    reg [7:0]  addr;
+    reg [5:0]  addr;
     reg        ia;                        // the next word is an IMEM address
     reg [6:0]  pops;                      // RX_POP words left
     reg [15:0] out;                       // MISO shift register
@@ -58,7 +58,7 @@ module spi (
     wire       read_n = op_n == OP_REG_RD | op_n == OP_RX_POP | op_n == OP_IMEM_RD;
     wire       write  = hdr & ~ia & (op == OP_REG_WR | op == OP_TX_PUSH | op == OP_IMEM_WR);
     wire       imem_n = op_n == OP_IMEM_WR | op_n == OP_IMEM_RD;
-    wire [7:0] addr_r = ~hdr ? {2'd0, w[5:0]} : ia ? w[7:0] : addr + 8'd1;   // the next read's
+    wire [5:0] addr_r = (~hdr | ia) ? w[5:0] : addr + 6'd1;    // the next read's
     wire [6:0] pops_n = hdr ? pops : {w[5:0] == 6'd0, w[5:0]};
     wire       read   = done & read_n & (op_n != OP_RX_POP | pops_n != 7'd0) & (hdr | ~imem_n);
 
@@ -84,7 +84,7 @@ module spi (
             sr <= 15'd0;
             bits <= 4'd0;
             hdr <= 1'b0;
-            {op, sm, last_sm, addr, pops} <= 22'd0;
+            {op, sm, last_sm, addr, pops} <= 20'd0;
             ia <= 1'b0;
             out <= 16'd0;
             {load_next, load_imem} <= 2'b00;
@@ -107,13 +107,13 @@ module spi (
                 if (done) begin
                     if (!hdr) begin
                         {hdr, op, sm, last_sm} <= {1'b1, w[15:13], w[12:11], w[12:11]};
-                        addr <= {2'd0, w[5:0]};
+                        addr <= w[5:0];
                         ia   <= imem_n;
                     end else if (ia) begin                // the IMEM address
-                        addr <= w[7:0];
+                        addr <= w[5:0];
                         ia   <= 1'b0;
                     end else if (write)
-                        addr <= addr + 8'd1;
+                        addr <= addr + 6'd1;
                     if (read) begin
                         addr <= addr_r;
                         pops <= pops_n - {6'd0, op_n == OP_RX_POP};

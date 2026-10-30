@@ -23,7 +23,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "sim" / "model"))
 from vsim import VSim                                                   # noqa: E402
 
-from asm import IMEM_WORDS, PAGE_WORDS, PAU_CODES, AssemblerError, assemble  # noqa: E402
+from asm import IMEM_WORDS, PAU_CODES, AssemblerError, assemble  # noqa: E402
 from chip import (CTRL, GPIO, IRQ, OP_IMEM_RD, OP_IMEM_WR, OP_REG_RD, OP_REG_WR, PAU_MODE_BITS,  # noqa: E402
                   OP_RX_POP, OP_TX_PUSH, PADS_BIDIR, TT_PADS, Chip)
 from host import Host                                                   # noqa: E402
@@ -97,7 +97,7 @@ class LockstepChip(Chip):
             self.model_only = False
         r.tick()
         for i in range(n_sm):
-            a = im_addr >> 8 * i & 0xFF
+            a = im_addr >> 6 * i & 63
             if im_we >> i & 1:
                 self.imem[i][a] = im_wdata
             else:
@@ -192,7 +192,6 @@ def random_load(chip: LockstepChip, host: Host, n: int, rng: random.Random) -> N
               pau_mode=rng.randrange(1 << 16) & PAU_MODE_BITS,
               pau_code=rng.choice([*PAU_CODES.values(), rng.randrange(1 << 16)]),
               pau_cfg=rng.randrange(1, 4) | rng.randrange(4) << 5,
-              page=rng.randrange(4) if len(prog) <= PAGE_WORDS else 0,
               crc_cfg=rng.randrange(128), crc_poly=rng.randrange(1 << 32),
               open_drain_mask=rng.randrange(256) & host.read(0, PADS_BIDIR)[0] if rng.random() < .3 else 0)
 
