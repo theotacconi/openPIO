@@ -1,5 +1,5 @@
-// openpio_sm.v - one openPIO state machine, ISA v2 (sim/model/ISA.md, emu.py): prescaler,
-// fetch, execute, conditions, its PAU and its host registers (HOST.md 0x01..0x1F).
+// openpio_sm.v - one openPIO state machine, ISA v3 (sim/model/ISA.md, emu.py): prescaler,
+// fetch, execute, conditions, its PAU and its host registers (HOST.md 0x01..0x1F, 0x30..0x33).
 //
 // A clock with run = 1 is one emu.py StateMachine.step(). On a strobe, in ISA.md order:
 //   PAU step (TX, then RX)  ->  the four conditions it sees (cond_seen)
@@ -26,11 +26,11 @@ module openpio_sm (
     input  wire        reset,         // CTRL.RESET, at the end of this clock
     output wire        strobe,        // this clock is a strobe of the running SM
 
-    output wire [5:0]  imem_addr,     // read at the clock edge
+    output wire [7:0]  imem_addr,     // read at the clock edge
     input  wire [15:0] instr,         // mem[pc]
 
     input  wire        h_we,          // host register write, at the end of the clock
-    input  wire [4:0]  h_addr,
+    input  wire [5:0]  h_addr,        // 0x00..0x1F, 0x30..0x3F
     input  wire [15:0] h_wdata,
     output reg  [15:0] h_rdata,       // register h_addr (0x00 STATUS and 0x1C FIFO_LEVEL: 0)
 
@@ -63,12 +63,12 @@ module openpio_sm (
     input  wire        in_val,
 
     output reg  [9:0]  irq_mask,      // IRQ_MASK
-    output reg  [5:0]  pc,
+    output reg  [7:0]  pc,
     output reg         stalled
 );
 
     // ================================================================== host configuration
-    reg  [5:0]  wrap_bot, wrap_top;
+    reg  [7:0]  wrap_bot, wrap_top;
     reg  [2:0]  ss_count;
     reg         ss_opt, ss_pdir;
     reg  [3:0]  ss_base, in_base, out_base, set_base;
@@ -79,15 +79,19 @@ module openpio_sm (
     reg  [15:0] clkdiv_cfg;
     reg  [7:0]  frac_cfg;
     reg  [31:0] cond_cfg;
-    reg  [1:0]  p_enc;                // PAU_MODE fields (bit 8 is ignored, reads 0)
-    reg         p_inv, p_diff, p_sequal;
+    reg  [1:0]  p_pin2;               // PAU_MODE fields
+    reg         p_inv, p_align, p_ext, p_cpol, p_cpha, p_sequal;
     reg  [3:0]  p_slen;
-    reg  [4:0]  p_baud_rst;
+    reg  [15:0] p_code;               // PAU_CODE
+    reg  [4:0]  p_baud_rst;           // PAU_CFG fields
+    reg  [1:0]  p_run;
+    reg  [5:0]  p_sync_len;
+    reg  [31:0] p_sync;               // SYNC
     reg  [6:0]  crc_cfg;
     reg  [31:0] crc_poly, crc_res;
 
     // ================================================================== state
-    reg  [5:0]  stage;                // PC after the delay
+    reg  [7:0]  stage;                // PC after the delay
     reg  [15:0] x, y, isr, osr;
     reg  [4:0]  isr_cnt, osr_cnt;
     reg  [9:0]  cnt;                  // delay, WAIT timeout or CRC feed bits left
@@ -131,7 +135,9 @@ module openpio_sm (
     wire [2:0] alu_op  = {instr[13], instr[4:3]};
     wire [2:0] alu_src = instr[2:0];
     wire [1:0] c_type  = instr[7:6];
-    wire [5:0] target  = {instr[13], instr[4:0]};
+    wire [5:0] target  = {instr[13], instr[4:0]};          // in the page; FAR: page, entry
+    wire [7:0] near    = {pc[7:6], target};
+    wire [7:0] far     = {target[5:4], 2'd0, target[3:0]};
     wire [4:0] imm     = instr[4:0];
 
     localparam OP_IN = 3'b010, OP_OUT = 3'b011, OP_CTRL = 3'b110, OP_SET = 3'b111;
@@ -152,10 +158,17 @@ module openpio_sm (
     wire [4:0] delay_f  = ds & ~(5'h1F << dbits);
     wire [4:0] ss_field = ds >> dbits;
     wire       ss_on    = (ss_count != 3'd0) & (~ss_opt | |(ss_field & (5'd1 << ss_count)));
-    wire [15:0] ss_m    = {11'd0, ~(5'h1F << ss_count)} << ss_base;
-    wire [15:0] ss_v    = ({11'd0, ss_field} << ss_base) & ss_m;
+    // pin groups from a base count mod 16 (ISA.md, Multiple state machines)
+    function [15:0] rotl16;
+        input [15:0] v;
+        input [3:0]  b;
+        rotl16 = (v << b) | (v >> (5'd16 - {1'b0, b}));
+    endfunction
 
-    wire [5:0] pc_next  = (pc == wrap_top) ? wrap_bot : pc + 6'd1;
+    wire [15:0] ss_m    = rotl16({11'd0, ~(5'h1F << ss_count)}, ss_base);
+    wire [15:0] ss_v    = rotl16({11'd0, ss_field}, ss_base) & ss_m;
+
+    wire [7:0] pc_next  = (pc == wrap_top) ? wrap_bot : pc + 8'd1;
     wire [4:0] pull_at  = {pull_thr == 4'd0, pull_thr};
     wire [4:0] push_at  = {push_thr == 4'd0, push_thr};
     wire [15:0] m_n     = ~(16'hFFFF << n);                 // the low n bits
@@ -165,11 +178,11 @@ module openpio_sm (
     reg  [4:0] p_baud;
     reg        p_feed_bit;
     wire       pau_tx, pau_rx;    // PAU_CTL TX, RX on
-    wire [10:0] pau_status;           // after the PAU step
+    wire [12:0] pau_status;           // after the PAU step
     wire [7:0]  pau_status_r;         // at the clock start (host reads)
     wire [5:0] tx_len_s, rx_len_s;
     wire [15:0] rx_bits_s;
-    wire       pau_drive, pau_line;
+    wire       pau_drive, pau_line, pau_clk;
     wire [31:0] crc;
 
     // ================================================================== conditions
@@ -178,7 +191,7 @@ module openpio_sm (
                              x == y, y == 16'd0, x == 16'd0};
     wire [15:0] status_w  = {pau_status[7:0], sm_status[7:0]};
     // sources 0 and 1 (pin Index, pin in_base + Index) share one pin multiplexer a slot
-    wire [127:0] sig      = {5'd0, pau_status, sm_status, y, x, peer_irq, peer_irq, irq, irq, 32'd0};
+    wire [127:0] sig      = {3'd0, pau_status, sm_status, y, x, peer_irq, peer_irq, irq, irq, 32'd0};
     wire [3:0] cond_seen;
     genvar k;
     generate
@@ -218,7 +231,7 @@ module openpio_sm (
     // time order: the LSB shifting right, the MSB shifting left)
     wire        in_pau  = f_hi == R_PINS & pau_rx;
     wire [15:0] in_src  = in_pau ? (in_shr ? rx_bits_s : rev16(rx_bits_s) >> (5'd16 - n))
-                        : f_hi == R_PINS    ? gpio_in >> in_base
+                        : f_hi == R_PINS    ? rotl16(gpio_in, 4'd0 - in_base)
                         : f_hi == R_PINDIRS ? time_r
                         : operand(f_hi);
     wire [15:0] in_v    = in_src & m_n;
@@ -258,9 +271,8 @@ module openpio_sm (
         endcase
     end
 
-    // pin groups from a base stop at pin 15
-    wire [15:0] out_m = m_n << out_base;
-    wire [15:0] set_m = {11'd0, ~(5'h1F << set_count)} << set_base;
+    wire [15:0] out_m = rotl16(m_n, out_base);
+    wire [15:0] set_m = rotl16({11'd0, ~(5'h1F << set_count)}, set_base);
 
     // CRC feed: bit r of the last n, r = bits left (n at issue): oldest first
     wire [3:0]  feed_r   = (stalled & ~retry) ? cnt[3:0] : instr[3:0];   // 0: 16
@@ -277,7 +289,7 @@ module openpio_sm (
     wire [9:0] dly_x = mul_a * dlymul;
 
     // ================================================================== next state
-    reg  [5:0]  pc_d, stage_d;
+    reg  [7:0]  pc_d, stage_d;
     reg  [15:0] x_d, y_d, isr_d, osr_d;
     reg  [4:0]  isr_cnt_d, osr_cnt_d;
     reg  [9:0]  cnt_d;
@@ -287,7 +299,7 @@ module openpio_sm (
     reg  [31:0] cond_d;
     reg  [15:0] wo_m, wo_v, wd_m, wd_v;    // the instruction's pin writes
     reg         done;                       // the instruction completes: PC or a delay
-    reg  [5:0]  done_pc;
+    reg  [7:0]  done_pc;
 
     wire        irq_sel  = instr[3] ? peer_irq[instr[2:0]] : irq[instr[2:0]];
 
@@ -351,17 +363,17 @@ module openpio_sm (
             done = 1'b1;
             if (is_jmp) begin
                 case (f_hi)
-                    3'd0: done_pc = target;
-                    3'd1: ;
+                    3'd0: done_pc = near;
+                    3'd1: done_pc = far;
                     3'd2: begin
-                        if (x != 16'd0) done_pc = target;
+                        if (x != 16'd0) done_pc = near;
                         x_d = x - 16'd1;
                     end
                     3'd3: begin
-                        if (y != 16'd0) done_pc = target;
+                        if (y != 16'd0) done_pc = near;
                         y_d = y - 16'd1;
                     end
-                    default: if (cond_seen[f_hi[1:0]]) done_pc = target;
+                    default: if (cond_seen[f_hi[1:0]]) done_pc = near;
                 endcase
 
             end else if (op == OP_IN) begin
@@ -404,13 +416,13 @@ module openpio_sm (
                     end
                     case (f_hi)
                         R_PINS: if (pau_tx) p_tx_push = 1'b1;
-                                else begin wo_m = out_m; wo_v = out_v << out_base; end
-                        R_PINDIRS: begin wd_m = out_m; wd_v = out_v << out_base; end
+                                else begin wo_m = out_m; wo_v = rotl16(out_v, out_base); end
+                        R_PINDIRS: begin wd_m = out_m; wd_v = rotl16(out_v, out_base); end
                         R_X:       x_d = out_v;
                         R_Y:       y_d = out_v;
                         R_ISR:     begin isr_d = out_v; isr_cnt_d = n; end
                         R_OSR:     p_baud_we = 1'b1;                // PAU_BAUD
-                        R_SPECIAL: done_pc = out_v[5:0];
+                        R_SPECIAL: done_pc = out_v[7:0];
                         default:   ;
                     endcase
                 end
@@ -490,8 +502,8 @@ module openpio_sm (
 
             end else if (op == OP_SET) begin
                 case (f_hi)
-                    3'd0: begin wo_m = set_m; wo_v = {11'd0, imm} << set_base; end
-                    3'd1: begin wd_m = set_m; wd_v = {11'd0, imm} << set_base; end
+                    3'd0: begin wo_m = set_m; wo_v = rotl16({11'd0, imm}, set_base); end
+                    3'd1: begin wd_m = set_m; wd_v = rotl16({11'd0, imm}, set_base); end
                     3'd2: x_d = {11'd0, imm};
                     3'd3: y_d = {11'd0, imm};
                     3'd4: dlymul_d = (imm == 5'd0) ? 5'd1 : imm;
@@ -530,22 +542,30 @@ module openpio_sm (
     assign dir_we  = (sd_m | wd_m) & pin_mask;
     assign dir_val = (wd_m & wd_v) | (~wd_m & ss_v);
 
-    // the PAU drives pin out_base (and its complement on out_base + 1 with DIFF)
-    wire [15:0] pau_m = (16'd1 << out_base) | (p_diff ? 16'd1 << (out_base + 4'd1) : 16'd0);
+    // the PAU drives pin out_base, and out_base + 1 with PIN2: the complement, or the bit clock
+    wire        pin2_on = (p_pin2 == 2'd1) | (p_pin2 == 2'd2 & ~p_ext);
+    wire        pin2_v  = p_pin2[1] ? pau_clk : ~pau_line;
+    wire [15:0] pau_m   = (16'd1 << out_base) | (pin2_on ? 16'd1 << (out_base + 4'd1) : 16'd0);
     assign pau_we  = pau_drive ? pau_m & pin_mask : 16'd0;
-    assign pau_val = pau_line ? 16'd1 << out_base : 16'd1 << (out_base + 4'd1);
+    assign pau_val = ({15'd0, pau_line} << out_base) | ({15'd0, pin2_v} << (out_base + 4'd1));
 
     pau u_pau (
         .clk        (clk),
         .rst_n      (rst_n),
         .reset      (reset),
         .stb        (stb),
-        .enc        (p_enc),
+        .code       (p_code),
         .inv        (p_inv),
-        .diff       (p_diff),
+        .align      (p_align),
+        .ext        (p_ext),
+        .cpol       (p_cpol),
+        .cpha       (p_cpha),
         .stuff_len  (p_slen),
         .sequal     (p_sequal),
         .baud_rst   (p_baud_rst),
+        .run        (p_run),
+        .sync_len   (p_sync_len),
+        .sync       (p_sync),
         .crc_cfg    (crc_cfg),
         .crc_poly   (crc_poly),
         .crc_res    (crc_res),
@@ -575,6 +595,7 @@ module openpio_sm (
         .rx_bits_s  (rx_bits_s),
         .drive      (pau_drive),
         .line       (pau_line),
+        .bit_clk    (pau_clk),
         .crc        (crc)
     );
 
@@ -584,35 +605,39 @@ module openpio_sm (
 
     always @(*) begin
         case (h_addr)
-            5'h01: h_rdata = {2'd0, wrap_top, 2'd0, wrap_bot};
-            5'h02: h_rdata = {4'd0, ss_base, 3'd0, ss_pdir, ss_opt, ss_count};
-            5'h03: h_rdata = {1'b0, set_count, set_base, out_base, in_base};
-            5'h04: h_rdata = pin_mask;
-            5'h05: h_rdata = {pull_thr, push_thr, 6'd0, out_shr, in_shr};
-            5'h06: h_rdata = clkdiv_cfg;
-            5'h08: h_rdata = cond_cfg[15:0];
-            5'h09: h_rdata = cond_cfg[31:16];
-            5'h0A: h_rdata = {1'b0, p_baud_rst, p_sequal, 1'b0, p_slen, p_diff, p_inv, p_enc};
-            5'h0B: h_rdata = {9'd0, crc_cfg};
-            5'h0C: h_rdata = crc_poly[15:0];
-            5'h0D: h_rdata = crc_poly[31:16];
-            5'h0E: h_rdata = crc_res[15:0];
-            5'h0F: h_rdata = crc_res[31:16];
-            5'h10: h_rdata = {8'd0, irq};
-            5'h11: h_rdata = {10'd0, pc};
-            5'h12: h_rdata = x;
-            5'h13: h_rdata = y;
-            5'h14: h_rdata = isr;
-            5'h15: h_rdata = osr;
-            5'h16: h_rdata = {3'd0, osr_cnt, 3'd0, isr_cnt};
-            5'h17: h_rdata = cond[15:0];
-            5'h18: h_rdata = cond[31:16];
-            5'h19: h_rdata = crc[15:0];
-            5'h1A: h_rdata = crc[31:16];
-            5'h1B: h_rdata = {pau_status_r, sm_status[7:0]};
-            5'h1D: h_rdata = {6'd0, irq_mask};
-            5'h1E: h_rdata = {8'd0, frac_cfg};
-            5'h1F: h_rdata = time_r;
+            6'h01: h_rdata = {wrap_top, wrap_bot};
+            6'h02: h_rdata = {4'd0, ss_base, 3'd0, ss_pdir, ss_opt, ss_count};
+            6'h03: h_rdata = {1'b0, set_count, set_base, out_base, in_base};
+            6'h04: h_rdata = pin_mask;
+            6'h05: h_rdata = {pull_thr, push_thr, 6'd0, out_shr, in_shr};
+            6'h06: h_rdata = clkdiv_cfg;
+            6'h08: h_rdata = cond_cfg[15:0];
+            6'h09: h_rdata = cond_cfg[31:16];
+            6'h0A: h_rdata = {4'd0, p_slen, p_sequal, p_cpha, p_cpol, p_ext, p_align, p_inv, p_pin2};
+            6'h0B: h_rdata = {9'd0, crc_cfg};
+            6'h0C: h_rdata = crc_poly[15:0];
+            6'h0D: h_rdata = crc_poly[31:16];
+            6'h0E: h_rdata = crc_res[15:0];
+            6'h0F: h_rdata = crc_res[31:16];
+            6'h10: h_rdata = {8'd0, irq};
+            6'h11: h_rdata = {8'd0, pc};
+            6'h12: h_rdata = x;
+            6'h13: h_rdata = y;
+            6'h14: h_rdata = isr;
+            6'h15: h_rdata = osr;
+            6'h16: h_rdata = {3'd0, osr_cnt, 3'd0, isr_cnt};
+            6'h17: h_rdata = cond[15:0];
+            6'h18: h_rdata = cond[31:16];
+            6'h19: h_rdata = crc[15:0];
+            6'h1A: h_rdata = crc[31:16];
+            6'h1B: h_rdata = {pau_status_r, sm_status[7:0]};
+            6'h1D: h_rdata = {6'd0, irq_mask};
+            6'h1E: h_rdata = {8'd0, frac_cfg};
+            6'h1F: h_rdata = time_r;
+            6'h30: h_rdata = p_code;
+            6'h31: h_rdata = p_sync[15:0];
+            6'h32: h_rdata = p_sync[31:16];
+            6'h33: h_rdata = {2'd0, p_sync_len, 1'b0, p_run, p_baud_rst};
             default: h_rdata = 16'd0;
         endcase
     end
@@ -620,47 +645,54 @@ module openpio_sm (
     // ================================================================== registers
     // IRQ flags at the clock end: this SM's write, the peer's, then the host's (clear, set)
     wire [7:0] irq_peer = in_we ? (irq_d & ~(8'd1 << in_idx)) | ({7'd0, in_val} << in_idx) : irq_d;
-    wire [7:0] irq_host = (hw & h_addr == 5'h10) ? (irq_peer & ~h_wdata[7:0]) | h_wdata[15:8] : irq_peer;
+    wire [7:0] irq_host = (hw & h_addr == 6'h10) ? (irq_peer & ~h_wdata[7:0]) | h_wdata[15:8] : irq_peer;
     wire [4:0] hcnt_i = h_wdata[4:0] > 5'd16 ? 5'd16 : h_wdata[4:0];
     wire [4:0] hcnt_o = h_wdata[12:8] > 5'd16 ? 5'd16 : h_wdata[12:8];
 
-    assign imem_addr = (!rst_n | reset) ? 6'd0 : (hw & stopped & h_addr == 5'h11) ? h_wdata[5:0] : pc_d;
+    assign imem_addr = (!rst_n | reset) ? 8'd0 : (hw & stopped & h_addr == 6'h11) ? h_wdata[7:0] : pc_d;
 
     always @(posedge clk) begin
         if (!rst_n) begin
-            wrap_bot <= 6'd0;   wrap_top <= 6'd63;
+            wrap_bot <= 8'd0;   wrap_top <= 8'd255;
             ss_count <= 3'd0;   ss_opt <= 1'b0;   ss_pdir <= 1'b0;   ss_base <= 4'd0;
             in_base <= 4'd0;    out_base <= 4'd0; set_base <= 4'd0;  set_count <= 3'd5;
             pin_mask <= 16'hFFFF;
             in_shr <= 1'b1;     out_shr <= 1'b1;  push_thr <= 4'd0;  pull_thr <= 4'd0;
             clkdiv_cfg <= 16'd1;  frac_cfg <= 8'd0;
             cond_cfg <= 32'hE400_6160;
-            {p_baud_rst, p_sequal, p_slen, p_diff, p_inv, p_enc} <= 14'd0;
+            {p_slen, p_sequal, p_cpha, p_cpol, p_ext, p_align, p_inv, p_pin2} <= 12'd0;
+            p_code <= 16'h00FA;
+            {p_sync_len, p_run, p_baud_rst} <= 13'd0;
+            p_sync <= 32'd0;
             crc_cfg <= 7'd0;  crc_poly <= 32'd0;  crc_res <= 32'd0;
             irq_mask <= 10'h0FF;
         end else if (hw) begin
             case (h_addr)
-                5'h01: {wrap_top, wrap_bot} <= {h_wdata[13:8], h_wdata[5:0]};
-                5'h02: {ss_base, ss_pdir, ss_opt, ss_count} <= {h_wdata[11:8], h_wdata[4:0]};
-                5'h03: {set_count, set_base, out_base, in_base} <= h_wdata[14:0];
-                5'h04: pin_mask <= h_wdata;
-                5'h05: {pull_thr, push_thr, out_shr, in_shr} <= {h_wdata[15:8], h_wdata[1:0]};
-                5'h06: clkdiv_cfg <= (h_wdata == 16'd0) ? 16'd1 : h_wdata;
-                5'h07: cond_cfg[8*h_wdata[9:8] +: 8] <= h_wdata[7:0];
-                5'h0A: {p_baud_rst, p_sequal, p_slen, p_diff, p_inv, p_enc} <= {h_wdata[14:9], h_wdata[7:0]};
-                5'h0B: crc_cfg <= h_wdata[6:0];
-                5'h0C: crc_poly[15:0] <= h_wdata;
-                5'h0D: crc_poly[31:16] <= h_wdata;
-                5'h0E: crc_res[15:0] <= h_wdata;
-                5'h0F: crc_res[31:16] <= h_wdata;
-                5'h1D: irq_mask <= h_wdata[9:0];
-                5'h1E: frac_cfg <= h_wdata[7:0];
+                6'h01: {wrap_top, wrap_bot} <= h_wdata;
+                6'h02: {ss_base, ss_pdir, ss_opt, ss_count} <= {h_wdata[11:8], h_wdata[4:0]};
+                6'h03: {set_count, set_base, out_base, in_base} <= h_wdata[14:0];
+                6'h04: pin_mask <= h_wdata;
+                6'h05: {pull_thr, push_thr, out_shr, in_shr} <= {h_wdata[15:8], h_wdata[1:0]};
+                6'h06: clkdiv_cfg <= (h_wdata == 16'd0) ? 16'd1 : h_wdata;
+                6'h07: cond_cfg[8*h_wdata[9:8] +: 8] <= h_wdata[7:0];
+                6'h0A: {p_slen, p_sequal, p_cpha, p_cpol, p_ext, p_align, p_inv, p_pin2} <= h_wdata[11:0];
+                6'h0B: crc_cfg <= h_wdata[6:0];
+                6'h0C: crc_poly[15:0] <= h_wdata;
+                6'h0D: crc_poly[31:16] <= h_wdata;
+                6'h0E: crc_res[15:0] <= h_wdata;
+                6'h0F: crc_res[31:16] <= h_wdata;
+                6'h1D: irq_mask <= h_wdata[9:0];
+                6'h1E: frac_cfg <= h_wdata[7:0];
+                6'h30: p_code <= h_wdata;
+                6'h31: p_sync[15:0] <= h_wdata;
+                6'h32: p_sync[31:16] <= h_wdata;
+                6'h33: {p_sync_len, p_run, p_baud_rst} <= {h_wdata[13:8], h_wdata[6:0]};
                 default: ;
             endcase
         end
 
         if (!rst_n || reset) begin
-            pc <= 6'd0;          stage <= 6'd0;
+            pc <= 8'd0;          stage <= 8'd0;
             x <= 16'd0;          y <= 16'd0;          isr <= 16'd0;        osr <= 16'd0;
             isr_cnt <= 5'd0;     osr_cnt <= 5'd16;
             cnt <= 10'd0;        delaying <= 1'b0;    stalled <= 1'b0;     retry <= 1'b0;
@@ -700,12 +732,12 @@ module openpio_sm (
             end
             if (hw & stopped) begin
                 case (h_addr)
-                    5'h11: pc <= h_wdata[5:0];
-                    5'h12: x <= h_wdata;
-                    5'h13: y <= h_wdata;
-                    5'h14: isr <= h_wdata;
-                    5'h15: osr <= h_wdata;
-                    5'h16: {osr_cnt, isr_cnt} <= {hcnt_o, hcnt_i};
+                    6'h11: pc <= h_wdata[7:0];
+                    6'h12: x <= h_wdata;
+                    6'h13: y <= h_wdata;
+                    6'h14: isr <= h_wdata;
+                    6'h15: osr <= h_wdata;
+                    6'h16: {osr_cnt, isr_cnt} <= {hcnt_o, hcnt_i};
                     default: ;
                 endcase
             end

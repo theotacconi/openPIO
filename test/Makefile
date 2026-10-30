@@ -19,7 +19,6 @@ SRC_DIR = $(PWD)/../src
 PROJECT_SOURCES = tt_um_theotacconi_openpio.v spi.v openpio.v openpio_sm.v pau.v fifo.v
 # IHP SRAM macros (src/*_sram.v): behavioural models, compiled with -DFUNCTIONAL
 SRAM_MODELS = $(addprefix $(PDK_ROOT)/ihp-sg13cmos5l/libs.ref/sg13cmos5l_sram/verilog/,\
-	RM_IHPSG13_1P_64x16_c2.v RM_IHPSG13_1P_core_behavioral.v \
 	RM_IHPSG13_1P_256x16_c2_bm_bist.v RM_IHPSG13_1P_core_behavioral_bm_bist.v)
 
 ifneq ($(GATES),yes)

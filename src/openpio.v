@@ -24,7 +24,7 @@ module openpio #(
     input  wire               h_valid,
     input  wire [2:0]         h_op,          // HOST.md SPI commands
     input  wire [1:0]         h_sm,          // SMs beyond N_SM - 1 mean the last one
-    input  wire [5:0]         h_addr,
+    input  wire [7:0]         h_addr,        // a register (0x00..0x3F), or an IMEM word
     input  wire [15:0]        h_wdata,
     output reg  [15:0]        h_rdata,       // REG_RD, RX_POP: the clock-start state
     output wire [15:0]        h_imem_rdata,  // IMEM_RD: in the clock after the access
@@ -36,8 +36,8 @@ module openpio #(
     output wire [15:0]        pin_out,
     output wire [15:0]        pin_oe,
 
-    // IMEMs (64 x 16) and FIFO SRAMs (256 x 16), one port each
-    output reg  [6*N_SM-1:0]  imem_addr,
+    // IMEMs (256 x 16) and FIFO SRAMs (256 x 16), one port each
+    output reg  [8*N_SM-1:0]  imem_addr,
     output reg  [N_SM-1:0]    imem_we,
     output wire [15:0]        imem_wdata,
     input  wire [16*N_SM-1:0] imem_rdata,
@@ -62,8 +62,9 @@ module openpio #(
     reg  [15:0] latch_out, latch_dir, od_mask;
     reg  [3:0]  en, stepping;
 
-    wire        h_chip = h_addr[5];
-    wire        ctrl_wr = h_valid & h_op == OP_REG_WR & h_addr == A_CTRL;
+    wire [5:0]  h_reg  = h_addr[5:0];
+    wire        h_chip = h_reg[5:4] == 2'b10;               // 0x20..0x2F
+    wire        ctrl_wr = h_valid & h_op == OP_REG_WR & h_reg == A_CTRL;
     wire [3:0]  sm_mask = (4'd1 << N_SM) - 4'd1;
     wire [3:0]  en_new  = h_wdata[3:0] & sm_mask;
     wire [N_SM-1:0] rst_req = ctrl_wr ? h_wdata[4 +: N_SM] : {N_SM{1'b0}};
@@ -72,7 +73,7 @@ module openpio #(
     wire [16*N_SM-1:0] sm_rdata, out_we, out_val, dir_we, dir_val, pau_we, pau_val;
     wire [16*N_SM-1:0] tx_data, rx_data, fifo_rdata;
     wire [8*N_SM-1:0]  irq, tx_level, rx_level;
-    wire [6*N_SM-1:0]  pc, sm_imem;
+    wire [8*N_SM-1:0]  pc, sm_imem;
     wire [10*N_SM-1:0] irq_mask;
     wire [3*N_SM-1:0]  peer_idx;
     wire [N_SM-1:0]    strobe, stalled, peer_we, peer_val, tx_empty, tx_pop, rx_full, rx_push,
@@ -96,10 +97,10 @@ module openpio #(
                 .run           (en[i] | stepping[i]),
                 .reset         (rst_req[i]),
                 .strobe        (strobe[i]),
-                .imem_addr     (sm_imem[6*i +: 6]),
+                .imem_addr     (sm_imem[8*i +: 8]),
                 .instr         (imem_rdata[16*i +: 16]),
                 .h_we          (sel & h_op == OP_REG_WR & ~h_chip),
-                .h_addr        (h_addr[4:0]),
+                .h_addr        (h_reg),
                 .h_wdata       (h_wdata),
                 .h_rdata       (sm_rdata[16*i +: 16]),
                 .gpio_in       (gpio_in),
@@ -128,7 +129,7 @@ module openpio #(
                 .in_idx        (peer_idx[3*(i ^ 1) +: 3]),
                 .in_val        (peer_val[i ^ 1]),
                 .irq_mask      (irq_mask[10*i +: 10]),
-                .pc            (pc[6*i +: 6]),
+                .pc            (pc[8*i +: 8]),
                 .stalled       (stalled[i])
             );
 
@@ -183,10 +184,10 @@ module openpio #(
     assign pin_oe  = (latch_dir & ~(pins & od_mask) & PADS_BIDIR) | PADS_ONLY;
 
     // ------------------------------------------------------------------ host reads
-    wire [5:0]  s_pc     = pc[6*hsm +: 6];
+    wire [7:0]  s_pc     = pc[8*hsm +: 8];
     wire [7:0]  s_txl    = tx_level[8*hsm +: 8];
     wire [7:0]  s_rxl    = rx_level[8*hsm +: 8];
-    assign h_status = {2'd0, s_pc, 2'd0, en[hsm], stalled4[hsm], s_rxl >= 8'd133,
+    assign h_status = {s_pc, 2'd0, en[hsm], stalled4[hsm], s_rxl >= 8'd133,
                        s_rxl == 8'd0, ~room4[hsm], s_txl == 8'd0};
 
     always @(*) begin
@@ -194,7 +195,7 @@ module openpio #(
         if (h_op == OP_RX_POP)
             h_rdata = fifo_rdata[16*hsm +: 16];
         else if (h_op == OP_REG_RD) begin
-            case (h_addr)
+            case (h_reg)
                 6'h00:        h_rdata = h_status;
                 6'h1C:        h_rdata = {s_rxl, s_txl};
                 A_CTRL:       h_rdata = {12'd0, en};
@@ -203,7 +204,7 @@ module openpio #(
                 A_PINS_OE:    h_rdata = pin_oe;
                 A_PINS_IN:    h_rdata = gpio_in;
                 A_IRQ_SUM:    h_rdata = {{(16-N_SM){1'b0}}, irq_req};
-                A_ID:         h_rdata = {4'd2, N4, 8'h50};
+                A_ID:         h_rdata = {4'd3, N4, 8'h50};
                 A_PADS_OUT:   h_rdata = PADS_OUT;
                 A_PADS_IN:    h_rdata = PADS_IN;
                 A_PADS_BIDIR: h_rdata = PADS_BIDIR;
@@ -221,7 +222,7 @@ module openpio #(
     integer m;
     always @(*) begin
         for (m = 0; m < N_SM; m = m + 1) begin
-            imem_addr[6*m +: 6] = (im_host & hsm == m[1:0]) ? h_addr : sm_imem[6*m +: 6];
+            imem_addr[8*m +: 8] = (im_host & hsm == m[1:0]) ? h_addr : sm_imem[8*m +: 8];
             imem_we[m] = im_host & hsm == m[1:0] & h_op == OP_IMEM_WR;
         end
     end
@@ -244,11 +245,11 @@ module openpio #(
             im_rd_v   <= im_host & h_op == OP_IMEM_RD;
             im_rd_sm  <= hsm;
             if (h_valid & h_op == OP_REG_WR) begin
-                if (h_addr == A_CTRL) begin
+                if (h_reg == A_CTRL) begin
                     en <= en_new;
                     stepping <= (stepping & ~strobe4) | (h_wdata[11:8] & sm_mask & ~en_new);
                 end
-                if (h_addr == A_GPIO)
+                if (h_reg == A_GPIO)
                     od_mask <= h_wdata;
             end
         end

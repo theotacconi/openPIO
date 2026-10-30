@@ -1,8 +1,8 @@
 """Random-program lockstep of one state machine: src/openpio_sm.v (with src/pau.v) against
 sim/model/emu.py's StateMachine, compared every clock.
 
-Random configurations (written through the host registers, as HOST.md) and programs: 64
-random instruction words, or (half of them) a loop of PAU work (OUT and IN through the PAU with
+Random configurations (written through the host registers, as HOST.md) and programs: 256
+random instruction words (four pages), or (half of them) a loop of PAU work (OUT and IN through the PAU with
 autopull and autopush, CRC append and feed, PAU_CTL changes, waits on PAU status) with the TX pin
 looped back to the RX pin, so the line codes, stuffing, monitor and CRC run on real traffic.
 Between clocks random input pins (sometimes the PAU TX pin looped back to
@@ -22,14 +22,15 @@ from netlist import Core, Netlist, build
 
 import chip
 from chip import (CLKDIV, CLKDIV_FRAC, COND_CFG, CRC_CFG, CRC_POLY_HI, CRC_POLY_LO, CRC_RES_HI,
-                  CRC_RES_LO, FIFO_LEVEL, IRQ, IRQ_MASK, MISC, PAU_MODE, PIN_MASK, PINBASE,
-                  SIDESET, WRAP, sm_register)
-from asm import PAU_STATUS_NAMES, assemble
+                  CRC_RES_LO, FIFO_LEVEL, IRQ, IRQ_MASK, MISC, PAU_CFG, PAU_CODE, PAU_MODE, PIN_MASK,
+                  PINBASE, SIDESET, SYNC_HI, SYNC_LO, WRAP, sm_register)
+from asm import IMEM_WORDS, PAU_CODES, PAU_STATUS_NAMES, assemble
 from emu import StateMachine
 
 SOURCES = ["pau.v", "openpio_sm.v"]
 CONFIG_REGS = [WRAP, SIDESET, PINBASE, PIN_MASK, MISC, CLKDIV, CLKDIV_FRAC, PAU_MODE, CRC_CFG,
-               CRC_POLY_LO, CRC_POLY_HI, CRC_RES_LO, CRC_RES_HI, IRQ_MASK]
+               CRC_POLY_LO, CRC_POLY_HI, CRC_RES_LO, CRC_RES_HI, IRQ_MASK, PAU_CODE, SYNC_LO,
+               SYNC_HI, PAU_CFG]
 FIFO_DEPTH = 4
 
 
@@ -76,7 +77,7 @@ def pau_program(rng: random.Random) -> list[int]:
             f"nop [{rng.randrange(1, 8)}]")
     src = f"set pau_ctl, {flags(True)}\n.wrap_target\n    " + "\n    ".join(body) + "\n.wrap\n"
     words = list(assemble(src))
-    return words + [0] * (64 - len(words))
+    return words + [0] * (IMEM_WORDS - len(words))
 
 
 def random_sm(rng: random.Random) -> tuple[StateMachine, int]:
@@ -84,7 +85,7 @@ def random_sm(rng: random.Random) -> tuple[StateMachine, int]:
     opt = ss > 0 and ss < 5 and rng.random() < .4
     width = rng.choice([1, 5, 8, 15, 16, 32, rng.randrange(1, 33)])
     pau = rng.random() < .5
-    words = pau_program(rng) if pau else [random_word(rng) for _ in range(64)]
+    words = pau_program(rng) if pau else [random_word(rng) for _ in range(IMEM_WORDS)]
     sm = StateMachine(
         words, fifo_depth=FIFO_DEPTH,
         side_set_count=ss, side_set_opt=opt, side_set_pindirs=rng.random() < .2,
@@ -93,16 +94,20 @@ def random_sm(rng: random.Random) -> tuple[StateMachine, int]:
         set_count=rng.randrange(8), sideset_base=rng.randrange(16),
         cond_cfg=[rng.randrange(256) for _ in range(4)],
         push_thresh=rng.randrange(16), pull_thresh=rng.randrange(16),
-        pau_mode=rng.randrange(1 << 15) & chip.PAU_MODE_BITS & ~(0x1F << 10) | rng.randrange(1, 4) << 10,
+        pau_mode=rng.randrange(1 << 16) & chip.PAU_MODE_BITS,
+        pau_code=rng.choice([*PAU_CODES.values(), rng.randrange(1 << 16)]),
+        pau_cfg=rng.randrange(1, 4) | rng.randrange(4) << 5
+        | rng.choice([0, 0, rng.randrange(1, 9), rng.randrange(33)]) << 8,
+        sync=rng.randrange(1 << 32),
         crc_cfg=(width - 1) | rng.randrange(4) << 5, crc_poly=rng.randrange(1 << 32),
         crc_res=rng.randrange(1 << 32), pin_mask=rng.choice([0xFFFF, rng.randrange(1 << 16)]))
     if pau:
-        sm.pau_mode = sm.pau_mode & ~0xF0 | rng.randrange(1, 7) << 4      # stuffing often
+        sm.pau_mode = sm.pau_mode & ~0xF00 | rng.randrange(1, 7) << 8     # stuffing often
         sm.wrap_bottom, sm.wrap_top = 1, max(i for i, w in enumerate(words) if w)
         sm.side_set_count = 0
         sm.cond_cfg = list(chip.Chip().sms[0].cond_cfg)
     else:
-        n = rng.randrange(8, 65)
+        n = rng.randrange(8, IMEM_WORDS + 1)
         sm.wrap_bottom = rng.randrange(n)
         sm.wrap_top = rng.randrange(sm.wrap_bottom, n)
     sm.shift_in_right, sm.shift_out_right = rng.random() < .5, rng.random() < .5
@@ -197,7 +202,7 @@ def run_program(net: Netlist, rng: random.Random, cycles: int, verbose: bool) ->
     b = Bench(net, sm, irq_mask)
     c = b.c
     loop = sm.wrap_bottom == 1 or rng.random() < .3
-    regs = [a for a in range(1, 32) if a != FIFO_LEVEL]
+    regs = [a for a in [*range(1, 32), *range(0x30, 0x34)] if a != FIFO_LEVEL]
     for cyc in range(cycles):
         b.inputs()
         irq_w = rng.randrange(1 << 16) if rng.random() < .03 else None

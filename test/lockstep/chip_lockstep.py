@@ -23,8 +23,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "sim" / "model"))
 from vsim import VSim                                                   # noqa: E402
 
-from asm import AssemblerError, assemble                                # noqa: E402
-from chip import (CTRL, GPIO, IRQ, OP_IMEM_RD, OP_IMEM_WR, OP_REG_RD, OP_REG_WR,  # noqa: E402
+from asm import IMEM_WORDS, PAGE_WORDS, PAU_CODES, AssemblerError, assemble  # noqa: E402
+from chip import (CTRL, GPIO, IRQ, OP_IMEM_RD, OP_IMEM_WR, OP_REG_RD, OP_REG_WR, PAU_MODE_BITS,  # noqa: E402
                   OP_RX_POP, OP_TX_PUSH, PADS_BIDIR, TT_PADS, Chip)
 from host import Host                                                   # noqa: E402
 
@@ -46,7 +46,7 @@ class LockstepChip(Chip):
         super().__init__(n_sm, fifo_depth, spi_word_clocks, pads)
         assert pads == TT_PADS, "the RTL core is built with the Tiny Tapeout pads"
         self.rtl = VSim(SOURCES, "openpio", {"N_SM": n_sm})
-        self.imem = [[0] * 64 for _ in range(n_sm)]
+        self.imem = [[0] * IMEM_WORDS for _ in range(n_sm)]
         self.ram = [[0] * 256 for _ in range(n_sm)]
         self.im_out = [0] * n_sm
         self.ram_out = [0] * n_sm
@@ -97,7 +97,7 @@ class LockstepChip(Chip):
             self.model_only = False
         r.tick()
         for i in range(n_sm):
-            a = im_addr >> 6 * i & 63
+            a = im_addr >> 8 * i & 0xFF
             if im_we >> i & 1:
                 self.imem[i][a] = im_wdata
             else:
@@ -189,7 +189,11 @@ def random_load(chip: LockstepChip, host: Host, n: int, rng: random.Random) -> N
               in_base=rng.randrange(16), out_base=rng.randrange(16), set_base=rng.randrange(16),
               shift_in_right=rng.random() < .5, shift_out_right=rng.random() < .5,
               push_thresh=rng.randrange(16), pull_thresh=rng.randrange(16),
-              pau_mode=rng.randrange(1 << 15) & 0x03FF | rng.randrange(1, 4) << 10,
+              pau_mode=rng.randrange(1 << 16) & PAU_MODE_BITS,
+              pau_code=rng.choice([*PAU_CODES.values(), rng.randrange(1 << 16)]),
+              pau_cfg=rng.randrange(1, 4) | rng.randrange(4) << 5 | rng.choice([0, 0, rng.randrange(1, 9)]) << 8,
+              sync=rng.randrange(1 << 32),
+              page=rng.randrange(4) if len(prog) <= PAGE_WORDS else 0,
               crc_cfg=rng.randrange(128), crc_poly=rng.randrange(1 << 32),
               open_drain_mask=rng.randrange(256) & host.read(0, PADS_BIDIR)[0] if rng.random() < .3 else 0)
 
@@ -215,7 +219,7 @@ def run(seed: int, cycles: int) -> None:
         elif k < .45:
             chip.step(rng.randrange(1, 8))
         elif k < .5:
-            chip.host(OP_REG_RD, n, rng.randrange(0x2A))
+            chip.host(OP_REG_RD, n, rng.choice([rng.randrange(0x2A), rng.randrange(0x30, 0x40)]))
         elif k < .53:
             chip.host(OP_REG_WR, n, IRQ, rng.randrange(1 << 16))
         elif k < .55:
@@ -223,11 +227,11 @@ def run(seed: int, cycles: int) -> None:
             step = rng.randrange(4) if rng.random() < .3 else 0
             chip.host(OP_REG_WR, 0, CTRL, rng.randrange(4) | reset << 4 | step << 8)
         elif k < .56 and not chip.stepping >> n & 1:      # not the port of a stepping SM
-            chip.host(OP_IMEM_RD, n, rng.randrange(64))
+            chip.host(OP_IMEM_RD, n, rng.randrange(IMEM_WORDS))
         elif k < .57:
             chip.host(OP_REG_WR, 0, GPIO, rng.randrange(256))
         elif k < .58 and not (chip.en | chip.stepping) >> n & 1:
-            addr = rng.randrange(64)
+            addr = rng.randrange(IMEM_WORDS)
             if not (chip.sms[n].stalled and addr == chip.sms[n].pc):   # ISA.md, Constraints
                 chip.host(OP_IMEM_WR, n, addr, rng.randrange(1 << 16))
                 chip.step()                              # a clock before the SM can fetch it
