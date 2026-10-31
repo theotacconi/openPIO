@@ -4,7 +4,9 @@ transmitter whose format the learner is not told; it must find that format, then
 programs must receive a new transmission and send one the reference receiver accepts. Frames
 recorded from reference USB, CAN, MFM and biphase mark transmitters and from the chip's 10BASE-T
 program: the learner must find their line code, stuffing, sync bits and CRC, then its generated
-program must receive new frames with the CRC's verdict.
+program must receive new frames with the CRC's verdict. Clocked lines recorded from the reference
+SPI master in its four modes and from the chip's SD card commands: the clock, its mode, the select
+pin, the CRC; the generated program receives new frames.
 
     python3 test/learn/test_learn.py
 """
@@ -17,10 +19,12 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / "sim" / "learn"), str(ROOT / "sim" / "model"), str(ROOT / "test" / "shared")]
 from bench import Bench, Device, Script                  # noqa: E402
 from chip import IRQ                                     # noqa: E402
-from devices import (BmcTx, CanNode, UartRx, UartTx, UsbTx, WiredAndBus,  # noqa: E402
-                     can_bits, can_crc15, crc16_usb, mfm_halves, mfm_sector)
-from learn import (Capture, decode, frame_timing, frames_rx_program, infer_async,  # noqa: E402
-                   infer_frames, pau_directives, rx_program, timing, tx_program, word_value)
+from asm import assemble                                 # noqa: E402
+from devices import (BmcTx, CanNode, SpiMaster, UartRx, UartTx, UsbTx, WiredAndBus,  # noqa: E402
+                     can_bits, can_crc15, crc7_sd, crc16_usb, mfm_halves, mfm_sector)
+from learn import (Capture, clocked_rx_program, clocked_timing, decode, frame_timing,  # noqa: E402
+                   frames_rx_program, infer_async, infer_clocked, infer_frames, pau_directives,
+                   rx_program, timing, tx_program, word_value)
 
 PIN = 3
 FORMATS = [  # (data bits, parity, stop bits, idle level, clocks a bit)
@@ -295,6 +299,91 @@ class LearnFrames(unittest.TestCase):
         self.assertIn(".crc width=32 poly=0x4C11DB7 init=ones xorout=1", pau_directives(p)[0])
         with self.assertRaisesRegex(ValueError, "too fast"):
             frames_rx_program(p, 0)                      # 2 clocks a half-bit
+
+
+def played(levels: list[int], pins) -> Script:
+    """A device driving `pins` as in a recording, a level per clock."""
+    return Script([(t, {k: lv >> k & 1 for k in pins}) for t, lv in enumerate(levels)
+                   if t == 0 or lv != levels[t - 1]])
+
+
+MOSI, SCK, CS, MISO = 0, 1, 2, 3
+SD_COMMANDS = [(0, 0), (8, 0x1AA), (55, 0), (41, 0x40000000), (17, 0x12345), (24, 0x200),
+               (16, 512), (13, 0x10000), (58, 0)]
+
+
+def sd_command(index: int, arg: int) -> list[int]:
+    head = [0x40 | index, *(arg >> s & 0xFF for s in (24, 16, 8, 0))]
+    return head + [crc7_sd(head) << 1 | 1]
+
+
+class LearnClocked(unittest.TestCase):
+    """A clock pin, data pins, maybe a select pin."""
+
+    def learn(self, levels, pins):
+        return infer_clocked({k: Capture.from_levels(levels, k) for k in pins})
+
+    def spi(self, mode, transfers):
+        bench = Bench(pullups=1 << MISO | 1 << CS)
+        bench.add(SpiMaster(SCK, MOSI, MISO, CS, transfers, half=14, start=50, lead=14, gap=40,
+                            mode=mode))
+        return bench
+
+    def receive(self, p, bench, clocks, select=None):
+        bench.load(0, clocked_rx_program(p, MOSI, select), clkdiv_int=clocked_timing(p)[0])
+        bench.start(1)
+        bench.run(clocks)
+        return frames_received(bench.received[0])
+
+    def test_spi_every_mode(self):
+        """MOSI on SCK while CS_N is low, in each mode; no CRC."""
+        rnd = random.Random(7)
+        for mode in range(4):
+            with self.subTest(mode=mode):
+                transfers = [[rnd.randrange(256) for _ in range(n)] for n in (2, 5, 1, 3)]
+                bench = self.spi(mode, transfers)
+                bench.run(bench.devices[0].end + 50)
+                (p,) = self.learn(bench.trace, range(4))          # MISO idle: no data
+                self.assertEqual((p.clock, p.data, p.select), (SCK, MOSI, (CS, 0)))
+                self.assertEqual((p.cpol, p.cpha, p.crc), (mode >> 1, mode & 1, None))
+                self.assertEqual(p.frames, [bits(t, lsb_first=False) for t in transfers])
+
+                transfers = [[rnd.randrange(256) for _ in range(n)] for n in (3, 1, 4)]
+                bench = self.spi(mode, transfers)
+                got = self.receive(p, bench, bench.devices[0].end + 100, CS)
+                self.assertEqual(got, [(bits(t, lsb_first=False), 1) for t in transfers])
+
+    def test_sd_commands_from_the_chip(self):
+        """programs/sd/sd_command.asm in modes 0 and 1: the start bits 01, CRC-7 0x09, the end
+        bit; frames by CS_N, and without it by the clock's pauses. A bit flipped on the line
+        makes the CRC wrong."""
+        prog = assemble((ROOT / "programs/sd/sd_command.asm").read_text())
+        for mode in (0, 1):
+            bench = Bench(pullups=1 << CS)
+            bench.load(0, prog, pau_mode=prog.cfg["pau_mode"] | mode << 6)
+            bench.start(1)
+            for c in SD_COMMANDS:
+                bench.send(0, [b << 8 for b in sd_command(*c)[:5]])
+                bench.run(8 * 6 * 8 + 40)
+            levels = bench.trace
+            for pins, select in ((range(3), (CS, 0)), (range(2), None)):
+                with self.subTest(mode=mode, select=select):
+                    (p,) = self.learn(levels, pins)
+                    self.assertEqual((p.cpol, p.cpha, p.select, p.sync), (0, mode, select, [0, 1]))
+                    c = p.crc
+                    self.assertEqual((c.width, c.poly, c.init, c.start, c.tail), (7, 0x09, 0, 0, 1))
+                    self.assertEqual(p.frames, [bits(sd_command(*c), lsb_first=False)
+                                                for c in SD_COMMANDS])
+
+                    clk = Capture.from_levels(levels, SCK)
+                    sampled = [t for t in clk.edges if clk.level_at(t) == (p.cpol == p.cpha)]
+                    t = sampled[48 + 20]                 # the second command's bit 20
+                    bad = [lv ^ (abs(k - t) <= 3) << MOSI for k, lv in enumerate(levels)]
+                    bench = Bench()
+                    bench.add(played(bad, pins))
+                    got = self.receive(p, bench, len(bad) + 100, select and CS)
+                    self.assertEqual([v for _, v in got], [3, 1] + [3] * 7)
+                    self.assertEqual([b for b, _ in got][2:], p.frames[2:])
 
 
 if __name__ == "__main__":
