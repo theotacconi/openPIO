@@ -8,12 +8,18 @@ is one point in it. Learning is a search of that space against a recording:
     infer    -> the parameters, each checked against every character of the recording
     generate -> RX and TX programs for those parameters, as assembler source
 
-This first step covers asynchronous serial characters (UART, RS-485, LIN, Modbus RTU, DMX,
-MIDI and the proprietary links built on them): bit time, polarity, data bits, parity, stop
-bits. Next: synchronous lines with a clock pin, self-clocked frames (line code, stuffing, CRC)
-and pulse-width codes.
+Two families so far:
 
-    python3 sim/learn/learn.py capture.json      # {"clock_hz": .., "level": 0|1, "edges": [t, ..]}
+- asynchronous serial characters (UART, RS-485, LIN, Modbus RTU, DMX, MIDI and the proprietary
+  links built on them): bit time, polarity, data bits, parity, stop bits; RX and TX programs.
+- self-clocked frames, bursts of edges between idle times (USB, CAN, HDLC, 10BASE-T, MFM,
+  biphase mark, ...): the PAU's line code, polarity, half-bit, bit stuffing, the sync bits
+  every frame starts with and the CRC; the PAU configuration.
+
+Next: synchronous lines with a clock pin, pulse-width codes, programs for frames.
+
+    python3 sim/learn/learn.py capture.json   # {"clock_hz": .., "level": 0|1, "edges": [t, ..]}
+    python3 sim/learn/learn.py --frames capture.json
 """
 from __future__ import annotations
 
@@ -21,7 +27,12 @@ import argparse
 import bisect
 import itertools
 import json
+import sys
 from dataclasses import dataclass
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "model"))
+from asm import PAU_CODES                                # noqa: E402
 
 
 @dataclass
@@ -248,13 +259,306 @@ def word_value(p: AsyncSerial, word: int) -> int:
     return word >> (16 - p.data_bits - (p.parity is not None)) & ((1 << p.data_bits) - 1)
 
 
+# ---------------------------------------------------------------------- self-clocked frames
+#
+# A frame is a burst of edges between idle times. Every PAU line code is tried on the bursts at
+# both polarities, as the PAU decodes it (ISA.md, Line code): a code that leaves a bit of a
+# burst unexplained before its last 4 bits (an end mark) is out. Of the rest, the structure decides: a CRC
+# every frame ends with, then a transition code (a level code explains any line), stuffing,
+# the frame's first edge at a bit boundary, no inversion, the simpler code.
+
+CODES = ["nrz", "nrzi", "manchester", "bmc", "fm0", "diff_manchester", "miller"]
+LEVEL_CODES = ("nrz", "nrzi")
+EVIDENCE = 40       # bits: a CRC of width w is believed from 40 / w + 1 frames, as a chance
+                    # match of every frame is about 2^-(w (frames - 1)) per hypothesis tried
+
+
+@dataclass
+class Crc:
+    """A CRC as the PAU computes it: over the bits on the wire (after destuffing), MSB first,
+    initial value and final XOR all zeros or all ones; from bit `start` of a frame (destuffed)
+    to `tail` bits before its end."""
+    width: int
+    poly: int           # without the x^width term
+    init: int           # 1: all ones
+    xorout: int
+    start: int
+    tail: int
+
+    def __str__(self) -> str:
+        return (f"CRC-{self.width} 0x{self.poly:X}, init {'ones' if self.init else 0}, xorout "
+                f"{'ones' if self.xorout else 0}, from bit {self.start}, {self.tail} bits before "
+                f"the end")
+
+
+@dataclass
+class Frames:
+    half: float                     # clocks a half-bit
+    code: str
+    inv: int
+    align: int                      # 1: a frame's first edge is mid-bit
+    stuff: tuple[int, int] | None   # (STUFF_MODE, STUFF_LEN)
+    sync: list[int]                 # the bits every frame starts with
+    crc: Crc | None
+    frames: list[list[int]]         # the decoded bits, destuffed
+
+    def __str__(self) -> str:
+        stuff = (f"stuffing {('ones', 'equal')[self.stuff[0]]} {self.stuff[1]}" if self.stuff
+                 else "no stuffing")
+        sync = "".join(map(str, self.sync)) or "-"
+        return (f"{self.code}{' inverted' if self.inv else ''}"
+                f"{', first edge mid-bit' if self.align else ''}, {self.half:.2f} clocks a half-bit, "
+                f"{stuff}, sync {sync}, {self.crc or 'no CRC'}")
+
+
+def act(code: int, half: int, b: int, p: int, level: int) -> int:
+    """The line after the action of PAU_CODE `code` for this half, bit b, previous bit p."""
+    return (level, level ^ 1, 0, 1)[code >> 2 * (4 * half + 2 * b + p) & 3]
+
+
+def bursts(cap: Capture, gap: float) -> list[tuple[int, list[int]]]:
+    """(the level before the first edge, the edges) of every burst: edges closer than `gap`."""
+    out, cur, level = [], [], cap.level
+    for t in cap.edges:
+        if cur and t - cur[-1] > gap:
+            out.append((level, cur))
+            level, cur = cap.level_at(cur[-1]), []
+        cur.append(t)
+    return out + [(level, cur)] if cur else out
+
+
+def halves(level: int, edges: list[int], h: float, align: int) -> list[int] | None:
+    """The line in each half-bit of a burst from its first edge (with align from the half
+    before it) to two halves after its last; None when an edge is off the half-bit grid."""
+    out = [level] if align else []
+    for a, b in zip(edges, edges[1:]):
+        n = (b - a) / h
+        if round(n) < 1 or abs(n - round(n)) > 0.3:
+            return None
+        out += [level ^ 1] * round(n)
+        level ^= 1
+    return out + [level ^ 1] * 2
+
+
+def decode_halves(hs: list[int], code: int, level: int) -> tuple[list[int], int]:
+    """The bits of the halves (ISA.md, Receiver: the b whose actions explain them, 1 when both
+    do), and the halves taken before the first that no bit explains."""
+    bits, p = [], 0
+    for i in range(0, len(hs) - 1, 2):
+        fit = [b for b in (1, 0)
+               if act(code, 0, b, p, level) == hs[i] and act(code, 1, b, p, hs[i]) == hs[i + 1]]
+        if not fit:
+            return bits, i
+        bits.append(fit[0])
+        level, p = hs[i + 1], fit[0]
+    return bits, len(hs)
+
+
+def destuff(bits: list[int], mode: int, n: int) -> tuple[list[int], list[tuple[int, bool]]]:
+    """(the kept bits, (index, as the rule wants) of every stuffed bit): mode 0 after n 1s a 0,
+    mode 1 after n equal bits their complement. A wrong one is kept; either way it restarts the
+    count (ISA.md, Receiver)."""
+    out, marks, run, last = [], [], 0, None
+    for i, b in enumerate(bits):
+        if run == n:
+            ok = b == (0 if mode == 0 else 1 - last)
+            marks.append((i, ok))
+            out += [] if ok else [b]
+            run, last = mode, b                          # mode 1: it starts the next run
+            continue
+        out.append(b)
+        run = (run + 1 if b else 0) if mode == 0 else (run + 1 if b == last else 1)
+        last = b
+    return out, marks
+
+
+def common_prefix(seqs: list[list[int]]) -> int:
+    k = 0
+    while all(len(s) > k for s in seqs) and len({s[k] for s in seqs}) == 1:
+        k += 1
+    return k
+
+
+def common_suffix(seqs: list[list[int]]) -> int:
+    return common_prefix([s[::-1] for s in seqs])
+
+
+# Polynomials over GF(2) as ints, bit k the coefficient of x^k.
+
+def deg(p: int) -> int:
+    return p.bit_length() - 1
+
+
+def pmod(a: int, m: int) -> int:
+    while deg(a) >= deg(m):
+        a ^= m << deg(a) - deg(m)
+    return a
+
+
+def pdiv(a: int, m: int) -> int:
+    q = 0
+    while deg(a) >= deg(m):
+        q |= 1 << deg(a) - deg(m)
+        a ^= m << deg(a) - deg(m)
+    return q
+
+
+def pgcd(polys) -> int:
+    g = 0
+    for a in polys:
+        while a:
+            g, a = a, pmod(g, a)
+    return g
+
+
+def factor(h: int, w: int) -> int | None:
+    """A factor of h of degree w with a constant term, as a CRC polynomial has: h is that
+    polynomial times a power of x, or times a small factor (up to 8 degrees) every recorded
+    frame shares by chance."""
+    if h == 0:
+        return None
+    h >>= deg(h & -h)
+    k = deg(h) - w
+    if not 0 <= k <= 8:
+        return None
+    for q in [1] if k == 0 else range(1 << k | 1, 2 << k, 2):
+        if pmod(h, q) == 0 and pdiv(h, q) & 1:
+            return pdiv(h, q)
+    return None
+
+
+def to_int(bits: list[int]) -> int:
+    return int("".join(map(str, bits)) or "0", 2)
+
+
+def find_crc(frames: list[list[int]], starts, tails) -> Crc | None:
+    """The widest CRC every frame ends with, `tail` bits before its end, over its bits from
+    `start`.
+
+    A frame's bits from `start` to the end of its CRC, as a polynomial B of length L, make
+    B + I x^(L - w) + X a multiple of the polynomial P (I, X: the initial value and the final
+    XOR, 0 or w ones). Frames aligned at their ends differ by multiples of P when I = 0, at
+    their starts when X = 0: the gcd of the differences is P, whatever the width. With I and X
+    both all ones, every width is tried on the frames themselves."""
+    best = None
+    for tail in tails:
+        for s in starts:
+            bs = [(to_int(f[s:len(f) - tail]), len(f) - tail - s) for f in frames]
+            n = max(k for _, k in bs)
+            if min(k for _, k in bs) < 2:
+                continue
+            by_end = pgcd(v ^ bs[0][0] for v, _ in bs[1:])
+            by_start = pgcd(v << n - k ^ bs[0][0] << n - bs[0][1] for v, k in bs[1:])
+            for w in range(32, best.width if best else 0, -1):
+                ones = (1 << w) - 1
+                for init, xo in ((0, 0), (0, 1), (1, 0), (1, 1)):
+                    ds = [v ^ (ones << k - w if init and k > w else 0) ^ (ones if xo else 0)
+                          for v, k in bs]
+                    p = factor(by_start if init else by_end, w) if not (init and xo) else None
+                    if p is None and init and xo:
+                        g = 0
+                        for d in ds:                     # the gcd, stopped once below w
+                            g = pgcd([g, d])
+                            if deg(g) < w:
+                                break
+                        p = factor(g, w) if deg(g) >= w else None
+                    if p and all(pmod(d, p) == 0 for d in ds):
+                        best = Crc(w, p ^ 1 << w, init, xo, s, tail)
+                        break
+                if best and best.width == w:
+                    break
+    return best
+
+
+def infer_frames(cap: Capture, gap: float = 10) -> Frames:
+    """The self-clocked framing that explains every burst of the recording, or ValueError.
+    Bursts are apart by more than `gap` times the narrowest pulse."""
+    widths = cap.widths()
+    if not widths:
+        raise ValueError("no edges: nothing to learn")
+    shortest = sorted(widths)[:max(1, len(widths) // 10)]
+    unit = sum(shortest) / len(shortest)                 # a half-bit, or a bit of a level code
+    bs = bursts(cap, gap * unit)
+    inside = [b - a for _, e in bs for a, b in zip(e, e[1:])]
+    found = []
+    for h in (unit, unit / 2):
+        for _ in range(3):                               # least squares over the half-bit counts
+            counted = [(w, round(w / h)) for w in inside if 0 < round(w / h) <= 32]
+            h = sum(w for w, _ in counted) / sum(n for _, n in counted)
+        for name in CODES:
+            if name in LEVEL_CODES and h > unit * 0.75:  # a level code's narrowest pulse is a bit
+                continue
+            for inv, align in itertools.product((0, 1), (0,) if name in LEVEL_CODES else (0, 1)):
+                raw = []
+                for level, edges in bs:
+                    hs = halves(level ^ inv, edges, h, align)
+                    bits, used = decode_halves(hs, PAU_CODES[name], level ^ inv) if hs else ([], 0)
+                    if not hs or used < len(hs) - 8:     # unexplained before the last 4 bits (an
+                        break                            # end mark: USB SE0, 10BASE-T TP_IDL)
+                    raw.append(bits)
+                else:
+                    found += _structure(h, name, inv, align, raw)
+    if not found:
+        raise ValueError("no line code explains every burst of the recording")
+    return max(found, key=lambda f: f[0])[1]
+
+
+def _structure(h: float, name: str, inv: int, align: int, raw: list[list[int]]) -> list[tuple]:
+    """(score, Frames) for each stuffing rule no recorded bit breaks (and none), with the CRC
+    its frames end with. Stuffing stops at the bits every frame ends with (a delimiter, an end
+    flag); a rule needs the CRC or 8 stuffed bits to be believed."""
+    pre, suf = common_prefix(raw), common_suffix(raw)
+    rules = [None]
+    for mode, n in itertools.product((0, 1), range(1, 16)):
+        marks = [ok for f in raw for i, ok in destuff(f[:len(f) - suf], mode, n)[1] if i >= pre]
+        if marks and all(marks):
+            rules.append((mode, n, len(marks)))
+    out = []
+    for rule in rules:
+        frames = ([destuff(f[:len(f) - suf], *rule[:2])[0] + f[len(f) - suf:] for f in raw]
+                  if rule else raw)
+        sync, end = common_prefix(frames), common_suffix(frames)
+        crc = find_crc(frames, range(max(0, sync - 16), sync + 25), range(end + 4))
+        if crc and crc.width * (len(frames) - 1) < EVIDENCE:
+            crc = None
+        if rule and not crc and rule[2] < 8:
+            continue
+        score = (crc.width if crc else 0, name not in LEVEL_CODES, rule is not None, -align, -inv,
+                 -CODES.index(name))
+        out.append((score, Frames(h, name, inv, align, rule and rule[:2], frames[0][:sync], crc,
+                                  frames)))
+    return out
+
+
+def pau_directives(p: Frames) -> tuple[str, int, int]:
+    """(the .pau and .crc lines, CLKDIV integer, fraction / 256): H = 4 strobes a half-bit when
+    it lasts 8 clocks or more, fewer for faster lines."""
+    h = 4 if p.half >= 8 else max(1, int(p.half // 2))
+    div = round(p.half / h * 256)
+    pau = (f".pau code={p.code} baud={h}{' inv' if p.inv else ''}"
+           f"{' align=mid' if p.align and p.code not in ('manchester', 'diff_manchester') else ''}"
+           f"{' align=edge' if not p.align and p.code in ('manchester', 'diff_manchester') else ''}"
+           + (f" stuff={p.stuff[1]}{' stuff_mode=equal' if p.stuff[0] else ''}" if p.stuff else ""))
+    crc = (f"\n.crc width={p.crc.width} poly=0x{p.crc.poly:X}{' init=ones' if p.crc.init else ''}"
+           f"{' xorout=1' if p.crc.xorout else ''}") if p.crc else ""
+    return pau + crc, div >> 8, div & 0xFF
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("capture", help='JSON: {"clock_hz": .., "level": 0|1, "edges": [clock, ..]}')
     ap.add_argument("--pin", type=int, default=0, help="the pin of the generated programs")
+    ap.add_argument("--frames", action="store_true", help="self-clocked frames, not async characters")
     args = ap.parse_args()
     rec = json.load(open(args.capture))
-    p = infer_async(Capture(rec["level"], rec["edges"]))
+    cap = Capture(rec["level"], rec["edges"])
+    if args.frames:
+        p = infer_frames(cap)
+        pau, div, frac = pau_directives(p)
+        print(f"{p}: {rec.get('clock_hz', 50e6) / (2 * p.half):.0f} bit/s, {len(p.frames)} frames; "
+              f"CLKDIV {div} + {frac}/256\n{pau}")
+        return
+    p = infer_async(cap)
     h, div, frac = timing(p)
     print(f"{p}: {rec.get('clock_hz', 50e6) / p.bit:.0f} baud; CLKDIV {div} + {frac}/256")
     print(rx_program(p, args.pin))
