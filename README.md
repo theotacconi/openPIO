@@ -1,62 +1,118 @@
-**openPIO** is a lightweight, fully open-source protocol emulator and I/O co-processor targeting the **IHP 130nm CMOS5L** process via Tiny Tapeout.
+**openPIO** is a small, fully open-source chip that speaks serial protocols for you: UART, SPI, I2C, CAN, USB, 1-Wire and many more, including ones it was not designed for. It is built on the **IHP 130 nm CMOS5L** process through Tiny Tapeout.
 
-Imagine you need to talk to a sensor, a display, or a custom device using a serial protocol (like UART, SPI, or I2C). 
+## Why
 
-Normally, you have two choices:
-1. **Use a fixed hardware peripheral**: If your microcontroller has a spare UART or SPI port, great. But if you run out of them, or if you need a non-standard protocol, you are out of luck.
-2. **"Bit-bang" it in software**: You manually toggle GPIO pins high and low from your main CPU code using delay loops or timer interrupts.
+A microcontroller that needs a protocol it has no peripheral for has to *bit-bang* it: toggle pins from software, with delay loops in between. The CPU then spends its time waiting, and any interrupt shifts the timing by a few microseconds, which is enough to break the protocol.
 
-Option 2 sounds easy, but it quickly falls apart:
-* **Your CPU wastes time**: It spends precious clock cycles doing nothing but waiting a few microseconds between pin toggles.
-* **Jitter and broken timing**: A single background task or interrupt can delay your code by a couple of microseconds, corrupting the packet and crashing the communication.
+A **PIO** (Programmable Input/Output, made popular by the Raspberry Pi RP2040) is a tiny helper processor that does only this: move bits between pins and memory, with timing exact to the clock cycle. Your CPU hands it bytes and gets bytes back.
 
-What if you had a tiny, separate hardware helper whose only job was to flick pins up and down with cycle-accurate precision, completely independent of your main CPU?
+openPIO is a PIO built around one idea: **a serial protocol is a short program plus a few settings.**
 
-That is what a **PIO (Programmable Input/Output)** does, a concept made famous by the Raspberry Pi RP2040. It is a tiny, stripped-down processor with a custom instruction set designed purely for shifting bits into and out of pins with zero timing jitter.
+## The idea in two layers
 
-openPIO gives you programmable state machines backed by dedicated, toggleable micro-hardware.
+| Layer | Decides | What it is |
+|-------|---------|------------|
+| **State machine (SM)** | *when* things happen | A tiny processor that runs a program of up to 64 instructions. Every instruction takes a known number of steps, so a program's timing can be read off its text: no caches, no waiting on shared buses. |
+| **PAU** (Protocol Acceleration Unit) | *how a bit looks on the wire* | An optional helper between the SM and the pins that does what software cannot do fast enough: line codes (NRZ, NRZI, Manchester, Miller, ...), bit stuffing, CRCs, recovering the clock from the data, an external bit clock, watching a shared bus for collisions. Each one is a setting, not a protocol. |
+
+A protocol is then a point in a small space of settings, plus a program for the rest. USB low speed, for example, is NRZI on two complementary pins, bit stuffing and a CRC-16 on the PAU, and a 19-instruction program that frames the packets.
+
+## Architecture
 
 ![architecture](docs/architecture.svg)
 
-- **Instruction set**: [sim/model/ISA.md](sim/model/ISA.md): instructions, programmable conditions, the PAU (Protocol Acceleration Unit: line codes, bit stuffing, CRC, clock recovery), FIFOs, timing within a clock.
-- **Host interface**: [sim/model/HOST.md](sim/model/HOST.md): SPI commands, registers, pins.
-- **Programs**: [programs/README.md](programs/README.md): 19 protocols, a logic analyzer and an edge timestamper, each judged on the pins by a reference device.
-- **Learning a protocol**: [sim/learn/learn.py](sim/learn/learn.py) finds a protocol's parameters from a recording of the wire and writes the openPIO programs that receive and send it.
-- **Datasheet**: [docs/info.md](docs/info.md) (Tiny Tapeout).
+Data flows in a straight line, one way in each direction:
+
+- **Sending:** the host writes words over SPI into the **TX FIFO** (a queue). The SM pulls a word into its **OSR** (output shift register), which feeds the bits out one at a time, to the pins directly or through the PAU.
+- **Receiving:** bits from the pins (or the PAU) shift into the **ISR** (input shift register). When it is full, the SM pushes the word into the **RX FIFO**, where the host reads it.
+
+The parts of each state machine (a drawing of each one is in [docs/blocks/](docs/blocks/)):
+
+| Block | Role |
+|-------|------|
+| Program memory | 64 instructions, loaded by the host |
+| Clock divider | sets the step rate: one instruction per step, the step being any fraction of the 50 MHz clock |
+| X, Y and the ALU | two 16-bit registers for counters and simple math (add, subtract, and, or, xor, reverse bits) |
+| Conditions | four tests a jump can use: a pin, a flag, a register bit, a FIFO or PAU status |
+| IRQ flags | 8 signals between the two SMs and to the host |
+| FIFOs | 133 words each way, so the host can send and read in bursts |
+| Pin control | 16 pin positions shared by both SMs; each pin is an input, an output, or open drain (for buses like I2C) |
+
+The two SMs run side by side on the same pins, can start on the same clock, and signal each other through IRQ flags: one can transmit while the other receives, or one can generate a device's clock while the other talks to it.
+
+## A program
+
+A UART transmitter, 8 data bits, 1 stop bit. With 8 steps per bit, the baud rate is the clock divided by 8 and the clock divider.
+
+```
+    set pins, 1             ; the line idles high
+    set pindirs, 1          ; the pin is an output
+.wrap_target
+    pull block              ; wait for a byte from the host
+    set pins, 0 [6]         ; start bit: drive low, wait 6 more steps
+    set x, 7                ; 8 data bits to go
+bit:
+    out pins, 1 [6]         ; next bit to the pin
+    jmp x--, bit            ; loop over the bits
+    set pins, 1 [6]         ; stop bit
+.wrap                       ; back to the pull
+```
+
+`[6]` is a delay: the instruction holds for 6 more steps, which is how exact timing is written. The full file is [programs/uart/uart_tx.asm](programs/uart/uart_tx.asm).
+
+## What it runs
+
+24 protocols and a logic analyzer, each tested on its pins against a reference device written from the protocol's specification: CAN, LIN, I2C, SPI, UART, USB low speed, USB Power Delivery, 10BASE-T Ethernet (transmit), HDLC, Modbus, DALI, JTAG, SWD, 1-Wire, PS/2, I2S, WS2812B, NEC infrared, SENT, ISO 7816 smart cards, MIL-STD-1553B, SD cards, an MFM disk controller and a quadrature encoder. Several of them were written after the instruction set was frozen, without changing the hardware. See [programs/README.md](programs/README.md).
+
+[sim/learn/learn.py](sim/learn/learn.py) goes the other way: from a recording of an unknown signal it finds the protocol's settings and writes the openPIO programs that receive and send it.
+
+## The chip
+
+| | |
+|---|---|
+| Process | IHP 130 nm CMOS5L, Tiny Tapeout, 6 x 4 tiles (1.29 x 0.71 mm) |
+| State machines | 2, each with its own program memory (an SRAM) and FIFO memory (an SRAM) |
+| Pins | 14 usable: 8 bidirectional, 6 input + output on separate pads |
+| Host interface | SPI, plus an interrupt line |
+| Clock | 50 MHz at typical conditions (1.2 V, 25 C); 39 MHz in the worst case (1.08 V, 125 C) |
+| Size | 33k standard cells and 4 SRAMs, 10 mW |
+
+## Documentation
+
+- [docs/info.md](docs/info.md): datasheet: pins, host commands, how to test the chip.
+- [sim/model/ISA.md](sim/model/ISA.md): the instruction set and the PAU, exactly.
+- [sim/model/HOST.md](sim/model/HOST.md): the SPI commands and registers.
+- [programs/](programs/): example programs, one folder per protocol.
+
+`sim/model/` is the specification you can run: a Python model of the chip (`chip.py`), the assembler (`asm.py`) and a host driver (`host.py`). The Verilog in `src/` matches it clock for clock.
 
 > [!NOTE]
 > This project is developed with great assistance from AI: lots of Q&A on the architectural choices and agents implementing the code. Humans steer the ideas and the vision.
 
-## Development environment
+## Development
 
-All tools (Yosys, Icarus Verilog, Verilator, SymbiYosys, nextpnr-himbaechel, openFPGALoader, cocotb) run in a container defined by `Containerfile`; nothing is installed on the host. Requires podman (or docker).
+All tools (Yosys, Icarus Verilog, Verilator, SymbiYosys, nextpnr, openFPGALoader, cocotb) run in a container defined by `Containerfile`; nothing is installed on the host. Requires podman or docker.
 
 ```
 scripts/dev.sh                                    # shell inside the container
-scripts/dev.sh python3 test/lockstep/fuzz.py      # run one command
+scripts/dev.sh python3 test/lockstep/sm_fuzz.py      # run one command
 ```
 
-The image is built on first use and rebuilt whenever `Containerfile` changes. Only the repository is mounted.
-
-### Tests
-
-The reference model (`sim/model/`: assembler `asm.py`, one state machine `emu.py`, the chip `chip.py`, the host driver `host.py`) and the programs run in plain Python, in seconds (`model` workflow):
+The model and the programs run in plain Python, in seconds:
 
 ```
-for t in test/model/test_*.py; do python3 "$t"; done   # ISA, assembler, chip model
+for t in test/model/test_*.py; do python3 "$t"; done   # instruction set, assembler, chip model
 (cd test/shared && python3 test_devices.py)            # reference devices against known traces
 python3 programs/report.py                             # every program; rewrites programs/README.md
 ```
 
-The RTL (`src/`) still implements ISA v1 and is being ported to v2; its tests below follow it.
-
-`test/test.py` holds the cocotb tests of the whole chip (Tiny Tapeout layout): a bit-banged SPI host programs it, and the PIO pins are checked against known data and `sim/model/emu.py`. They run on every relevant push (`test` workflow) and on the hardened netlist after each gds run (`gl_test` job).
+The Verilog is checked three ways: stepped against the model every clock (`test/lockstep/`), driven through its pins by cocotb (`test/test.py`), and with formal proofs (`test/formal/`).
 
 ```
 cd test
-../scripts/dev.sh make -B                                 # RTL; results.xml, waveforms in tb.fst
-../scripts/dev.sh make -B IMEM=sram PDK_ROOT=<pdk dir>    # RTL with the chip's SRAM IMEM
-../scripts/dev.sh make -B GATES=yes PDK_ROOT=<pdk dir>    # gate level, see below
+../scripts/dev.sh make -B                                 # Verilog; waveforms in tb.fst
+../scripts/dev.sh make -B IMEM=sram PDK_ROOT=<pdk dir>    # with the chip's SRAM models
+../scripts/dev.sh make -B GATES=yes PDK_ROOT=<pdk dir>    # the hardened netlist
 ```
 
-On the chip the instruction memory is an IHP SRAM macro (`src/imem_sram.v`, listed in `info.yaml`); `src/imem.v` is its flip-flop model, used by the RTL tests, formal, lockstep and the FPGA build. `IMEM=sram` and gate level need IHP-Open-PDK models under `<pdk dir>`, inside the repository so the container sees them: `ihp-sg13cmos5l/libs.ref/sg13cmos5l_sram/verilog/` (SRAM) and, for gate level, `ihp-sg13cmos5l/libs.ref/{sg13cmos5l_stdcell,sg13cmos5l_io}/verilog/*.v` (cells). Gate level also needs `test/gate_level_netlist.v` (the `.v` file of the `tt_submission` artifact of a gds run).
+On the chip the memories are IHP SRAM macros (`src/imem_sram.v`, `src/fifo_ram_sram.v`); `src/imem.v` and `src/fifo_ram.v` are flip-flop models of them, used by the default tests and the FPGA build. `IMEM=sram` and `GATES=yes` need the IHP-Open-PDK models under `<pdk dir>`, inside the repository so the container sees them; `GATES=yes` also needs `test/gate_level_netlist.v`, from the `tt_submission` artifact of a `gds` run.
