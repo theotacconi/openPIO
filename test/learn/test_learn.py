@@ -3,7 +3,8 @@
 transmitter whose format the learner is not told; it must find that format, then its generated
 programs must receive a new transmission and send one the reference receiver accepts. Frames
 recorded from reference USB, CAN, MFM and biphase mark transmitters and from the chip's 10BASE-T
-program: the learner must find their line code, stuffing, sync bits and CRC.
+program: the learner must find their line code, stuffing, sync bits and CRC, then its generated
+program must receive new frames with the CRC's verdict.
 
     python3 test/learn/test_learn.py
 """
@@ -14,12 +15,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / "sim" / "learn"), str(ROOT / "sim" / "model"), str(ROOT / "test" / "shared")]
-from bench import Bench, Device                          # noqa: E402
+from bench import Bench, Device, Script                  # noqa: E402
 from chip import IRQ                                     # noqa: E402
 from devices import (BmcTx, CanNode, UartRx, UartTx, UsbTx, WiredAndBus,  # noqa: E402
-                     mfm_halves, mfm_sector)
-from learn import (AsyncSerial, Capture, decode, infer_async, infer_frames,  # noqa: E402
-                   pau_directives, rx_program, timing, tx_program, word_value)
+                     can_bits, can_crc15, crc16_usb, mfm_halves, mfm_sector)
+from learn import (Capture, decode, frame_timing, frames_rx_program, infer_async,  # noqa: E402
+                   infer_frames, pau_directives, rx_program, timing, tx_program, word_value)
 
 PIN = 3
 FORMATS = [  # (data bits, parity, stop bits, idle level, clocks a bit)
@@ -134,11 +135,62 @@ def bits(data: list[int], lsb_first: bool = True) -> list[int]:
     return [b >> (i if lsb_first else 7 - i) & 1 for b in data for i in range(8)]
 
 
+def usb_bench(packets) -> Bench:
+    bench = Bench()
+    bench.add(UsbTx(PIN, PIN + 1, 40, packets, start=100, gap=16))
+    return bench
+
+
+def can_bench(frames) -> Bench:
+    """A node sending `frames` after 11 idle bits, another acknowledging them."""
+    nodes = [CanNode(50, send=frames, idle=0), CanNode(50)]
+    bench = Bench(pullups=1 << PIN)
+    bench.add(WiredAndBus([], [PIN], nodes))
+    return bench
+
+
+def mfm_levels(sectors: list[list[int]]) -> list[int]:
+    """The line of sectors (each the bits of mfm_sector), 800 clocks of silence after each."""
+    levels, level = [0] * 400, 0
+    for sector in sectors:
+        hs = mfm_halves(sector, level)
+        levels += [h << PIN for h in hs for _ in range(20)] + [hs[-1] << PIN] * 800
+        level = hs[-1]
+    return levels
+
+
+def frames_received(words: list[int]) -> list[tuple[list[int], int]]:
+    """(bits, end word's bits 7:0) of each frame of frames_rx_program()'s RX words."""
+    out, cur = [], []
+    for w in words:
+        if w & 0xFF:
+            last = w >> 8
+            out.append((cur + [last >> i & 1 for i in range(last.bit_length() - 1)], w & 0xFF))
+            cur = []
+        else:
+            cur += [w >> 8 + i & 1 for i in range(8)]
+    return out
+
+
 class LearnFrames(unittest.TestCase):
     """Self-clocked frames: a burst of edges each, idle between."""
 
     def learn(self, levels, pin=PIN):
         return infer_frames(Capture.from_levels(levels, pin))
+
+    def receive(self, p, bench: Bench, clocks: int) -> list[tuple[list[int], int]]:
+        """The frames the generated program receives from the bench's devices."""
+        _, div, frac = frame_timing(p)
+        bench.load(0, frames_rx_program(p, PIN), clkdiv_int=div, clkdiv_frac=frac)
+        bench.start(1)
+        bench.run(clocks)
+        return frames_received(bench.received[0])
+
+    def check_received(self, got, sent, verdicts):
+        """Each frame starts with its sent bits; the end words carry the verdicts."""
+        self.assertEqual([v for _, v in got], verdicts)
+        for (b, _), want in zip(got, sent):
+            self.assertEqual(b[:len(want)], want)
 
     def check(self, p, code, stuff, crc, sync=None):
         self.assertEqual((p.code, p.stuff), (code, stuff))
@@ -152,13 +204,20 @@ class LearnFrames(unittest.TestCase):
         rnd = random.Random(1)
         packets = [(0xC3, [0xFF, 0xFF] + [rnd.randrange(256) for _ in range(n)])
                    for n in (2, 4, 2, 6, 4, 1)]
-        bench = Bench()
-        tx = bench.add(UsbTx(PIN, PIN + 1, 40, packets, start=100, gap=16))
-        bench.run(tx.end + 100)
+        bench = usb_bench(packets)
+        bench.run(bench.devices[0].end + 100)
         p = self.learn(bench.trace)
         self.check(p, "nrzi", (0, 6), (16, 0x8005, 1, 1), [0] * 7 + [1] + bits([0xC3]))
         self.assertEqual(p.crc.start, 16, "after SYNC and PID")
         self.assertAlmostEqual(p.half, 20, delta=0.2)
+
+        packets = [(0x4B, [rnd.randrange(256) for _ in range(n)]) for n in (3, 8, 0, 5)]
+        packets[2] += (0x1234,)                         # a wrong CRC
+        bench = usb_bench(packets)
+        got = self.receive(p, bench, bench.devices[0].end + 200)
+        sent = [bits([0x80, pid, *d, *(c[0] if c else crc16_usb(d)).to_bytes(2, "little")])
+                for pid, d, *c in packets]
+        self.check_received(got, sent, [3, 3, 1, 3])
 
     def test_can(self):
         """CAN 2.0A on a wired-AND bus, a second node acknowledging: NRZ, the complement after
@@ -166,25 +225,37 @@ class LearnFrames(unittest.TestCase):
         rnd = random.Random(2)
         frames = [(rnd.randrange(2048), [rnd.randrange(256) for _ in range(n)])
                   for n in (1, 3, 3, 8, 0, 5)]
-        nodes = [CanNode(50, send=frames), CanNode(50)]
-        bench = Bench(pullups=1 << PIN)
-        bus = bench.add(WiredAndBus([], [PIN], nodes))
-        bench.run(sum(160 + 8 * len(d) for _, d in frames) * 50, until=lambda: not nodes[0].send)
+        bench = can_bench(frames)
+        bus = bench.devices[0]
+        bench.run(sum(160 + 8 * len(d) for _, d in frames) * 50,
+                  until=lambda: not bus.nodes[0].send)
         bench.run(2000)
         self.assertEqual(bus.errors, [])
         p = self.learn(bench.trace)
         self.check(p, "nrz", (1, 5), (15, 0x4599, 0, 0), [0])
 
+        frames = [(rnd.randrange(2048), [rnd.randrange(256) for _ in range(n)])
+                  for n in (2, 7, 0, 4)]
+        got = self.receive(p, can_bench(frames), sum(170 + 8 * len(d) for _, d in frames) * 50)
+        sent = [b + [can_crc15(b) >> i & 1 for i in range(14, -1, -1)]
+                for b in (can_bits(*f) for f in frames)]
+        self.check_received(got, sent, [3] * 4)
+
     def test_mfm(self):
         """Floppy sectors: MFM (the PAU's Miller code), CRC-16/CCITT after the address mark."""
         rnd = random.Random(3)
-        levels, level = [0] * 400, 0
-        for n in (8, 12, 8, 16, 5):
-            hs = mfm_halves(mfm_sector([rnd.randrange(256) for _ in range(n)]), level)
-            levels += [h << PIN for h in hs for _ in range(20)] + [hs[-1] << PIN] * 800
-            level = hs[-1]
-        p = self.learn(levels)
+        p = self.learn(mfm_levels([mfm_sector([rnd.randrange(256) for _ in range(n)])
+                                   for n in (8, 12, 8, 16, 5)]))
         self.check(p, "miller", None, (16, 0x1021, 1, 0), bits([0, 0, 0, 0, 0xA1], lsb_first=False))
+
+        sectors = [mfm_sector([rnd.randrange(256) for _ in range(n)]) for n in (10, 6, 14)]
+        sectors[1][50] ^= 1                             # a bit flipped on the disk
+        levels = mfm_levels(sectors)
+        bench = Bench()
+        bench.add(Script([(t, {PIN: lv >> PIN & 1}) for t, lv in enumerate(levels)
+                          if t == 0 or lv != levels[t - 1]]))
+        got = self.receive(p, bench, len(levels))
+        self.check_received(got, sectors, [3, 1, 3])
 
     def test_biphase_mark(self):
         """Frames of random bits without a CRC: biphase mark, told from its shifted codes by
@@ -197,6 +268,13 @@ class LearnFrames(unittest.TestCase):
         p = self.learn(bench.trace)
         self.check(p, "bmc", None, None)
         self.assertEqual(p.frames, frames)
+
+        frames = [[rnd.randrange(2) for _ in range(rnd.randrange(40, 120))] for _ in range(3)]
+        tx = BmcTx(PIN, 40.4, frames, start=100, gap=20)  # a transmitter 1 % slow
+        bench = Bench()
+        bench.add(tx)
+        got = self.receive(p, bench, tx.end + 100)
+        self.check_received(got, frames, [1] * 3)       # no CRC: no verdict
 
     def test_ethernet_from_the_chip(self):
         """10BASE-T frames sent by programs/ethernet/eth_tx.asm on the chip: Manchester, the
@@ -215,6 +293,8 @@ class LearnFrames(unittest.TestCase):
         self.check(p, "manchester", None, (32, 0x04C11DB7, 1, 1), bits([0x55] * 7 + [0xD5]))
         self.assertEqual(p.crc.start, 64)
         self.assertIn(".crc width=32 poly=0x4C11DB7 init=ones xorout=1", pau_directives(p)[0])
+        with self.assertRaisesRegex(ValueError, "too fast"):
+            frames_rx_program(p, 0)                      # 2 clocks a half-bit
 
 
 if __name__ == "__main__":
