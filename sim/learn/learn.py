@@ -14,9 +14,10 @@ Two families so far:
   links built on them): bit time, polarity, data bits, parity, stop bits; RX and TX programs.
 - self-clocked frames, bursts of edges between idle times (USB, CAN, HDLC, 10BASE-T, MFM,
   biphase mark, ...): the PAU's line code, polarity, half-bit, bit stuffing, the sync bits
-  every frame starts with and the CRC; the PAU configuration.
+  every frame starts with and the CRC; an RX program that passes the frames on with the CRC's
+  verdict.
 
-Next: synchronous lines with a clock pin, pulse-width codes, programs for frames.
+Next: synchronous lines with a clock pin, pulse-width codes.
 
     python3 sim/learn/learn.py capture.json   # {"clock_hz": .., "level": 0|1, "edges": [t, ..]}
     python3 sim/learn/learn.py --frames capture.json
@@ -32,7 +33,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "model"))
-from asm import PAU_CODES                                # noqa: E402
+from asm import PAU_CODE_RX, PAU_CODES                   # noqa: E402
 
 
 @dataclass
@@ -301,6 +302,7 @@ class Frames:
     sync: list[int]                 # the bits every frame starts with
     crc: Crc | None
     frames: list[list[int]]         # the decoded bits, destuffed
+    received: list[list[int]] | None = None     # the bits a receiver takes (_received)
 
     def __str__(self) -> str:
         stuff = (f"stuffing {('ones', 'equal')[self.stuff[0]]} {self.stuff[1]}" if self.stuff
@@ -327,9 +329,10 @@ def bursts(cap: Capture, gap: float) -> list[tuple[int, list[int]]]:
     return out + [(level, cur)] if cur else out
 
 
-def halves(level: int, edges: list[int], h: float, align: int) -> list[int] | None:
+def halves(level: int, edges: list[int], h: float, align: int,
+           tail: int = 2) -> list[int] | None:
     """The line in each half-bit of a burst from its first edge (with align from the half
-    before it) to two halves after its last; None when an edge is off the half-bit grid."""
+    before it), `tail` halves from its last; None when an edge is off the half-bit grid."""
     out = [level] if align else []
     for a, b in zip(edges, edges[1:]):
         n = (b - a) / h
@@ -337,7 +340,7 @@ def halves(level: int, edges: list[int], h: float, align: int) -> list[int] | No
             return None
         out += [level ^ 1] * round(n)
         level ^= 1
-    return out + [level ^ 1] * 2
+    return out + [level ^ 1] * tail
 
 
 def decode_halves(hs: list[int], code: int, level: int) -> tuple[list[int], int]:
@@ -500,7 +503,9 @@ def infer_frames(cap: Capture, gap: float = 10) -> Frames:
                     found += _structure(h, name, inv, align, raw)
     if not found:
         raise ValueError("no line code explains every burst of the recording")
-    return max(found, key=lambda f: f[0])[1]
+    p = max(found, key=lambda f: f[0])[1]
+    p.received = _received(p, bs)
+    return p
 
 
 def _structure(h: float, name: str, inv: int, align: int, raw: list[list[int]]) -> list[tuple]:
@@ -530,18 +535,143 @@ def _structure(h: float, name: str, inv: int, align: int, raw: list[list[int]]) 
     return out
 
 
-def pau_directives(p: Frames) -> tuple[str, int, int]:
-    """(the .pau and .crc lines, CLKDIV integer, fraction / 256): H = 4 strobes a half-bit when
-    it lasts 8 clocks or more, fewer for faster lines."""
-    h = 4 if p.half >= 8 else max(1, int(p.half // 2))
+def crc_steps(bits: list[int], c: Crc):
+    """The CRC after each of these bits, from its initial value (the PAU's, right-aligned)."""
+    mask = (1 << c.width) - 1
+    reg = mask if c.init else 0
+    for b in bits:
+        reg = (reg << 1 & mask) ^ (c.poly if (reg >> c.width - 1 & 1) ^ b else 0)
+        yield reg
+
+
+def _received(p: Frames, bs: list[tuple[int, list[int]]]) -> list[list[int]] | None:
+    """The bits a receiver takes of every burst, destuffed, to the end it sees: with a
+    transition code the decoder's last bit (its run, then RX idle); with a level code the first
+    stuff error, where the idle line or an end mark breaks the rule. None when a frame's end
+    does not show (a level code without stuffing, or idle that keeps the rule)."""
+    level = p.code in LEVEL_CODES
+    if level and not p.stuff:
+        return None
+    run = PAU_CODE_RX.get(p.code, ("edge", 2))[1]
+    out = []
+    for lv, edges in bs:
+        hs = halves(lv ^ p.inv, edges, p.half, p.align, 2 * p.stuff[1] + 4 if level else run)
+        bits = decode_halves(hs, PAU_CODES[p.code], lv ^ p.inv)[0]
+        if level:
+            bad = [i for i, ok in destuff(bits, *p.stuff)[1] if not ok]
+            if not bad:
+                return None
+            bits = bits[:bad[0] + 1]
+        out.append(destuff(bits, *p.stuff)[0] if p.stuff else bits)
+    return out
+
+
+def crc_check(p: Frames) -> tuple[int, int] | None:
+    """(CRC_RES, K): the CRC right after a correct frame's CRC, and the bits a receiver takes
+    after the last bit with that CRC (the CRC's last, or a later one that keeps it: a residue 0
+    and 0 bits) to the frame's end, both the same for every recorded frame. None when there is
+    no such pair (or K > 30)."""
+    if not p.crc or not p.received:
+        return None
+    pairs = set()
+    for f, r in zip(p.frames, p.received):
+        end = len(f) - p.crc.tail
+        if r[:end] != f[:end]:
+            return None
+        crcs = list(crc_steps(r[p.crc.start:], p.crc))
+        res = crcs[end - p.crc.start - 1]
+        last = max(i for i, v in enumerate(crcs) if v == res) + p.crc.start + 1
+        pairs.add((res, len(r) - last))
+    return pairs.pop() if len(pairs) == 1 and next(iter(pairs))[1] <= 30 else None
+
+
+def frame_timing(p: Frames) -> tuple[int, int, int]:
+    """(PAU half-bit H, CLKDIV integer, fraction / 256): H = 4 strobes a half-bit when it lasts
+    4 clocks or more, fewer for faster lines."""
+    h = max(1, min(4, int(p.half)))
     div = round(p.half / h * 256)
+    return h, div >> 8, div & 0xFF
+
+
+def pau_directives(p: Frames) -> tuple[str, int, int]:
+    """(the .pau and .crc lines, CLKDIV integer, fraction / 256); res= when a receiver can
+    check the CRC (crc_check)."""
+    h, div, frac = frame_timing(p)
+    check = crc_check(p)
     pau = (f".pau code={p.code} baud={h}{' inv' if p.inv else ''}"
            f"{' align=mid' if p.align and p.code not in ('manchester', 'diff_manchester') else ''}"
            f"{' align=edge' if not p.align and p.code in ('manchester', 'diff_manchester') else ''}"
            + (f" stuff={p.stuff[1]}{' stuff_mode=equal' if p.stuff[0] else ''}" if p.stuff else ""))
     crc = (f"\n.crc width={p.crc.width} poly=0x{p.crc.poly:X}{' init=ones' if p.crc.init else ''}"
-           f"{' xorout=1' if p.crc.xorout else ''}") if p.crc else ""
-    return pau + crc, div >> 8, div & 0xFF
+           f"{' xorout=1' if p.crc.xorout else ''}"
+           f"{f' res=0x{check[0]:X}' if check else ''}") if p.crc else ""
+    return pau + crc, div, frac
+
+
+def _asm(lines: list[tuple[str, str]]) -> str:
+    """Program lines from (instruction or label:, comment)."""
+    return "".join((i if i.endswith(":") else f"    {i:<24}{'; ' * bool(c)}{c}".rstrip()) + "\n"
+                   for i, c in lines)
+
+
+def frames_rx_program(p: Frames, pin: int) -> str:
+    """A receiver of the frames: the PAU decodes, destuffs and computes the CRC; the program
+    passes every bit on and marks each frame's end with the CRC's verdict. RX FIFO: a frame's
+    bits, 8 a word in bits 15:8 (the first in bit 8); then an end word: the last 0..7 bits in
+    bits 15:8 under a 1 (the highest 1), bits 7:0 = 1, or 3 when the CRC is right.
+
+    A frame's first edge starts the bits (RX on). It ends at RX idle with a transition code
+    (checked again H / 2 later: Miller holds a level 2 bits, and an edge may come a little
+    late), at a stuff error with a level code (the idle line or an end mark breaks the rule).
+    The CRC starts at the learned bit; Y counts down the bits since CRC == CRC_RES last held,
+    from K + 1 (crc_check): the CRC is right when Y is 0 at the end. A bit takes the program
+    up to 5 strobes: H >= 3."""
+    h = frame_timing(p)[0]
+    if h < 3:
+        raise ValueError("a half-bit under 3 clocks: too fast for the program")
+    if p.received is None:
+        raise ValueError("no frame end a receiver sees: a level code needs a stuff error after it")
+    check = crc_check(p)
+    rx = "rx|stuff" if p.stuff else "rx"
+    start = p.crc.start if check else 0
+    code = [("frame:", ""), (f"set pau_ctl, {rx}", "the frame's first edge starts the bits")]
+    if start >= 16:
+        code += [(f"set x, {start // 8 - 1}", ""), ("head:", ""),
+                 ("in pins, 8 auto", "the bits before the CRC, a byte at a time"),
+                 ("jmp x--, head", "")]
+    else:
+        code += [("in pins, 8 auto", "")] * (start // 8)
+    if start % 8:
+        code.append((f"in pins, {start % 8} auto", ""))
+    if check:
+        code += [("pau crc_reset", ""), (f"set pau_ctl, {rx}|crc", ""), ("mov y, null", "")]
+    if not start:
+        code.append(("in pins, 1 auto", "the first bit"))
+    code += [("jmp bit", ""), ("take:", ""), ("in pins, 1 auto", "")]
+    if check:
+        code += [("jmp !pau crc_ok, older", ""),
+                 (f"set y, {check[1] + 1}", f"CRC == CRC_RES: {check[1]} bits to the end")]
+    code += [("older:", ""), ("jmp y--, bit", "Y - 1 either way")] if check else []
+    code += [("bit:", ""), ("jmp pau rx_ready, take", "")]
+    if p.code in LEVEL_CODES:
+        code += [("jmp !pau stuff_err, bit", "the frame ends at a stuff error"),
+                 ("jmp pau rx_ready, take", "its bit, if it came with the check")]
+    else:
+        code += [("jmp !pau rx_idle, bit", "the frame ends at RX idle"),
+                 (f"nop [{h // 2}]", ""),
+                 ("jmp !pau rx_idle, bit", "an edge a little late: not yet")]
+    code += [("set pau_ctl, 0", ""), ("set x, 1", ""), ("in x, 1", "a 1 past the last bits"),
+             ("fill:", ""), ("jmp status isr_full, done", ""), ("in null, 1", ""),
+             ("jmp fill", ""), ("done:", "")]
+    if check:
+        code += [("jmp y--, last", "the CRC is wrong"), ("set x, 3", "")]
+    code += [("last:", ""), ("or isr, x", "bits 7:0: 1, or 3"), ("push", ""), ("jmp frame", "")]
+    return (f".program learned_frames_rx\n; Generated by sim/learn/learn.py: {p}.\n"
+            "; RX FIFO: a frame's bits, 8 a word in bits 15:8 (the first in bit 8); then an end\n"
+            "; word: the last 0..7 bits in bits 15:8 under a 1, bits 7:0 = 1, or 3 when the CRC\n"
+            "; is right.\n"
+            f"{pau_directives(p)[0]}\n.in_pins {pin}\n.shift_in right\n.push_thresh 8\n\n"
+            + _asm(code))
 
 
 def main() -> None:
@@ -554,9 +684,13 @@ def main() -> None:
     cap = Capture(rec["level"], rec["edges"])
     if args.frames:
         p = infer_frames(cap)
-        pau, div, frac = pau_directives(p)
+        _, div, frac = frame_timing(p)
         print(f"{p}: {rec.get('clock_hz', 50e6) / (2 * p.half):.0f} bit/s, {len(p.frames)} frames; "
-              f"CLKDIV {div} + {frac}/256\n{pau}")
+              f"CLKDIV {div} + {frac}/256")
+        try:
+            print(frames_rx_program(p, args.pin))
+        except ValueError as e:
+            print(f"no RX program: {e}\n{pau_directives(p)[0]}")
         return
     p = infer_async(cap)
     h, div, frac = timing(p)
