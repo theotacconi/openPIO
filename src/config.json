@@ -13,7 +13,9 @@
 
   "//": "PL_TARGET_DENSITY_PCT - You can increase this if Global Placement fails with error GPL-0302.",
   "//": "Users have reported that values up to 80 worked well for them.",
-  "PL_TARGET_DENSITY_PCT": 60,
+  "//": "53: the density of the 6x4 run that detail-routed to 0 violations (at 50, 4 global-route",
+  "//": "overflows after repair and a slower detailed route).",
+  "PL_TARGET_DENSITY_PCT": 53,
 
   "//": "CLOCK_PERIOD - Increase this in case you are getting setup time violations.",
   "//": "The value is in nanoseconds, so 20ns == 50MHz.",
@@ -61,11 +63,14 @@
   "//": "the core, FS: their signal pins (bottom edge) face up, towards the logic. Each SM's pair",
   "//": "has a 20 um channel between its macros and is flush with its core edge: a 16 um gap at the",
   "//": "right edge left room for two Metal4 stripes that ExtendPowerStripes overlapped (VPWR on VGND).",
+  "//": "SM0's FIFO RAM sits at the left edge, its IMEM inboard: all TT pins are at the top left, and",
+  "//": "with the taller RAM inboard the logic over it congested Metal3 (2203 global-route overflows,",
+  "//": "6 shorts over the RAM after detailed routing); swapped, 0 overflows. SM1's pair stays as is.",
   "//": "Recipe from UW-ASIC/TinyTracer, after kdp1965/ihp-um-janestreet-prism.",
   "MACROS": {
     "RM_IHPSG13_1P_64x16_c2": {
       "instances": {
-        "u_imem0.u_sram": { "location": [3.36, 3.78], "orientation": "FS" },
+        "u_imem0.u_sram": { "location": [260.16, 3.78], "orientation": "FS" },
         "u_imem1.u_sram": { "location": [792.48, 3.78], "orientation": "FS" }
       },
       "gds": ["pdk_dir::libs.ref/sg13cmos5l_sram/gds/RM_IHPSG13_1P_64x16_c2.gds"],
@@ -79,7 +84,7 @@
     },
     "RM_IHPSG13_1P_256x16_c2_bm_bist": {
       "instances": {
-        "u_ram0.u_sram": { "location": [260.16, 3.78], "orientation": "FS" },
+        "u_ram0.u_sram": { "location": [3.36, 3.78], "orientation": "FS" },
         "u_ram1.u_sram": { "location": [1049.28, 3.78], "orientation": "FS" }
       },
       "gds": ["pdk_dir::libs.ref/sg13cmos5l_sram/gds/RM_IHPSG13_1P_256x16_c2_bm_bist.gds"],
