@@ -16,11 +16,15 @@ Two families so far:
   biphase mark, ...): the PAU's line code, polarity, half-bit, bit stuffing, the sync bits
   every frame starts with and the CRC; an RX program that passes the frames on with the CRC's
   verdict.
+- clocked lines, a clock pin and data pins (SPI, SD card commands, ...): the clock, its mode
+  (CPOL, CPHA), the select pin or the pauses that frame the data, sync bits, the CRC; an RX
+  program through the PAU's external clock.
 
-Next: synchronous lines with a clock pin, pulse-width codes.
+Next: pulse-width codes.
 
     python3 sim/learn/learn.py capture.json   # {"clock_hz": .., "level": 0|1, "edges": [t, ..]}
     python3 sim/learn/learn.py --frames capture.json
+    python3 sim/learn/learn.py --clocked pins.json  # {"pins": {"<pin>": {"level", "edges"}, ..}}
 """
 from __future__ import annotations
 
@@ -508,6 +512,14 @@ def infer_frames(cap: Capture, gap: float = 10) -> Frames:
     return p
 
 
+def frames_crc(frames: list[list[int]]) -> Crc | None:
+    """The CRC the frames end with, from up to 16 bits before the bits they all start with to
+    24 after, ending up to 3 bits before the bits they all end with; believed from EVIDENCE."""
+    sync, end = common_prefix(frames), common_suffix(frames)
+    crc = find_crc(frames, range(max(0, sync - 16), sync + 25), range(end + 4))
+    return crc if crc and crc.width * (len(frames) - 1) >= EVIDENCE else None
+
+
 def _structure(h: float, name: str, inv: int, align: int, raw: list[list[int]]) -> list[tuple]:
     """(score, Frames) for each stuffing rule no recorded bit breaks (and none), with the CRC
     its frames end with. Stuffing stops at the bits every frame ends with (a delimiter, an end
@@ -522,10 +534,7 @@ def _structure(h: float, name: str, inv: int, align: int, raw: list[list[int]]) 
     for rule in rules:
         frames = ([destuff(f[:len(f) - suf], *rule[:2])[0] + f[len(f) - suf:] for f in raw]
                   if rule else raw)
-        sync, end = common_prefix(frames), common_suffix(frames)
-        crc = find_crc(frames, range(max(0, sync - 16), sync + 25), range(end + 4))
-        if crc and crc.width * (len(frames) - 1) < EVIDENCE:
-            crc = None
+        sync, crc = common_prefix(frames), frames_crc(frames)
         if rule and not crc and rule[2] < 8:
             continue
         score = (crc.width if crc else 0, name not in LEVEL_CODES, rule is not None, -align, -inv,
@@ -610,7 +619,7 @@ def pau_directives(p: Frames) -> tuple[str, int, int]:
 
 def _asm(lines: list[tuple[str, str]]) -> str:
     """Program lines from (instruction or label:, comment)."""
-    return "".join((i if i.endswith(":") else f"    {i:<24}{'; ' * bool(c)}{c}".rstrip()) + "\n"
+    return "".join((i if i.endswith(":") else f"    {i:<23} {'; ' * bool(c)}{c}".rstrip()) + "\n"
                    for i, c in lines)
 
 
@@ -674,13 +683,210 @@ def frames_rx_program(p: Frames, pin: int) -> str:
             + _asm(code))
 
 
+# ---------------------------------------------------------------------- clocked lines
+#
+# A clock pin and data pins that change at one of its edges (the shift edge) and hold at the
+# other (the sampling edge), as the PAU's external clock takes them (ISA.md, Bit timing): SPI,
+# SD card commands, ... Frames are the times a select pin is active, else the clock's bursts.
+
+
+@dataclass
+class Clocked:
+    clock: int                          # pins of the recording
+    data: int
+    select: tuple[int, int] | None      # (pin, active level)
+    cpol: int
+    cpha: int
+    period: float                       # clocks between sampling edges in a frame
+    pause: int                          # the longest wait for a bit in a frame (clocks)
+    gap: int                            # the shortest from a frame's last bit to the next's first
+    half: int                           # the clock's shortest half period
+    sync: list[int]
+    crc: Crc | None
+    frames: list[list[int]]
+
+    def __str__(self) -> str:
+        sel = (f", frames while pin {self.select[0]} is {self.select[1]}" if self.select
+               else ", frames between clock pauses")
+        sync = "".join(map(str, self.sync)) or "-"
+        return (f"data pin {self.data} on clock pin {self.clock}, mode {self.cpol * 2 + self.cpha} "
+                f"(CPOL {self.cpol}, CPHA {self.cpha}), {self.period:.2f} clocks a bit{sel}, "
+                f"sync {sync}, {self.crc or 'no CRC'}")
+
+
+def infer_clocked(caps: dict[int, Capture], gap: float = 10) -> list[Clocked]:
+    """A Clocked for each data pin of a recording of several pins, or ValueError. The clock is
+    the pin with the most edges. A select pin is at one level at every clock edge, and a frame
+    is the clock's edges while it is; without one, a burst of edges apart by more than `gap`
+    times the clock's narrowest pulse. A data pin changes, between a frame's first and last
+    clock edges, nearer to one edge of the clock than to the other, always the same."""
+    clock = max(caps, key=lambda k: len(caps[k].edges))
+    clk = caps[clock]
+    widths = clk.widths()
+    if len(widths) < 2:
+        raise ValueError("no clock: too few edges")
+    half = min(widths)
+    bs = [(e[0], e[-1]) for _, e in bursts(clk, gap * half) if len(e) > 1]
+    edges = [t for t in clk.edges if any(a <= t <= b for a, b in bs)]   # not a lone edge to idle
+    select = None
+    for k, c in caps.items():
+        levels = {c.level_at(t) for t in edges}
+        if k != clock and c.edges and len(levels) == 1:
+            select = (k, levels.pop())
+            break
+    if select:
+        sel = caps[select[0]]
+        bounds = [-1] + sel.edges + [clk.edges[-1] + 1]
+        spans = [[t for t in edges if a < t < b] for a, b in zip(bounds, bounds[1:])
+                 if sel.level_at(a + 0.5) == select[1]]
+        spans = [(ts[0], ts[-1]) for ts in spans if ts]
+    else:
+        spans = bs
+    idle = {clk.level_at(a - 0.5) for a, _ in spans}
+    if len(idle) != 1:
+        raise ValueError("the clock does not rest at one level between frames")
+    cpol = idle.pop()
+    inside = lambda t: any(a < t < b for a, b in spans)         # noqa: E731
+    out = []
+    for k, c in caps.items():
+        if k == clock or select and k == select[0] or not any(inside(t) for t in c.edges):
+            continue
+        near = set()                          # the clock's level after its edge nearest to each
+        for t in c.edges:                     # data edge in a burst
+            if inside(t):
+                i = bisect.bisect_left(clk.edges, t)
+                e = min(clk.edges[max(0, i - 1):i + 1], key=lambda x: abs(x - t))
+                near.add(clk.level_at(e))
+        if len(near) != 1:
+            continue                          # not data on this clock
+        rising = near.pop() == 0              # data shifts as the clock falls: sampled rising
+        cpha = cpol if rising else 1 - cpol
+        samples = [t for t in edges if clk.level_at(t) == rising]
+        frames, times = [], []
+        for a, b in spans:
+            ts = [t for t in samples if a <= t <= b]
+            if ts:
+                frames.append([c.level_at(t) for t in ts])
+                times.append(ts)
+        steps = [y - x for ts in times for x, y in zip(ts, ts[1:])]
+        if len(frames) < 2 or not steps:
+            continue
+        out.append(Clocked(clock, k, select, cpol, cpha, sorted(steps)[len(steps) // 2],
+                           max(steps), min(b[0] - a[-1] for a, b in zip(times, times[1:])), half,
+                           frames[0][:common_prefix(frames)], frames_crc(frames), frames))
+    if not out:
+        raise ValueError("no pin changes with one edge of the clock")
+    return out
+
+
+def clocked_check(p: Clocked) -> int | None:
+    """CRC_RES: the CRC after a whole frame, the same for every recorded frame; None if not."""
+    if not p.crc:
+        return None
+    ends = {list(crc_steps(f[p.crc.start:], p.crc))[-1] for f in p.frames}
+    return ends.pop() if len(ends) == 1 else None
+
+
+def clocked_timing(p: Clocked) -> tuple[int, int, int]:
+    """(CLKDIV, DLYMUL, TIMEOUT_VAL): every half of the clock seen by 2 strobes, 6 strobes a bit
+    for the program, and (without a select pin) a timeout between the longest wait for a bit in
+    a frame and the shortest pause between frames."""
+    t = (p.pause * p.gap) ** 0.5
+    div = max(1, -(-int(t) // 961)) if not p.select else 1
+    if div > min(p.half / 2, p.period / 6):
+        raise ValueError("the frames' pauses do not fit the clock: no timeout tells them apart")
+    if not p.select and p.gap < 2 * p.pause:
+        raise ValueError("frames not apart: pauses between them as long as within them")
+    ts = round(t / div)
+    mul = max(1, -(-ts // 31))
+    return div, mul, min(31, round(ts / mul))
+
+
+def clocked_rx_program(p: Clocked, pin: int, select: int | None = None) -> str:
+    """A receiver of the clocked frames through the PAU's external clock: data on `pin`, the
+    clock on pin + 1, the select pin (when the recording had one) on `select`. RX FIFO as
+    frames_rx_program(): 8 bits a word in bits 15:8, then an end word, 3 when the CRC is right.
+
+    A frame starts as the select pin turns active and ends as it turns inactive; without one,
+    the PAU receives all the time and a frame ends when no bit comes for the timeout. The
+    program feeds the CRC with each bit it takes (CRC feed), so a frame's first bits may wait
+    in the queue while it ends the frame before; it checks the CRC once, at the end (the bits
+    after the CRC are the same in every frame)."""
+    div, mul, val = clocked_timing(p)
+    if p.select and select is None:
+        raise ValueError("the recording has a select pin: give its pin")
+    res = clocked_check(p)
+    start = p.crc.start if res is not None else 0
+    off = f"{'!' if p.select and p.select[1] else ''}gpio {select}"
+    code = []
+    if not p.select:
+        code += [(f"set dlymul, {mul}", ""),
+                 (f"set timeout_val, {val}", f"{mul * val} strobes without a bit: the end"),
+                 ("set pau_ctl, rx", "")]
+    code += [("frame:", "")]
+    if p.select:
+        code += [(f"wait 1 {off}", ""), (f"wait 0 {off}", "selected: a frame starts"),
+                 ("set pau_ctl, rx", "")]
+    code += [("in pins, 8 auto", "")] * (start // 8)
+    if start % 8:
+        code.append((f"in pins, {start % 8} auto", ""))
+    if res is not None:
+        code += [("pau crc_reset", "")]
+    if p.select:
+        code += [("jmp bit", "")]
+    code += [("take:", "")]
+    if res is not None:
+        code += [("in pins, 1", ""), ("pau crc_feed, 1", "the CRC takes the bit"),
+                 ("push iffull", "")]
+    else:
+        code += [("in pins, 1 auto", "")]
+    code += [("bit:", "")]
+    if p.select:
+        code += [("jmp pau rx_ready, take", ""), (f"jmp {off}, ended", "deselected"),
+                 ("jmp bit", ""), ("ended:", ""),
+                 ("jmp pau rx_ready, take", "a last bit, if it came with the check"),
+                 ("set pau_ctl, 0", "")]
+    else:
+        code += [("wait 1 pau rx_ready timeout", "a bit, or the frame's end"),
+                 ("jmp !status timeout, take", "")]
+    code += [("set x, 1", ""), ("in x, 1", "a 1 past the last bits"),
+             ("fill:", ""), ("jmp status isr_full, done", ""), ("in null, 1", ""),
+             ("jmp fill", ""), ("done:", "")]
+    if res is not None:
+        code += [("jmp !pau crc_ok, last", ""), ("set x, 3", "the CRC is right")]
+    code += [("last:", ""), ("or isr, x", "bits 7:0: 1, or 3"), ("push", ""), ("jmp frame", "")]
+    crc = (f".crc width={p.crc.width} poly=0x{p.crc.poly:X}{' init=ones' if p.crc.init else ''}"
+           f" res=0x{res:X}\n") if res is not None else ""
+    return (f".program learned_clocked_rx\n; Generated by sim/learn/learn.py: {p}.\n"
+            f"; Pins: data {pin}, clock {pin + 1}"
+            + (f", select {select} ({'high' if p.select[1] else 'low'} in a frame)" if p.select
+               else "") + f". CLKDIV {div}.\n"
+            "; RX FIFO: a frame's bits, 8 a word in bits 15:8 (the first in bit 8); then an end\n"
+            "; word: the last 0..7 bits in bits 15:8 under a 1, bits 7:0 = 1, or 3 when the CRC\n"
+            "; is right.\n"
+            f".pau code=nrz ext{' cpol=1' if p.cpol else ''}{' cpha=1' if p.cpha else ''}\n{crc}"
+            f".in_pins {pin}\n.shift_in right\n.push_thresh 8\n\n" + _asm(code))
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("capture", help='JSON: {"clock_hz": .., "level": 0|1, "edges": [clock, ..]}')
-    ap.add_argument("--pin", type=int, default=0, help="the pin of the generated programs")
+    ap.add_argument("--pin", type=int, default=0,
+                    help="the generated programs' pin (--clocked: data, the clock on pin + 1)")
     ap.add_argument("--frames", action="store_true", help="self-clocked frames, not async characters")
+    ap.add_argument("--clocked", action="store_true", help="a clock pin and data pins")
+    ap.add_argument("--select", type=int, help="--clocked: the select pin of the generated program")
     args = ap.parse_args()
     rec = json.load(open(args.capture))
+    if args.clocked:
+        for p in infer_clocked({int(k): Capture(v["level"], v["edges"])
+                                for k, v in rec["pins"].items()}):
+            print(p)
+            try:
+                print(clocked_rx_program(p, args.pin, args.select))
+            except ValueError as e:
+                print(f"no RX program: {e}")
+        return
     cap = Capture(rec["level"], rec["edges"])
     if args.frames:
         p = infer_frames(cap)
