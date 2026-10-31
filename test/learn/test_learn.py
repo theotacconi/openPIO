@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """sim/learn/learn.py against the reference devices: each recording is made by a reference UART
 transmitter whose format the learner is not told; it must find that format, then its generated
-programs must receive a new transmission and send one the reference receiver accepts.
+programs must receive a new transmission and send one the reference receiver accepts. Frames
+recorded from reference USB, CAN, MFM and biphase mark transmitters and from the chip's 10BASE-T
+program: the learner must find their line code, stuffing, sync bits and CRC.
 
     python3 test/learn/test_learn.py
 """
@@ -13,9 +15,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / "sim" / "learn"), str(ROOT / "sim" / "model"), str(ROOT / "test" / "shared")]
 from bench import Bench, Device                          # noqa: E402
-from devices import UartRx, UartTx                       # noqa: E402
-from learn import (AsyncSerial, Capture, decode, infer_async, rx_program, timing,  # noqa: E402
-                   tx_program, word_value)
+from chip import IRQ                                     # noqa: E402
+from devices import (BmcTx, CanNode, UartRx, UartTx, UsbTx, WiredAndBus,  # noqa: E402
+                     mfm_halves, mfm_sector)
+from learn import (AsyncSerial, Capture, decode, infer_async, infer_frames,  # noqa: E402
+                   pau_directives, rx_program, timing, tx_program, word_value)
 
 PIN = 3
 FORMATS = [  # (data bits, parity, stop bits, idle level, clocks a bit)
@@ -124,6 +128,93 @@ class Learn(unittest.TestCase):
                 bench.start(1)
                 bench.run(round(len(data) * p.length * fmt[4]) + 500)
                 self.assertEqual((rx.frames, rx.errors), (data, []))
+
+
+def bits(data: list[int], lsb_first: bool = True) -> list[int]:
+    return [b >> (i if lsb_first else 7 - i) & 1 for b in data for i in range(8)]
+
+
+class LearnFrames(unittest.TestCase):
+    """Self-clocked frames: a burst of edges each, idle between."""
+
+    def learn(self, levels, pin=PIN):
+        return infer_frames(Capture.from_levels(levels, pin))
+
+    def check(self, p, code, stuff, crc, sync=None):
+        self.assertEqual((p.code, p.stuff), (code, stuff))
+        self.assertEqual(p.crc and (p.crc.width, p.crc.poly, p.crc.init, p.crc.xorout), crc)
+        if sync:
+            self.assertEqual(p.sync[:len(sync)], sync)
+
+    def test_usb(self):
+        """Low speed on D-: NRZI, a 0 stuffed after six 1s (the 0xFF bytes), CRC-16/USB of the
+        data packets."""
+        rnd = random.Random(1)
+        packets = [(0xC3, [0xFF, 0xFF] + [rnd.randrange(256) for _ in range(n)])
+                   for n in (2, 4, 2, 6, 4, 1)]
+        bench = Bench()
+        tx = bench.add(UsbTx(PIN, PIN + 1, 40, packets, start=100, gap=16))
+        bench.run(tx.end + 100)
+        p = self.learn(bench.trace)
+        self.check(p, "nrzi", (0, 6), (16, 0x8005, 1, 1), [0] * 7 + [1] + bits([0xC3]))
+        self.assertEqual(p.crc.start, 16, "after SYNC and PID")
+        self.assertAlmostEqual(p.half, 20, delta=0.2)
+
+    def test_can(self):
+        """CAN 2.0A on a wired-AND bus, a second node acknowledging: NRZ, the complement after
+        five equal bits, CRC-15 from the start of frame."""
+        rnd = random.Random(2)
+        frames = [(rnd.randrange(2048), [rnd.randrange(256) for _ in range(n)])
+                  for n in (1, 3, 3, 8, 0, 5)]
+        nodes = [CanNode(50, send=frames), CanNode(50)]
+        bench = Bench(pullups=1 << PIN)
+        bus = bench.add(WiredAndBus([], [PIN], nodes))
+        bench.run(sum(160 + 8 * len(d) for _, d in frames) * 50, until=lambda: not nodes[0].send)
+        bench.run(2000)
+        self.assertEqual(bus.errors, [])
+        p = self.learn(bench.trace)
+        self.check(p, "nrz", (1, 5), (15, 0x4599, 0, 0), [0])
+
+    def test_mfm(self):
+        """Floppy sectors: MFM (the PAU's Miller code), CRC-16/CCITT after the address mark."""
+        rnd = random.Random(3)
+        levels, level = [0] * 400, 0
+        for n in (8, 12, 8, 16, 5):
+            hs = mfm_halves(mfm_sector([rnd.randrange(256) for _ in range(n)]), level)
+            levels += [h << PIN for h in hs for _ in range(20)] + [hs[-1] << PIN] * 800
+            level = hs[-1]
+        p = self.learn(levels)
+        self.check(p, "miller", None, (16, 0x1021, 1, 0), bits([0, 0, 0, 0, 0xA1], lsb_first=False))
+
+    def test_biphase_mark(self):
+        """Frames of random bits without a CRC: biphase mark, told from its shifted codes by
+        the first edge of every frame on a bit boundary."""
+        rnd = random.Random(4)
+        frames = [[rnd.randrange(2) for _ in range(rnd.randrange(40, 120))] for _ in range(5)]
+        bench = Bench()
+        tx = bench.add(BmcTx(PIN, 40, frames, start=100, gap=20))
+        bench.run(tx.end + 100)
+        p = self.learn(bench.trace)
+        self.check(p, "bmc", None, None)
+        self.assertEqual(p.frames, frames)
+
+    def test_ethernet_from_the_chip(self):
+        """10BASE-T frames sent by programs/ethernet/eth_tx.asm on the chip: Manchester, the
+        preamble and SFD, the FCS (CRC-32)."""
+        rnd = random.Random(5)
+        bench = Bench()
+        bench.load(0, (ROOT / "programs/ethernet/eth_tx.asm").read_text())
+        bench.start(1)
+        for n in (20, 26, 20, 32):                       # bytes after the SFD, the FCS's 4 too
+            f = [rnd.randrange(256) for _ in range(n - 4)]
+            bench.send(0, [len(f) // 2] + [f[i] | f[i + 1] << 8 for i in range(0, len(f), 2)])
+            bench.run(200 * n, until=lambda: not bench.to_send[0])
+            bench.write(0, IRQ, 1 << 8)                  # flag 0: a frame is loaded
+            bench.run((n + 30) * 32)
+        p = self.learn(bench.trace, 0)
+        self.check(p, "manchester", None, (32, 0x04C11DB7, 1, 1), bits([0x55] * 7 + [0xD5]))
+        self.assertEqual(p.crc.start, 64)
+        self.assertIn(".crc width=32 poly=0x4C11DB7 init=ones xorout=1", pau_directives(p)[0])
 
 
 if __name__ == "__main__":
