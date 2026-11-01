@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """SD card commands in SPI mode, judged by the reference SPI slave in each of the four modes:
-the PAU's bit clock on SCK (idle at CPOL, MOSI set up before every sampling edge, held after
-it), CS_N around each command, and the CRC-7 the PAU appends checked against CRC-7/SD (CMD0
-ends in 0x95, CMD8 with 0x1AA in 0x87). A protocol written after the ISA v3 revision."""
+the PAU's bit clock on SCK (at CPOL between commands, MOSI set up before every sampling edge,
+held after it), CS_N around each command, and the CRC-7 the PAU appends checked against
+CRC-7/SD (CMD0 ends in 0x95, CMD8 with 0x1AA in 0x87). A protocol written after the ISA v3
+revision."""
 import sys
 import unittest
 from pathlib import Path
@@ -39,6 +40,8 @@ class SdCommands(unittest.TestCase):
                 self.assertEqual(slave.words, [b for c in COMMANDS for b in command_bytes(*c)])
                 self.assertEqual(slave.words[5], 0x95, "CMD0")
                 self.assertEqual(bench.errors(), [])
+                idle = {s for s, c in zip(bench.wave(SCK, 10), bench.wave(CS, 10)) if c == "1"}
+                self.assertEqual(idle, {str(mode >> 1)}, "SCK at CPOL while CS_N is high")
 
 
 if __name__ == "__main__":
