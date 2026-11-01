@@ -8,7 +8,7 @@ is one point in it. Learning is a search of that space against a recording:
     infer    -> the parameters, each checked against every character of the recording
     generate -> RX and TX programs for those parameters, as assembler source
 
-Two families so far:
+Four families so far:
 
 - asynchronous serial characters (UART, RS-485, LIN, Modbus RTU, DMX, MIDI and the proprietary
   links built on them): bit time, polarity, data bits, parity, stop bits; RX and TX programs.
@@ -19,12 +19,14 @@ Two families so far:
 - clocked lines, a clock pin and data pins (SPI, SD card commands, ...): the clock, its mode
   (CPOL, CPHA), the select pin or the pauses that frame the data, sync bits, the CRC; an RX
   program through the PAU's external clock.
-
-Next: pulse-width codes.
+- pulse-width codes, a mark and a space a bit (NEC and Sony infrared remotes, WS2812, 433 MHz
+  sensors, ...): the pulse whose width is the bit, its two widths, the leader, the CRC; an RX
+  program that times each pulse.
 
     python3 sim/learn/learn.py capture.json   # {"clock_hz": .., "level": 0|1, "edges": [t, ..]}
     python3 sim/learn/learn.py --frames capture.json
     python3 sim/learn/learn.py --clocked pins.json  # {"pins": {"<pin>": {"level", "edges"}, ..}}
+    python3 sim/learn/learn.py --pulses capture.json
 """
 from __future__ import annotations
 
@@ -868,6 +870,240 @@ def clocked_rx_program(p: Clocked, pin: int, select: int | None = None) -> str:
             f".in_pins {pin}\n.shift_in right\n.push_thresh 8\n\n" + _asm(code))
 
 
+# ---------------------------------------------------------------------- pulse-width codes
+#
+# Frames of pulses, a mark (the active level) then a space (the idle level) a bit, the bit in
+# the width of the marks (pulse width: Sony SIRC, WS2812, 433 MHz sensors) or of the spaces
+# (pulse distance: NEC; a mark after the last bit closes it), maybe after a leader of pulses of
+# their own widths. No PAU line code: the program times each pulse with a timed WAIT.
+
+LEADER_MIN = 0.75   # a leader pulse is taken from 3/4 of its shortest recorded width
+
+
+@dataclass
+class Pulses:
+    idle: int                   # the line between frames
+    carrier: str                # "mark": pulse width; "space": pulse distance, a stop mark
+    short: float                # the carrier's two widths, clocks
+    long: float
+    one: int                    # 1: a long pulse is a 1; 0: a short one
+    leader: list[float]         # the shortest recorded width of each pulse before the bits
+    narrowest: float            # the narrowest pulse among the bits
+    longest: float              # the longest space among the bits
+    gap: float                  # the shortest pause between frames
+    ignored: int                # frames of another kind (another leader), not in `frames`
+    sync: list[int]
+    crc: Crc | None
+    frames: list[list[int]]
+
+    def __str__(self) -> str:
+        kind = "pulse width" if self.carrier == "mark" else "pulse distance"
+        sync = "".join(map(str, self.sync)) or "-"
+        lead = " ".join(f"{w:.0f}" for w in self.leader) or "none"
+        return (f"{kind}, idle {'high' if self.idle else 'low'}, {self.carrier}s of "
+                f"{self.short:.1f} / {self.long:.1f} clocks (a {('short', 'long')[self.one]} one "
+                f"is a 1), leader {lead}, sync {sync}, {self.crc or 'no CRC'}"
+                + (f"; {self.ignored} frames of another kind" if self.ignored else ""))
+
+
+def groups(widths, ratio: float = 1.3) -> list[tuple[float, float]]:
+    """(narrowest, widest) of each group of widths: sorted, a new group where one is more than
+    `ratio` times the one before."""
+    out: list[list[float]] = []
+    for w in sorted(widths):
+        if out and w <= out[-1][1] * ratio:
+            out[-1][1] = w
+        else:
+            out.append([w, w])
+    return [(a, b) for a, b in out]
+
+
+def group_of(gs: list[tuple[float, float]], w: float) -> int:
+    return next(k for k, (a, b) in enumerate(gs) if a <= w <= b)
+
+
+def infer_pulses(cap: Capture) -> Pulses:
+    """The pulse-width code that explains the recording, or ValueError.
+
+    The idle level is the level of the longest pulse; frames are apart by the pauses past the
+    largest ratio between two widths of the idle level. Widths fall in groups (a mark's and a
+    space's apart); a group is the bits' when a frame holds two pulses of it, and the leader is
+    a frame's pulses before the first such, a mark and a space each. The frames of the leader
+    most of them have are the ones learned. Their marks or spaces have two widths, the others
+    one (or the complement: a long mark and a short space, a short mark and a long space)."""
+    ws = cap.widths()
+    if len(ws) < 8:
+        raise ValueError("too few edges")
+    lv = [cap.level ^ (k + 1 & 1) for k in range(len(ws))]
+    idle = lv[max(range(len(ws)), key=ws.__getitem__)]
+    spaces = sorted({w for w, v in zip(ws, lv) if v == idle})
+    if len(spaces) < 2:
+        raise ValueError("no pauses between frames")
+    ratio, k = max((b / a, k) for k, (a, b) in enumerate(zip(spaces, spaces[1:])))
+    if ratio < 2:
+        raise ValueError("no pauses between frames: no idle width far past the others")
+    gap = spaces[k + 1]
+    frames, cur = [], [] if cap.level == idle else None
+    for w, v in zip(ws, lv):
+        if v == idle and w >= gap:
+            if cur:
+                frames.append(cur)
+            cur = []
+        elif cur is not None:
+            cur.append(w)
+    if cur and lv[-1] != idle:                               # the line idle after the last edge
+        frames.append(cur)
+    if len(frames) < 2:
+        raise ValueError("fewer than two frames")
+
+    gs = (groups(w for f in frames for w in f[0::2]), groups(w for f in frames for w in f[1::2]))
+    cls = [[(k & 1, group_of(gs[k & 1], w)) for k, w in enumerate(f)] for f in frames]
+    bit = {c for cs in cls for c in cs if cs.count(c) >= 2}
+    kinds: dict[tuple, list[list[float]]] = {}
+    for f, cs in zip(frames, cls):
+        n = next((k for k, c in enumerate(cs) if c in bit), len(f))
+        kinds.setdefault(tuple(cs[:n + (n & 1)]), []).append(f)
+    key, main = max(kinds.items(), key=lambda kv: (len(kv[1]), sum(map(len, kv[1]))))
+    n = len(key)
+    body = [f[n:] for f in main]
+    if not all(body):
+        raise ValueError("no bits after the leader")
+    marks = [w for b in body for w in b[0::2]]
+    gaps = [w for b in body for w in b[1::2]]
+    mg, sg = groups(marks), groups(gaps)
+    if len(mg) > 2 or len(sg) > 2:
+        raise ValueError("more than two widths of a pulse: not a binary pulse code")
+    mid = lambda g: (g[0][1] + g[1][0]) / 2                      # noqa: E731
+    pairs = [(b[k], b[k + 1]) for b in body for k in range(0, len(b) - 1, 2)]
+    if len(mg) == 2 and (len(sg) == 1 or all((m > mid(mg)) != (s > mid(sg)) for m, s in pairs)):
+        carrier, values = "mark", [b[0::2] for b in body]
+    elif len(sg) == 2 and len(mg) == 1:
+        carrier, values = "space", [b[1::2] for b in body]
+    else:
+        raise ValueError("neither the marks nor the spaces alone carry the bits")
+    g = mg if carrier == "mark" else sg
+    t = mid(g)
+    short = [w for v in values for w in v if w < t]
+    long_ = [w for v in values for w in v if w > t]
+    raw = [[int(w > t) for w in v] for v in values]
+    best = None
+    for one in (1, 0):                                   # the sense the CRC is found in
+        fs = [[b ^ 1 - one for b in f] for f in raw]
+        crc = frames_crc(fs)
+        if best is None or crc and (not best[1] or crc.width > best[1].width):
+            best = (one, crc, fs)
+    one, crc, fs = best
+    return Pulses(idle, carrier, sum(short) / len(short), sum(long_) / len(long_), one,
+                  [min(f[k] for f in main) for k in range(n)], min(marks + gaps),
+                  max(gaps, default=0), gap, len(frames) - len(main), fs[0][:common_prefix(fs)],
+                  crc, fs)
+
+
+def pulses_check(p: Pulses) -> int | None:
+    """CRC_RES: the CRC after a whole frame, every bit fed from the first (the bits before the
+    CRC's start feed it too: the same in every frame, or frames of one length), the same for
+    every recorded frame; None if not."""
+    if not p.crc:
+        return None
+    ends = {list(crc_steps(f, p.crc))[-1] for f in p.frames}
+    return ends.pop() if len(ends) == 1 else None
+
+
+def pulses_timing(p: Pulses) -> tuple[int, list[tuple[int, int]], tuple[int, int], int]:
+    """(CLKDIV, (DLYMUL, TIMEOUT_VAL) of each leader pulse's least width, (DLYMUL, TIMEOUT_VAL)
+    of the threshold T between the carrier's widths, N): N times T without a mark ends a frame,
+    between the longest space among the bits and the shortest pause between frames (their
+    geometric mean, at most 32 T). A timed WAIT lasts up to 31 x 31 strobes."""
+    t = (p.short + p.long) / 2
+    lo = [w * LEADER_MIN for w in p.leader]
+    div = max(1, -(-int(max([t] + lo)) // 961))
+    if min(p.narrowest, t - p.short, p.long - t) / div < 4:
+        raise ValueError("pulses, or their widths' difference, under 4 strobes: too fast")
+
+    def wait(clocks: float) -> tuple[int, int]:
+        s = clocks / div
+        m = -(-int(s) // 31)
+        return m, max(1, int(s / m))
+
+    m, v = wait(t)
+    unit = m * v * div
+    n = min(-(-int((p.longest * p.gap) ** 0.5) // unit), 32)
+    if not p.longest * 1.1 < n * unit < p.gap / 1.1:
+        raise ValueError("no timeout tells the pauses between frames from the spaces in them")
+    return div, [wait(w) for w in lo], (m, v), n
+
+
+def pulses_rx_program(p: Pulses, pin: int) -> str:
+    """A receiver of the frames on `pin`. RX FIFO as frames_rx_program(): 8 bits a word in bits
+    15:8, then an end word, 3 when the CRC is right.
+
+    A frame starts with a mark; each leader pulse must last its least width (else the program
+    waits for the next frame), then each carrier pulse is timed by a WAIT with the timeout T
+    between its widths: a timeout, a long one. N times T without a mark ends the frame; without
+    a leader the program first waits for such a pause, not to start in a frame. The program
+    feeds the CRC with each bit and checks it at the end (pulses_check)."""
+    div, leader, (m, v), n = pulses_timing(p)
+    res = pulses_check(p)
+    a, i = 1 - p.idle, p.idle
+    w = lambda lv, t="": f"wait {lv} in_base 0{t and ' timeout'}"         # noqa: E731
+    long_in, short_in = ("in x, 1", "in null, 1") if p.one else ("in null, 1", "in x, 1")
+    auto = "" if res is not None else " auto"
+    timing = [(f"set dlymul, {m}", ""),
+              (f"set timeout_val, {v}", f"T = {m * v} strobes: a long pulse lasts past it")]
+    k = n - 1 - (p.carrier == "space")                  # Y + 1 timeouts after the first
+    code = [("set x, 1", "X = 1: a 1 bit")]
+    code += [("pau crc_reset", "")] if res is not None else []
+    if not p.leader:
+        code += timing + [("sync:", ""), (w(i), ""), (f"set y, {n - 1}", ""), ("quiet:", ""),
+                          (w(a, "t"), ""), ("jmp !status timeout, sync", "a mark: not a pause"),
+                          ("jmp y--, quiet", f"{n} T without a mark: between frames")]
+    code += [("frame:", ""), (w(i), ""), (w(a), "a mark: a frame starts")]
+    for j, (lm, lv) in enumerate(leader):
+        level = (a, i)[j & 1]
+        if j == 0 or lm != leader[j - 1][0]:
+            code.append((f"set dlymul, {lm}", ""))
+        code += [(f"set timeout_val, {lv}", ""),
+                 (w(1 - level, "t"), f"leader {('mark', 'space')[j & 1]}: {lm * lv} strobes"),
+                 ("jmp !status timeout, frame", "shorter: not a frame")]
+        code += timing if j == len(leader) - 1 else []
+        code.append((w(1 - level), ""))
+    feed = ([("pau crc_feed, 1", "the CRC takes the bit"), ("push iffull", "")]
+            if res is not None else [])
+    if p.carrier == "mark":
+        code += [("bit:", ""), (w(i, "t"), "the mark ends, or lasts past T"),
+                 ("jmp !status timeout, short", ""), (w(i), "a long mark: its end"),
+                 (long_in + auto, ""), ("jmp space", ""), ("short:", ""), (short_in + auto, ""),
+                 ("space:", "")] + feed + [
+                 (f"set y, {k}", ""), ("gap:", ""), (w(a, "t"), "the next mark"),
+                 ("jmp !status timeout, bit", ""), ("jmp y--, gap", "")]
+    else:
+        code += [("bit:", ""), (w(i), "the mark ends: a space"), (f"set y, {k}", ""),
+                 (w(a, "t"), "the next mark, or the space lasts past T"),
+                 ("jmp !status timeout, short", ""), ("gap:", ""), (w(a, "t"), ""),
+                 ("jmp !status timeout, long", "a long space"), ("jmp y--, gap", ""),
+                 ("jmp end", "the mark before was the stop mark"),
+                 ("long:", ""), (long_in + auto, ""), ("jmp next", ""), ("short:", ""),
+                 (short_in + auto, ""), ("next:", "")] + feed + [("jmp bit", "")]
+    code += [("end:", ""), ("in x, 1", f"{n} T without a mark: a 1 past the last bits"),
+             ("fill:", ""), ("jmp status isr_full, done", ""), ("in null, 1", ""),
+             ("jmp fill", ""), ("done:", "")]
+    if res is not None:
+        code += [("jmp !pau crc_ok, last", ""), ("set x, 3", "the CRC is right")]
+    code += [("last:", ""), ("or isr, x", f"bits 7:0: 1{', or 3' * (res is not None)}"),
+             ("push", "")]
+    if res is not None:
+        code += [("set x, 1", ""), ("pau crc_reset", "")]
+    code += [("jmp frame", "")]
+    crc = (f".crc width={p.crc.width} poly=0x{p.crc.poly:X}{' init=ones' if p.crc.init else ''}"
+           f" res=0x{res:X}\n") if res is not None else ""
+    return (f".program learned_pulses_rx\n; Generated by sim/learn/learn.py: {p}.\n"
+            f"; CLKDIV {div}.\n"
+            "; RX FIFO: a frame's bits, 8 a word in bits 15:8 (the first in bit 8); then an end\n"
+            "; word: the last 0..7 bits in bits 15:8 under a 1, bits 7:0 = 1, or 3 when the CRC\n"
+            "; is right.\n"
+            f"{crc}.in_pins {pin}\n.shift_in right\n.push_thresh 8\n\n" + _asm(code))
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("capture", help='JSON: {"clock_hz": .., "level": 0|1, "edges": [clock, ..]}')
@@ -876,8 +1112,17 @@ def main() -> None:
     ap.add_argument("--frames", action="store_true", help="self-clocked frames, not async characters")
     ap.add_argument("--clocked", action="store_true", help="a clock pin and data pins")
     ap.add_argument("--select", type=int, help="--clocked: the select pin of the generated program")
+    ap.add_argument("--pulses", action="store_true", help="a pulse-width code")
     args = ap.parse_args()
     rec = json.load(open(args.capture))
+    if args.pulses:
+        p = infer_pulses(Capture(rec["level"], rec["edges"]))
+        print(f"{p}: {len(p.frames)} frames")
+        try:
+            print(pulses_rx_program(p, args.pin))
+        except ValueError as e:
+            print(f"no RX program: {e}")
+        return
     if args.clocked:
         for p in infer_clocked({int(k): Capture(v["level"], v["edges"])
                                 for k, v in rec["pins"].items()}):

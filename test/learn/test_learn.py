@@ -6,7 +6,9 @@ recorded from reference USB, CAN, MFM and biphase mark transmitters and from the
 program: the learner must find their line code, stuffing, sync bits and CRC, then its generated
 program must receive new frames with the CRC's verdict. Clocked lines recorded from the reference
 SPI master in its four modes and from the chip's SD card commands: the clock, its mode, the select
-pin, the CRC; the generated program receives new frames.
+pin, the CRC; the generated program receives new frames. Pulse-width codes recorded from the
+reference NEC remote, Sony and 433 MHz sensor frames and the chip's WS2812 program: the pulse
+that carries the bits, its widths, the leader, the CRC; the generated program receives new frames.
 
     python3 test/learn/test_learn.py
 """
@@ -20,11 +22,13 @@ sys.path[:0] = [str(ROOT / "sim" / "learn"), str(ROOT / "sim" / "model"), str(RO
 from bench import Bench, Device, Script                  # noqa: E402
 from chip import IRQ                                     # noqa: E402
 from asm import assemble                                 # noqa: E402
-from devices import (BmcTx, CanNode, SpiMaster, UartRx, UartTx, UsbTx, WiredAndBus,  # noqa: E402
-                     can_bits, can_crc15, crc7_sd, crc16_usb, mfm_halves, mfm_sector)
+from devices import (BmcTx, CanNode, NecRemote, SpiMaster, UartRx, UartTx, UsbTx,  # noqa: E402
+                     WiredAndBus, can_bits, can_crc15, crc7_sd, crc16_usb, mfm_halves, mfm_sector,
+                     nec_levels)
 from learn import (Capture, clocked_rx_program, clocked_timing, decode, frame_timing,  # noqa: E402
-                   frames_rx_program, infer_async, infer_clocked, infer_frames, pau_directives,
-                   rx_program, timing, tx_program, word_value)
+                   frames_rx_program, infer_async, infer_clocked, infer_frames, infer_pulses,
+                   pau_directives, pulses_rx_program, pulses_timing, rx_program, timing,
+                   tx_program, word_value)
 
 PIN = 3
 FORMATS = [  # (data bits, parity, stop bits, idle level, clocks a bit)
@@ -386,6 +390,163 @@ class LearnClocked(unittest.TestCase):
                     got = self.receive(p, bench, len(bad) + 100, select and CS)
                     self.assertEqual([v for _, v in got], [3, 1] + [3] * 7)
                     self.assertEqual([b for b, _ in got][2:], p.frames[2:])
+
+
+
+def pulse_script(frames: list[list[tuple[int, float]]], scale: float, idle: int,
+                 gap: float) -> tuple[Script, int]:
+    """A device driving PIN through frames of (level, microseconds), `scale` clocks a
+    microsecond, idle `gap` microseconds before and after each; and the clock it ends."""
+    steps, t = [(0, {PIN: idle})], gap * scale
+    for f in frames:
+        for lv, us in f + [(idle, gap)]:
+            steps.append((round(t), {PIN: lv}))
+            t += us * scale
+    return Script(steps), round(t)
+
+
+def sirc_levels(command: int, address: int) -> list[tuple[int, float]]:
+    """A Sony SIRC 12-bit frame at an IR receiver's output: the leader, then 7 command and 5
+    address bits LSB first, a 1 a mark of 1200 us, a 0 of 600, 600 us spaces."""
+    out = [(0, 2400), (1, 600)]
+    for b in bits([command | address << 7, address >> 1])[:12]:
+        out += [(0, 1200 if b else 600), (1, 600)]
+    return out[:-1]
+
+
+def crc8(bits_: list[int], poly: int = 0x31) -> int:
+    reg = 0
+    for b in bits_:
+        reg = (reg << 1 & 0xFF) ^ (poly if reg >> 7 ^ b else 0)
+    return reg
+
+
+def wh2_bits(ident: int, temp: int, humidity: int) -> list[int]:
+    """A Fine Offset WH2 weather sensor's 48 bits: 0xFF, the type 4, the sensor, the
+    temperature (12 bits), the humidity, CRC-8 0x31 of the 32 bits after 0xFF."""
+    body = [(4 << 28 | ident << 20 | temp << 8 | humidity) >> 31 - k & 1 for k in range(32)]
+    return [1] * 8 + body + [crc8(body) >> 7 - k & 1 for k in range(8)]
+
+
+def wh2_levels(bits_: list[int]) -> list[tuple[int, float]]:
+    """At a 433 MHz receiver's output (high with the carrier): a 1 a mark of 500 us, a 0 of
+    1500, 1000 us spaces."""
+    return [p for b in bits_ for p in ((1, 500 if b else 1500), (0, 1000))][:-1]
+
+
+def ws2812_trace(colours: list[list[tuple[int, int, int]]]) -> list[int]:
+    """The line of programs/ws2812/ws2812.asm at 48 MHz sending frames of (G, R, B), each
+    latched by a pause."""
+    bench = Bench()
+    bench.load(0, (ROOT / "programs/ws2812/ws2812.asm").read_text(), clkdiv_int=6)
+    bench.start(1)
+    for leds in colours:
+        b = bits([c for led in leds for c in led], lsb_first=False)
+        bench.send(0, [int("".join(map(str, b[k:k + 16])), 2) for k in range(0, len(b), 16)])
+        bench.run(60 * len(b) + 3000)
+    return bench.trace
+
+
+class LearnPulses(unittest.TestCase):
+    """Pulse-width codes: a mark and a space a bit, one of them two widths."""
+
+    def receive(self, p, device, clocks):
+        bench = Bench()
+        bench.add(device)
+        bench.load(0, pulses_rx_program(p, PIN), clkdiv_int=pulses_timing(p)[0])
+        bench.start(1)
+        bench.run(clocks)
+        return frames_received(bench.received[0])
+
+    def test_nec(self):
+        """The reference NEC remote: pulse distance, the leader of 9 ms and 4.5 ms; repeat codes
+        and a lone burst are frames of other kinds. Each byte and its complement XOR to 0: a
+        CRC-8 x^8 + 1, partly the remote's check."""
+        rnd = random.Random(8)
+        frames = [(rnd.randrange(256), rnd.randrange(256)) for _ in range(6)]
+        frames[2:2] = ["repeat", ("glitch", 3000), "repeat"]
+        bench = Bench()
+        remote = bench.add(NecRemote(PIN, frames, us=0.2, start=100, gap=40000))
+        bench.run(remote.end + 100)
+        p = infer_pulses(Capture.from_levels(bench.trace, PIN))
+        self.assertEqual((p.carrier, p.idle, p.one, p.ignored), ("space", 1, 1, 3))
+        self.assertEqual([round(w) for w in p.leader], [1800, 900])
+        self.assertEqual((p.crc.width, p.crc.poly), (8, 0x01))
+        self.assertEqual(p.frames, [bits([a, a ^ 0xFF, c, c ^ 0xFF])
+                                    for a, c in frames[:2] + frames[5:]])
+
+        frames = [(rnd.randrange(256), rnd.randrange(256)) for _ in range(4)]
+        sent = frames[:1] + ["repeat", ("glitch", 3000)] + frames[1:]
+        for us in (0.18, 0.22):                          # every time 10 % shorter, longer
+            with self.subTest(us=us):
+                remote = NecRemote(PIN, sent, us=us, start=100, gap=40000)
+                got = self.receive(p, remote, remote.end + 100)
+                self.assertEqual(got, [(bits([a, a ^ 0xFF, c, c ^ 0xFF]), 3) for a, c in frames])
+
+        levels = nec_levels(frames[0])
+        levels[2 + 2 * 3 + 1] = (1, 1687.5 + 562.5 - levels[2 + 2 * 3 + 1][1])   # bit 3 flipped
+        script, end = pulse_script([levels], 0.2, 1, 40000)
+        got = self.receive(p, script, end)
+        self.assertEqual([v for _, v in got], [1])
+
+    def test_sirc(self):
+        """Sony SIRC at an IR receiver's output: pulse width, idle high, the leader's mark."""
+        rnd = random.Random(9)
+        frames = [(rnd.randrange(128), rnd.randrange(32)) for _ in range(6)]
+        script, end = pulse_script([sirc_levels(*f) for f in frames], 0.2, 1, 30000)
+        bench = Bench()
+        bench.add(script)
+        bench.run(end)
+        p = infer_pulses(Capture.from_levels(bench.trace, PIN))
+        self.assertEqual((p.carrier, p.idle, p.one, p.crc), ("mark", 1, 1, None))
+        self.assertEqual([round(w) for w in p.leader], [480, 120])
+        want = [bits([c | a << 7, a >> 1])[:12] for c, a in frames]
+        self.assertEqual(p.frames, want)
+
+        frames = [(rnd.randrange(128), rnd.randrange(32)) for _ in range(3)]
+        script, end = pulse_script([sirc_levels(*f) for f in frames], 0.22, 1, 30000)
+        got = self.receive(p, script, end)
+        self.assertEqual(got, [(bits([c | a << 7, a >> 1])[:12], 1) for c, a in frames])
+
+    def test_433_mhz_sensor(self):
+        """Fine Offset WH2 frames: pulse width, a short mark a 1, found by the CRC-8 0x31 after
+        the 0xFF preamble (the long-is-1 bits have none)."""
+        rnd = random.Random(10)
+        sensor = [wh2_bits(0x5A, rnd.randrange(4096), rnd.randrange(100)) for _ in range(8)]
+        script, end = pulse_script([wh2_levels(b) for b in sensor], 0.1, 0, 20000)
+        bench = Bench()
+        bench.add(script)
+        bench.run(end)
+        p = infer_pulses(Capture.from_levels(bench.trace, PIN))
+        self.assertEqual((p.carrier, p.idle, p.one, p.leader), ("mark", 0, 0, []))
+        c = p.crc
+        self.assertEqual((c.width, c.poly, c.init, c.start, c.tail), (8, 0x31, 0, 8, 0))
+        self.assertEqual(p.frames, sensor)
+
+        sensor = [wh2_bits(0x5A, rnd.randrange(4096), rnd.randrange(100)) for _ in range(3)]
+        sensor[1][20] ^= 1                               # a bit flipped on the air
+        script, end = pulse_script([wh2_levels(b) for b in sensor], 0.1, 0, 20000)
+        got = self.receive(p, script, end)
+        self.assertEqual(got, [(b, v) for b, v in zip(sensor, (3, 1, 3))])
+
+    def test_ws2812_from_the_chip(self):
+        """programs/ws2812/ws2812.asm: pulse width, idle low, a long mark with a short space;
+        frames latched by the pause."""
+        rnd = random.Random(11)
+        colours = [[tuple(rnd.randrange(256) for _ in range(3)) for _ in range(n)]
+                   for n in (2, 4, 2, 6)]
+        p = infer_pulses(Capture.from_levels(ws2812_trace(colours), 0))
+        self.assertEqual((p.carrier, p.idle, p.one, p.leader, p.crc), ("mark", 0, 1, [], None))
+        self.assertEqual((round(p.short), round(p.long)), (18, 42))
+        want = [bits([c for led in leds for c in led], lsb_first=False) for leds in colours]
+        self.assertEqual(p.frames, want)
+
+        colours = [[tuple(rnd.randrange(256) for _ in range(3)) for _ in range(n)]
+                   for n in (4, 2)]
+        levels = [0] * 3000 + ws2812_trace(colours)      # a pause before the first
+        got = self.receive(p, played([lv << PIN for lv in levels], [PIN]), len(levels))
+        self.assertEqual(got, [(bits([c for led in leds for c in led], lsb_first=False), 1)
+                               for leds in colours])
 
 
 if __name__ == "__main__":
