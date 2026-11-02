@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 600" width="1240" height="600" role="img" aria-labelledby="t d">
 <title id="t">ISR: the input path</title>
-<desc id="d">Each IN shifts n bits from a source (the pins, the PAU receiver, a register) into the ISR; a PUSH moves the ISR into the RX FIFO. A counter tells when the ISR is full so it can push by itself.</desc>
+<desc id="d">Each IN shifts n bits from a source (the pins, the PAU receiver, a step counter, a register) into the ISR; a PUSH moves the ISR into the RX FIFO. A counter tells when the ISR is full so it can push by itself.</desc>
 <style>
 .bg { fill: #ffffff; }
 text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: #1f2933; }
@@ -36,18 +36,20 @@ text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 <text x="345.0" y="32" class="small" text-anchor="middle">IN source, n</text>
 <text x="320" y="56.0" class="d" text-anchor="end">pins, from in_base</text>
 <polyline points="322,52.0 329,52.0" class="ctl"/>
-<text x="320" y="86.85714285714286" class="d" text-anchor="end">PAU receiver (when RX is on)</text>
-<polyline points="322,82.85714285714286 329,82.85714285714286" class="ctl"/>
-<text x="320" y="117.71428571428572" class="d" text-anchor="end">X</text>
-<polyline points="322,113.71428571428572 329,113.71428571428572" class="ctl"/>
-<text x="320" y="148.57142857142856" class="d" text-anchor="end">Y</text>
-<polyline points="322,144.57142857142856 329,144.57142857142856" class="ctl"/>
-<text x="320" y="179.42857142857144" class="d" text-anchor="end">ISR</text>
-<polyline points="322,175.42857142857144 329,175.42857142857144" class="ctl"/>
-<text x="320" y="210.28571428571428" class="d" text-anchor="end">OSR</text>
-<polyline points="322,206.28571428571428 329,206.28571428571428" class="ctl"/>
-<text x="320" y="241.14285714285714" class="d" text-anchor="end">STATUS (16 status bits)</text>
-<polyline points="322,237.14285714285714 329,237.14285714285714" class="ctl"/>
+<text x="320" y="83.0" class="d" text-anchor="end">PAU receiver (when RX is on)</text>
+<polyline points="322,79.0 329,79.0" class="ctl"/>
+<text x="320" y="110.0" class="d" text-anchor="end">TIME: steps since RESET</text>
+<polyline points="322,106.0 329,106.0" class="ctl"/>
+<text x="320" y="137.0" class="d" text-anchor="end">X</text>
+<polyline points="322,133.0 329,133.0" class="ctl"/>
+<text x="320" y="164.0" class="d" text-anchor="end">Y</text>
+<polyline points="322,160.0 329,160.0" class="ctl"/>
+<text x="320" y="191.0" class="d" text-anchor="end">ISR</text>
+<polyline points="322,187.0 329,187.0" class="ctl"/>
+<text x="320" y="218.0" class="d" text-anchor="end">OSR</text>
+<polyline points="322,214.0 329,214.0" class="ctl"/>
+<text x="320" y="245.0" class="d" text-anchor="end">STATUS (16 status bits)</text>
+<polyline points="322,241.0 329,241.0" class="ctl"/>
 <text x="320" y="272.0" class="d" text-anchor="end">NULL: zeros</text>
 <polyline points="322,268.0 329,268.0" class="ctl"/>
 <polyline points="360,160.0 398,160.0" class="data" marker-end="url(#data)"/>

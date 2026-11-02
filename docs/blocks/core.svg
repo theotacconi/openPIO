@@ -34,7 +34,7 @@ text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 <rect x="0" y="0" width="1240" height="700" rx="18" class="bg"/>
 <rect x="40" y="40" width="230" height="80" rx="8" class="b"/>
 <text x="155.0" y="68.0" class="h" text-anchor="middle">Clock divider</text>
-<text x="155.0" y="85.0" class="d" text-anchor="middle">CLKDIV: 1 to 255.99 clocks</text>
+<text x="155.0" y="85.0" class="d" text-anchor="middle">CLKDIV: 1 to 65535.99 clocks</text>
 <text x="155.0" y="102.0" class="d" text-anchor="middle">→ one step</text>
 <polyline points="270,80 1000,80 1000,128" class="ctl" marker-end="url(#ctl)"/>
 <text x="640" y="70" class="lc" text-anchor="middle">step: every block below acts only on a step</text>

@@ -129,7 +129,7 @@ SELECTOR = ("sel", "selector: passes one input, chosen by the instruction")
 # ---------------------------------------------------------------------- the whole system
 
 def architecture():
-    g = Drawing(1480, 920, "openPIO architecture",
+    g = Drawing(1480, 900, "openPIO architecture",
                 "A host microcontroller talks over SPI to the openPIO chip. Inside, a host interface "
                 "feeds two identical state machines; each has a TX FIFO and OSR that shift data out to "
                 "the pins, an ISR and RX FIFO that collect data in, a core that runs a 64-instruction "
@@ -142,12 +142,12 @@ def architecture():
     # host
     g.box(20, 330, 200, 250, "Your microcontroller", ["(the host)", "", "loads the programs", "sets the options",
                                                       "sends and receives data", "is told when to act"])
+    # chip
+    g.add('<rect x="300" y="120" width="880" height="800" rx="14" class="chip"/>')
     g.arrow([(220, 425), (318, 425)], "ctl", both=True)
     g.text(262, 412, "SPI", "lc", "middle"); g.text(262, 446, "4 wires", "small", "middle")
     g.arrow([(318, 500), (222, 500)], "ctl")
     g.text(262, 487, "interrupt", "lc", "middle"); g.text(262, 521, "HOST_IRQ", "small", "middle")
-    # chip
-    g.add('<rect x="300" y="120" width="880" height="800" rx="14" class="chip"/>')
     g.text(322, 150, "openPIO chip", "chiptitle")
     g.box(320, 170, 130, 730, "Host interface", ["SPI + registers", "", "write program", "set options",
                                                  "start / stop / step", "move FIFO data", "read status"],
@@ -165,7 +165,7 @@ def architecture():
     g.box(665, 634, 130, 76, "ISR", ["collects the bits", "in, one by one"], cls="q", gap=18)
     g.arrow([(1028, 682), (797, 682)], "data", "IN: bits from the pins", (912, 702))
     g.arrow([(663, 672), (627, 672)]); g.arrow([(493, 672), (452, 672)])
-    g.box(835, 360, 150, 206, "PAU", ["optional helper", "on the line:", "encoding,", "bit stuffing,", "CRC check"],
+    g.box(835, 360, 150, 206, "PAU", ["optional helper", "on the line:", "line codes,", "bit clock,", "bit stuffing,", "CRC"],
           cls="pau", gap=19)
     g.arrow([(870, 270), (870, 358)])
     g.text(878, 320, "or through", "ld"); g.text(878, 336, "the PAU", "ld")
@@ -182,13 +182,13 @@ def architecture():
     g.arrow([(645, 399), (658, 399)], "ctl"); g.arrow([(452, 399), (508, 399)], "ctl")
     g.arrow([(730, 330), (730, 310)], "ctl"); g.text(738, 324, "out", "lc")
     g.arrow([(730, 610), (730, 632)], "ctl"); g.text(738, 626, "in", "lc")
-    g.add('<rect x="475" y="790" width="530" height="96" rx="12" class="sm"/>')
+    g.add('<rect x="475" y="790" width="500" height="96" rx="12" class="sm"/>')
     g.text(495, 818, "State machine 1", "smtitle")
     g.text(495, 842, "Identical to state machine 0. The two run side by side, on the same pins,")
     g.text(495, 862, "and can start on the same clock (4 state machines in a larger build).")
     g.arrow([(740, 744), (740, 788)], "ctl", both=True)
     g.text(752, 763, "peer link: IRQ flags", "ld")
-    g.arrow([(1005, 838), (1028, 838)]); g.arrow([(452, 838), (473, 838)], "ctl")
+    g.arrow([(977, 838), (1028, 838)], both=True); g.arrow([(452, 838), (473, 838)], "ctl")
     g.arrow([(1160, 470), (1258, 470)], "data", both=True)
     g.text(1209, 457, "14 pins", "ld", "middle"); g.text(1209, 491, "uio, uo, ui", "small", "middle")
     g.box(1260, 350, 160, 240, "Your circuit", ["", "LEDs, sensors,", "displays, radios,", "buses: UART, SPI,",
@@ -204,7 +204,7 @@ def core():
                 "The clock divider makes the steps; the program counter picks the instruction; the "
                 "program memory gives it; its three fields go to the control, to the delay and side-set "
                 "logic, and to the blocks as arguments.")
-    g.box(40, 40, 230, 80, "Clock divider", ["CLKDIV: 1 to 255.99 clocks", "→ one step"])
+    g.box(40, 40, 230, 80, "Clock divider", ["CLKDIV: 1 to 65535.99 clocks", "→ one step"])
     g.arrow([(270, 80), (1000, 80), (1000, 128)], "ctl", "step: every block below acts only on a step",
             (640, 70))
     ox, oy = g.sel(330, 170, 200, ["PC + 1, or back to the loop start", "JMP: the jump target",
@@ -270,8 +270,8 @@ def alu():
     g.text(450, 708, "operation (from the instruction)", "small", "middle")
     g.arrow([(500, 520), (578, 520)], "data", "result", (539, 510))
     g.add('<line x1="580" y1="400" x2="580" y2="660" class="data"/>')
-    outs = ["X or Y", "ISR (then counted as full)", "OSR (then counted as full)",
-            "pins or directions (all 8, within PIN_MASK)", "COND: rewrites one condition", "NULL: thrown away"]
+    outs = ["X or Y", "ISR (then counted as empty)", "OSR (then counted as full)",
+            "pins or directions (all 16, within PIN_MASK)", "COND: rewrites one condition", "NULL: thrown away"]
     for i, s in enumerate(outs):
         y = 410 + i * 48
         g.arrow([(580, y), (608, y)]); g.text(614, y + 4, s)
@@ -292,7 +292,7 @@ def alu():
 # ---------------------------------------------------------------------- conditions
 
 def conditions():
-    g = Drawing(1240, 780, "Conditions",
+    g = Drawing(1240, 800, "Conditions",
                 "Each of the 4 condition slots picks a signal (a pin, a flag, a bit of X or Y, a status bit), "
                 "may invert it, and gives a true/false value to JMP and WAIT; WAIT can also wait for a change.")
     g.text(40, 36, "4 slots (COND0 … COND3), each one test. The host sets them; a program can rewrite one.", "group")
@@ -308,22 +308,26 @@ def conditions():
     g.arrow([(675, 225), (675, 263)], "ctl")
     g.arrow([(750, 300), (800, 300), (800, 210), (848, 210)]); g.text(856, 205, "WAIT: until true or false,")
     g.text(856, 222, "or until it changes (an edge)")
-    g.box(860, 270, 340, 80, "Timeout", ["a WAIT … timeout also ends after", "TIMEOUT_VAL steps; sets the timeout flag"])
-    g.box(40, 360, 520, 280, "", [])
+    g.box(860, 270, 340, 80, "Timeout", ["a WAIT … timeout also ends after", "TIMEOUT_VAL × DLYMUL steps; sets the timeout flag"])
+    g.box(40, 360, 520, 300, "", [])
     g.text(300, 390, "SM status bits (SM = state machine)", "h", "middle")
     g.table(0, 422, [("0", "x_zero", "X == 0"), ("1", "y_zero", "Y == 0"), ("2", "x_eq_y", "X == Y"),
                      ("3", "timeout", "a WAIT timed out"), ("4", "osr_empty", "OSR used up"),
                      ("5", "isr_full", "ISR filled"), ("6", "tx_empty", "TX FIFO empty"),
-                     ("7", "rx_full", "RX FIFO full")], [70, 100, 220], gap=26)
-    g.box(600, 360, 600, 280, "", [])
+                     ("7", "rx_full", "RX FIFO full"), ("8", "pins_changed", "an input pin changed")],
+            [70, 100, 220], gap=26)
+    g.box(600, 360, 600, 300, "", [])
     g.text(900, 390, "PAU status bits", "h", "middle")
     g.table(0, 422, [("0", "tx_idle", "everything sent"), ("1", "rx_idle", "line quiet"),
                      ("2", "tx_ready", "room in the TX queue"), ("3", "rx_ready", "bits received"),
-                     ("4", "crc_ok", "CRC correct"), ("5", "crc_zero", "CRC is 0")], [630, 655, 740], gap=26)
-    g.table(0, 422, [("6", "stuff_err", "bad stuffing bit"), ("7", "overrun", "bits were lost"),
-                     ("8", "se0", "both lines low"), ("9", "se1", "both lines high"),
-                     ("10", "bit_err", "line ≠ bit sent")], [905, 935, 1020], gap=26)
-    g.legend(40, 670, 1160, DATA_CTL + [SELECTOR],
+                     ("4", "crc_ok", "CRC correct"), ("6", "stuff_err", "bad stuffing bit")],
+            [630, 655, 740], gap=26)
+    g.table(0, 422, [("7", "overrun", "bits were lost"), ("8", "line_00", "both input pins low"),
+                     ("9", "line_01", "only in_base high"), ("10", "line_10", "only in_base + 1 high"),
+                     ("11", "line_11", "both input pins high"), ("12", "bit_err", "line ≠ bit sent")],
+            [905, 935, 1020], gap=26)
+    g.text(900, 632, "5 and 13 … 15 read 0", "small", "middle")
+    g.legend(40, 690, 1160, DATA_CTL + [SELECTOR],
              [("JMP / WAIT", "jump if true / pause until true"), ("IRQ", "Interrupt ReQuest flag"),
               ("SM", "state machine"), ("PAU", "Protocol Acceleration Unit"),
               ("in_base", "first input pin of this machine"), ("CRC", "Cyclic Redundancy Check (a checksum)")],
@@ -373,13 +377,14 @@ def irq():
 # ---------------------------------------------------------------------- OSR (output)
 
 def osr():
-    g = Drawing(1240, 600, "OSR: the output path",
+    g = Drawing(1240, 620, "OSR: the output path",
                 "The OSR loads a word from the TX FIFO (or another source); each OUT shifts n bits out of "
-                "it to a destination: the pins, the PAU, a register or the program counter. A counter "
+                "it to a destination: the pins, the PAU, a register, the program counter or the PAU bit "
+                "rate. A counter "
                 "tells when the OSR is used up so it can reload by itself.")
     g.box(40, 30, 180, 56, "TX FIFO", ["data from the host"], cls="q")
     ox, oy = g.sel(330, 40, 210, ["", "rest of the OSR (after an OUT)", "X (PULL noblock, FIFO empty)",
-                                  "ALU result (mov osr, …)", "the other machine's RX FIFO"],
+                                  "ALU result (mov osr, …)", "host (machine stopped)"],
                    label="what the OSR loads")
     g.arrow([(220, 58), (321, 58)], "data", "PULL: next word", (270, 50))
     g.arrow([(ox, oy), (398, oy)])
@@ -387,20 +392,21 @@ def osr():
     g.arrow([(550, 150), (618, 150)])
     g.box(620, 100, 180, 100, "Shifter", ["takes n bits (1 … 16)", "right: lowest bit first", "left: highest bit first"])
     g.arrow([(800, 150), (868, 150)], "data", "n bits", (834, 140))
-    g.add('<line x1="870" y1="50" x2="870" y2="250" class="data"/>')
+    g.add('<line x1="870" y1="50" x2="870" y2="282" class="data"/>')
     outs = ["pins, from out_base", "PAU transmitter (when TX is on)", "pin directions", "X or Y",
-            "ISR", "PC: jump there", "NULL: thrown away"]
+            "ISR", "PC: jump there", "PAU_BAUD: a measured bit rate", "NULL: thrown away"]
     for i, s in enumerate(outs):
         y = 56 + i * 32
         g.arrow([(870, y), (898, y)]); g.text(904, y + 4, s)
     g.text(870, 36, "where the bits go (OUT dest, n)", "small")
-    g.box(400, 300, 170, 70, "Bits used", ["counter, 0 … 16"])
-    g.text(400, 394, "+n on each OUT · 0 when the OSR loads", "small")
-    g.arrow([(570, 335), (638, 335)], "ctl")
-    g.box(640, 300, 200, 70, "≥ pull threshold?", ["threshold: 1 … 16 (host)"])
-    g.arrow([(840, 335), (898, 335)], "ctl"); g.text(906, 331, "OSR empty: OUT … auto loads the next")
-    g.text(906, 349, "word first (autopull); also a condition", "small")
-    g.legend(40, 440, 1160, DATA_CTL + [SELECTOR],
+    # the threshold row below starts under the last destination
+    g.box(400, 320, 170, 70, "Bits used", ["counter, 0 … 16"])
+    g.text(400, 414, "+n on each OUT · 0 when the OSR loads", "small")
+    g.arrow([(570, 355), (638, 355)], "ctl")
+    g.box(640, 320, 200, 70, "≥ pull threshold?", ["threshold: 1 … 16 (host)"])
+    g.arrow([(840, 355), (898, 355)], "ctl"); g.text(906, 351, "OSR empty: OUT … auto loads the next")
+    g.text(906, 369, "word first (autopull); also a condition", "small")
+    g.legend(40, 460, 1160, DATA_CTL + [SELECTOR],
              [("OSR", "Output Shift Register"), ("FIFO", "First In, First Out queue"),
               ("PULL", "load the OSR from the TX FIFO"), ("OUT", "send n bits from the OSR"),
               ("out_base", "first output pin of this machine"), ("PAU / TX", "Protocol Acceleration Unit / transmit"),
@@ -412,10 +418,12 @@ def osr():
 
 def isr():
     g = Drawing(1240, 600, "ISR: the input path",
-                "Each IN shifts n bits from a source (the pins, the PAU receiver, a register) into the ISR; "
+                "Each IN shifts n bits from a source (the pins, the PAU receiver, a step counter, a register) "
+                "into the ISR; "
                 "a PUSH moves the ISR into the RX FIFO. A counter tells when the ISR is full so it can "
                 "push by itself.")
-    ox, oy = g.sel(330, 40, 240, ["pins, from in_base", "PAU receiver (when RX is on)", "X", "Y", "ISR", "OSR",
+    ox, oy = g.sel(330, 40, 240, ["pins, from in_base", "PAU receiver (when RX is on)",
+                                  "TIME: steps since RESET", "X", "Y", "ISR", "OSR",
                                   "STATUS (16 status bits)", "NULL: zeros"], label="IN source, n")
     g.arrow([(ox, oy), (398, oy)])
     g.box(400, 120, 180, 80, "Shifter", ["adds n bits (1 … 16)", "right / left as set"])
@@ -448,9 +456,8 @@ def isr():
 def fifo():
     g = Drawing(1240, 640, "TX and RX FIFOs",
                 "Each state machine has two queues of 133 words. Next to the machine, 4 fast words; behind "
-                "them, a 128-word ring in a memory chip (SRAM) shared by the two queues, which moves one "
-                "word per clock; an IN or OUT register meets the host. When the memory part is empty, words "
-                "skip it.")
+                "them, a 128-word ring in a memory block (SRAM) shared by the two queues, which moves one "
+                "word per clock; an IN or OUT register meets the host. Every word takes this one path.")
     g.text(40, 36, "TX FIFO: words to send  (133 = 1 IN register + 128 in memory + 4 front)", "group")
     g.text(40, 110, "host (TX_PUSH)", "term")
     g.arrow([(190, 110), (258, 110)])
@@ -460,7 +467,8 @@ def fifo():
     g.text(600, 110, "256 words, one access per clock", "small", "middle")
     g.box(490, 125, 220, 60, "TX ring", ["128 words"], cls="q")
     g.box(490, 235, 220, 60, "RX ring", ["128 words"], cls="q")
-    g.text(600, 330, "in turn: TX in · TX out · RX in · RX out", "small", "middle")
+    g.text(600, 322, "one move per clock, taking turns:", "small", "middle")
+    g.text(600, 338, "TX refill · TX store · RX store · RX fetch", "small", "middle")
     g.arrow([(360, 110), (488, 155)])
     g.arrow([(710, 155), (838, 110)])
     g.box(840, 85, 120, 50, "TX front", ["4 words"], cls="q")
@@ -478,7 +486,7 @@ def fifo():
                                   "briefly wait for the memory."], gap=20)
     g.legend(40, 520, 1160, [("data", "data")],
              [("FIFO", "First In, First Out: a queue, words leave in the order they came"),
-              ("SRAM", "Static RAM: the memory chip holding the long part of the queues"),
+              ("SRAM", "Static RAM: the memory block holding the long part of the queues"),
               ("TX / RX", "transmit (host → pins) / receive (pins → host)"),
               ("PUSH / PULL", "the program puts a word in / takes a word out")])
     return g
@@ -487,46 +495,49 @@ def fifo():
 # ---------------------------------------------------------------------- PAU
 
 def pau():
-    g = Drawing(1240, 760, "PAU: Protocol Acceleration Unit",
+    g = Drawing(1240, 790, "PAU: Protocol Acceleration Unit",
                 "An optional serial engine between the shift registers and the pins. Transmitting, it "
                 "queues the bits, inserts stuffing bits and encodes the line; receiving, it recovers the "
-                "bit timing, removes the stuffing bits and queues the bits. A CRC unit checks or appends a "
+                "bit timing, removes the stuffing bits and queues the bits. The bits are timed by the PAU's "
+                "own clock or by an external clock pin. A CRC unit checks or appends a "
                 "checksum; a monitor stops sending if the line disagrees.")
     g.text(40, 36, "Transmit (when TX is on)", "group")
     g.text(40, 84, "OUT pins, n", "term"); g.text(40, 102, "bits from the OSR", "small")
     g.arrow([(170, 90), (218, 90)])
-    g.box(220, 60, 170, 60, "TX queue", ["32 bits waiting"], cls="q")
+    g.box(220, 60, 170, 60, "TX queue", ["16 bits waiting"], cls="q")
     g.arrow([(390, 90), (438, 90)])
     g.box(440, 55, 220, 70, "Stuffing", ["adds a bit after a run", "of N bits (USB, CAN)"], cls="pau")
     g.arrow([(660, 90), (708, 90)])
-    g.box(710, 55, 230, 70, "Encoder", ["bit → line: NRZ, NRZI,", "Manchester, BMC"], cls="pau")
-    g.arrow([(940, 90), (1008, 90)]); g.text(1016, 86, "pin out_base", "term"); g.text(1016, 104, "(+1 inverted, DIFF)", "small")
+    g.box(710, 55, 230, 70, "Encoder", ["bit → line, by a table:", "NRZ, NRZI, Manchester, …"], cls="pau")
+    g.arrow([(940, 90), (1008, 90)]); g.text(1016, 86, "pin out_base", "term"); g.text(1016, 104, "(+1: complement or clock)", "small")
     g.text(40, 196, "Receive (when RX is on)", "group")
-    g.text(1016, 244, "pin in_base", "term"); g.text(1016, 262, "(+1 for DIFF)", "small")
+    g.text(1016, 244, "pin in_base", "term"); g.text(1016, 262, "(+1: external clock)", "small")
     g.arrow([(1008, 250), (942, 250)])
     g.box(710, 215, 230, 70, "Decoder", ["finds the bit timing", "from the line's edges"], cls="pau")
     g.arrow([(708, 250), (662, 250)])
     g.box(440, 215, 220, 70, "Destuffing", ["removes the added bit;", "a wrong one: stuff_err"], cls="pau")
     g.arrow([(438, 250), (392, 250)])
-    g.box(220, 220, 170, 60, "RX queue", ["32 bits waiting"], cls="q")
+    g.box(220, 220, 170, 60, "RX queue", ["16 bits waiting"], cls="q")
     g.arrow([(218, 250), (172, 250)]); g.text(40, 244, "IN pins, n", "term"); g.text(40, 262, "bits to the ISR", "small")
-    g.box(220, 330, 440, 80, "CRC: checksum, 1 to 32 bits", ["fed a bit a strobe: data bits sent or received, or the ISR",
+    g.box(220, 330, 440, 80, "CRC: checksum, 1 to 32 bits", ["fed a bit a step: data bits sent or received, or the ISR",
                                                               "appends it when sending · checks it when receiving"])
     g.arrow([(415, 90), (415, 328)], "ctl"); g.arrow([(560, 287), (560, 328)], "ctl")
     g.box(710, 330, 230, 80, "Monitor", ["compares each bit sent with", "pin in_base: bit_err, stop"])
+    g.box(970, 330, 230, 80, "Bit clock", ["own: PAU_BAUD steps a half bit", "or external: pin in_base + 1"])
     g.box(40, 450, 560, 110, "The program controls it", ["SET pau_ctl: tx, rx, stuff, crc, monitor (on / off)",
-                                                          "SET pau_baud: H = steps per half bit",
+                                                          "SET pau_baud: H = steps per half bit (OUT: a measured H)",
                                                           "pau crc_reset · crc_append · tx_abort · crc_feed n"], gap=22)
-    g.box(640, 450, 560, 110, "The host sets it up", ["PAU_MODE: line code, invert, stuffing rule, baud",
-                                                     "CRC_CFG, CRC_POLY: which checksum",
-                                                     "CRC_RES: the value of a correct frame"], gap=22)
-    g.text(1200, 436, "11 status bits go to the conditions", "small", "end")
+    g.box(640, 450, 560, 110, "The host sets it up", ["PAU_CODE: the line code · PAU_CFG: the first H",
+                                                     "PAU_MODE: second pin, invert, external clock, stuffing",
+                                                     "CRC_CFG, CRC_POLY, CRC_RES: which checksum"], gap=22)
+    g.text(1200, 436, "12 status bits go to the conditions", "small", "end")
     g.legend(40, 590, 1160, DATA_CTL,
              [("PAU", "Protocol Acceleration Unit"), ("TX / RX", "transmit / receive"),
               ("NRZ", "Non-Return-to-Zero: the line is the bit"), ("NRZI", "NRZ Inverted: a 0 flips the line (USB)"),
               ("Manchester", "two halves per bit, 1 = low→high (Ethernet)"),
               ("BMC", "Biphase Mark Code: a flip every bit, two for a 1"),
-              ("DIFF", "differential: a second pin with the opposite level"),
+              ("Miller", "MFM (floppy disks): a 1 flips mid-bit, a 0 after a 0 at its start"),
+              ("+1", "the next pin: out_base + 1, in_base + 1"),
               ("CRC", "Cyclic Redundancy Check: a checksum")])
     return g
 
