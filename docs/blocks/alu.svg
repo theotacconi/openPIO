@@ -110,11 +110,11 @@ text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 <polyline points="580,410 608,410" class="data" marker-end="url(#data)"/>
 <text x="614" y="414" class="d" text-anchor="start">X or Y</text>
 <polyline points="580,458 608,458" class="data" marker-end="url(#data)"/>
-<text x="614" y="462" class="d" text-anchor="start">ISR (then counted as full)</text>
+<text x="614" y="462" class="d" text-anchor="start">ISR (then counted as empty)</text>
 <polyline points="580,506 608,506" class="data" marker-end="url(#data)"/>
 <text x="614" y="510" class="d" text-anchor="start">OSR (then counted as full)</text>
 <polyline points="580,554 608,554" class="data" marker-end="url(#data)"/>
-<text x="614" y="558" class="d" text-anchor="start">pins or directions (all 8, within PIN_MASK)</text>
+<text x="614" y="558" class="d" text-anchor="start">pins or directions (all 16, within PIN_MASK)</text>
 <polyline points="580,602 608,602" class="data" marker-end="url(#data)"/>
 <text x="614" y="606" class="d" text-anchor="start">COND: rewrites one condition</text>
 <polyline points="580,650 608,650" class="data" marker-end="url(#data)"/>

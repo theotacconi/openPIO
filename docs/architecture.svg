@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1480 920" width="1480" height="920" role="img" aria-labelledby="t d">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1480 900" width="1480" height="900" role="img" aria-labelledby="t d">
 <title id="t">openPIO architecture</title>
 <desc id="d">A host microcontroller talks over SPI to the openPIO chip. Inside, a host interface feeds two identical state machines; each has a TX FIFO and OSR that shift data out to the pins, an ISR and RX FIFO that collect data in, a core that runs a 64-instruction program, and an optional PAU on the line. A pin-control block shares 16 pin positions (14 on the chip) with the circuit.</desc>
 <style>
@@ -31,7 +31,7 @@ text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 .cell { fill: #ffffff; stroke: #b7791f; stroke-width: 1.3; }
 </style>
 <defs><marker id="data" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="ah-data"/></marker><marker id="datas" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M10,0 L0,5 L10,10 z" class="ah-data"/></marker><marker id="ctl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="ah-ctl"/></marker><marker id="ctls" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M10,0 L0,5 L10,10 z" class="ah-ctl"/></marker><marker id="dash" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="ah-dash"/></marker><marker id="dashs" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M10,0 L0,5 L10,10 z" class="ah-dash"/></marker></defs>
-<rect x="0" y="0" width="1480" height="920" rx="18" class="bg"/>
+<rect x="0" y="0" width="1480" height="900" rx="18" class="bg"/>
 <g transform="translate(20,-40)">
 <polyline points="560,90 610,90" class="data" marker-end="url(#data)"/>
 <text x="620" y="95" class="d" text-anchor="start">data</text>
@@ -45,13 +45,13 @@ text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 <text x="120.0" y="477.0" class="d" text-anchor="middle">sets the options</text>
 <text x="120.0" y="494.0" class="d" text-anchor="middle">sends and receives data</text>
 <text x="120.0" y="511.0" class="d" text-anchor="middle">is told when to act</text>
+<rect x="300" y="120" width="880" height="800" rx="14" class="chip"/>
 <polyline points="220,425 318,425" class="ctl" marker-end="url(#ctl)" marker-start="url(#ctls)"/>
 <text x="262" y="412" class="lc" text-anchor="middle">SPI</text>
 <text x="262" y="446" class="small" text-anchor="middle">4 wires</text>
 <polyline points="318,500 222,500" class="ctl" marker-end="url(#ctl)"/>
 <text x="262" y="487" class="lc" text-anchor="middle">interrupt</text>
 <text x="262" y="521" class="small" text-anchor="middle">HOST_IRQ</text>
-<rect x="300" y="120" width="880" height="800" rx="14" class="chip"/>
 <text x="322" y="150" class="chiptitle" text-anchor="start">openPIO chip</text>
 <rect x="320" y="170" width="130" height="730" rx="8" class="bar"/>
 <text x="385.0" y="473.5" class="h" text-anchor="middle">Host interface</text>
@@ -99,12 +99,13 @@ text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 <polyline points="663,672 627,672" class="data" marker-end="url(#data)"/>
 <polyline points="493,672 452,672" class="data" marker-end="url(#data)"/>
 <rect x="835" y="360" width="150" height="206" rx="8" class="pau"/>
-<text x="910.0" y="420.5" class="h" text-anchor="middle">PAU</text>
-<text x="910.0" y="439.5" class="d" text-anchor="middle">optional helper</text>
-<text x="910.0" y="458.5" class="d" text-anchor="middle">on the line:</text>
-<text x="910.0" y="477.5" class="d" text-anchor="middle">encoding,</text>
-<text x="910.0" y="496.5" class="d" text-anchor="middle">bit stuffing,</text>
-<text x="910.0" y="515.5" class="d" text-anchor="middle">CRC check</text>
+<text x="910.0" y="411.0" class="h" text-anchor="middle">PAU</text>
+<text x="910.0" y="430.0" class="d" text-anchor="middle">optional helper</text>
+<text x="910.0" y="449.0" class="d" text-anchor="middle">on the line:</text>
+<text x="910.0" y="468.0" class="d" text-anchor="middle">line codes,</text>
+<text x="910.0" y="487.0" class="d" text-anchor="middle">bit clock,</text>
+<text x="910.0" y="506.0" class="d" text-anchor="middle">bit stuffing,</text>
+<text x="910.0" y="525.0" class="d" text-anchor="middle">CRC</text>
 <polyline points="870,270 870,358" class="data" marker-end="url(#data)"/>
 <text x="878" y="320" class="ld" text-anchor="start">or through</text>
 <text x="878" y="336" class="ld" text-anchor="start">the PAU</text>
@@ -137,13 +138,13 @@ text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 <text x="738" y="324" class="lc" text-anchor="start">out</text>
 <polyline points="730,610 730,632" class="ctl" marker-end="url(#ctl)"/>
 <text x="738" y="626" class="lc" text-anchor="start">in</text>
-<rect x="475" y="790" width="530" height="96" rx="12" class="sm"/>
+<rect x="475" y="790" width="500" height="96" rx="12" class="sm"/>
 <text x="495" y="818" class="smtitle" text-anchor="start">State machine 1</text>
 <text x="495" y="842" class="d" text-anchor="start">Identical to state machine 0. The two run side by side, on the same pins,</text>
 <text x="495" y="862" class="d" text-anchor="start">and can start on the same clock (4 state machines in a larger build).</text>
 <polyline points="740,744 740,788" class="ctl" marker-end="url(#ctl)" marker-start="url(#ctls)"/>
 <text x="752" y="763" class="ld" text-anchor="start">peer link: IRQ flags</text>
-<polyline points="1005,838 1028,838" class="data" marker-end="url(#data)"/>
+<polyline points="977,838 1028,838" class="data" marker-end="url(#data)" marker-start="url(#datas)"/>
 <polyline points="452,838 473,838" class="ctl" marker-end="url(#ctl)"/>
 <polyline points="1160,470 1258,470" class="data" marker-end="url(#data)" marker-start="url(#datas)"/>
 <text x="1209" y="457" class="ld" text-anchor="middle">14 pins</text>

@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 600" width="1240" height="600" role="img" aria-labelledby="t d">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 620" width="1240" height="620" role="img" aria-labelledby="t d">
 <title id="t">OSR: the output path</title>
-<desc id="d">The OSR loads a word from the TX FIFO (or another source); each OUT shifts n bits out of it to a destination: the pins, the PAU, a register or the program counter. A counter tells when the OSR is used up so it can reload by itself.</desc>
+<desc id="d">The OSR loads a word from the TX FIFO (or another source); each OUT shifts n bits out of it to a destination: the pins, the PAU, a register, the program counter or the PAU bit rate. A counter tells when the OSR is used up so it can reload by itself.</desc>
 <style>
 .bg { fill: #ffffff; }
 text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: #1f2933; }
@@ -31,7 +31,7 @@ text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 .cell { fill: #ffffff; stroke: #b7791f; stroke-width: 1.3; }
 </style>
 <defs><marker id="data" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="ah-data"/></marker><marker id="datas" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M10,0 L0,5 L10,10 z" class="ah-data"/></marker><marker id="ctl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="ah-ctl"/></marker><marker id="ctls" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M10,0 L0,5 L10,10 z" class="ah-ctl"/></marker><marker id="dash" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="ah-dash"/></marker><marker id="dashs" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M10,0 L0,5 L10,10 z" class="ah-dash"/></marker></defs>
-<rect x="0" y="0" width="1240" height="600" rx="18" class="bg"/>
+<rect x="0" y="0" width="1240" height="620" rx="18" class="bg"/>
 <rect x="40" y="30" width="180" height="56" rx="8" class="q"/>
 <text x="130.0" y="54.5" class="h" text-anchor="middle">TX FIFO</text>
 <text x="130.0" y="71.5" class="d" text-anchor="middle">data from the host</text>
@@ -44,7 +44,7 @@ text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 <polyline points="322,145.0 329,145.0" class="ctl"/>
 <text x="320" y="195.5" class="d" text-anchor="end">ALU result (mov osr, …)</text>
 <polyline points="322,191.5 329,191.5" class="ctl"/>
-<text x="320" y="242.0" class="d" text-anchor="end">the other machine&#x27;s RX FIFO</text>
+<text x="320" y="242.0" class="d" text-anchor="end">host (machine stopped)</text>
 <polyline points="322,238.0 329,238.0" class="ctl"/>
 <polyline points="220,58 321,58" class="data" marker-end="url(#data)"/>
 <text x="270" y="50" class="ld" text-anchor="middle">PULL: next word</text>
@@ -61,7 +61,7 @@ text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 <text x="710.0" y="180.5" class="d" text-anchor="middle">left: highest bit first</text>
 <polyline points="800,150 868,150" class="data" marker-end="url(#data)"/>
 <text x="834" y="140" class="ld" text-anchor="middle">n bits</text>
-<line x1="870" y1="50" x2="870" y2="250" class="data"/>
+<line x1="870" y1="50" x2="870" y2="282" class="data"/>
 <polyline points="870,56 898,56" class="data" marker-end="url(#data)"/>
 <text x="904" y="60" class="d" text-anchor="start">pins, from out_base</text>
 <polyline points="870,88 898,88" class="data" marker-end="url(#data)"/>
@@ -75,33 +75,35 @@ text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 <polyline points="870,216 898,216" class="data" marker-end="url(#data)"/>
 <text x="904" y="220" class="d" text-anchor="start">PC: jump there</text>
 <polyline points="870,248 898,248" class="data" marker-end="url(#data)"/>
-<text x="904" y="252" class="d" text-anchor="start">NULL: thrown away</text>
+<text x="904" y="252" class="d" text-anchor="start">PAU_BAUD: a measured bit rate</text>
+<polyline points="870,280 898,280" class="data" marker-end="url(#data)"/>
+<text x="904" y="284" class="d" text-anchor="start">NULL: thrown away</text>
 <text x="870" y="36" class="small" text-anchor="start">where the bits go (OUT dest, n)</text>
-<rect x="400" y="300" width="170" height="70" rx="8" class="b"/>
-<text x="485.0" y="331.5" class="h" text-anchor="middle">Bits used</text>
-<text x="485.0" y="348.5" class="d" text-anchor="middle">counter, 0 … 16</text>
-<text x="400" y="394" class="small" text-anchor="start">+n on each OUT · 0 when the OSR loads</text>
-<polyline points="570,335 638,335" class="ctl" marker-end="url(#ctl)"/>
-<rect x="640" y="300" width="200" height="70" rx="8" class="b"/>
-<text x="740.0" y="331.5" class="h" text-anchor="middle">≥ pull threshold?</text>
-<text x="740.0" y="348.5" class="d" text-anchor="middle">threshold: 1 … 16 (host)</text>
-<polyline points="840,335 898,335" class="ctl" marker-end="url(#ctl)"/>
-<text x="906" y="331" class="d" text-anchor="start">OSR empty: OUT … auto loads the next</text>
-<text x="906" y="349" class="small" text-anchor="start">word first (autopull); also a condition</text>
-<rect x="40" y="440" width="1160" height="142" rx="8" class="legend"/>
-<text x="56" y="464" class="group" text-anchor="start">Legend</text>
-<polyline points="130,460 164,460" class="data" marker-end="url(#data)"/>
-<text x="174" y="464" class="def" text-anchor="start">data</text>
-<polyline points="232.8,460 266.8,460" class="ctl" marker-end="url(#ctl)"/>
-<text x="276.8" y="464" class="def" text-anchor="start">control, settings</text>
-<polygon points="429.20000000000005,450 445.20000000000005,456 445.20000000000005,464 429.20000000000005,470" class="sel"/>
-<text x="453.20000000000005" y="464" class="def" text-anchor="start">selector: passes one input, chosen by the instruction</text>
-<text x="56.0" y="494" class="def"><tspan class="term">OSR</tspan>  Output Shift Register</text>
-<text x="56.0" y="515" class="def"><tspan class="term">FIFO</tspan>  First In, First Out queue</text>
-<text x="56.0" y="536" class="def"><tspan class="term">PULL</tspan>  load the OSR from the TX FIFO</text>
-<text x="56.0" y="557" class="def"><tspan class="term">OUT</tspan>  send n bits from the OSR</text>
-<text x="620.0" y="494" class="def"><tspan class="term">out_base</tspan>  first output pin of this machine</text>
-<text x="620.0" y="515" class="def"><tspan class="term">PAU / TX</tspan>  Protocol Acceleration Unit / transmit</text>
-<text x="620.0" y="536" class="def"><tspan class="term">PC</tspan>  Program Counter</text>
-<text x="620.0" y="557" class="def"><tspan class="term">noblock</tspan>  do not wait: use X when the FIFO is empty</text>
+<rect x="400" y="320" width="170" height="70" rx="8" class="b"/>
+<text x="485.0" y="351.5" class="h" text-anchor="middle">Bits used</text>
+<text x="485.0" y="368.5" class="d" text-anchor="middle">counter, 0 … 16</text>
+<text x="400" y="414" class="small" text-anchor="start">+n on each OUT · 0 when the OSR loads</text>
+<polyline points="570,355 638,355" class="ctl" marker-end="url(#ctl)"/>
+<rect x="640" y="320" width="200" height="70" rx="8" class="b"/>
+<text x="740.0" y="351.5" class="h" text-anchor="middle">≥ pull threshold?</text>
+<text x="740.0" y="368.5" class="d" text-anchor="middle">threshold: 1 … 16 (host)</text>
+<polyline points="840,355 898,355" class="ctl" marker-end="url(#ctl)"/>
+<text x="906" y="351" class="d" text-anchor="start">OSR empty: OUT … auto loads the next</text>
+<text x="906" y="369" class="small" text-anchor="start">word first (autopull); also a condition</text>
+<rect x="40" y="460" width="1160" height="142" rx="8" class="legend"/>
+<text x="56" y="484" class="group" text-anchor="start">Legend</text>
+<polyline points="130,480 164,480" class="data" marker-end="url(#data)"/>
+<text x="174" y="484" class="def" text-anchor="start">data</text>
+<polyline points="232.8,480 266.8,480" class="ctl" marker-end="url(#ctl)"/>
+<text x="276.8" y="484" class="def" text-anchor="start">control, settings</text>
+<polygon points="429.20000000000005,470 445.20000000000005,476 445.20000000000005,484 429.20000000000005,490" class="sel"/>
+<text x="453.20000000000005" y="484" class="def" text-anchor="start">selector: passes one input, chosen by the instruction</text>
+<text x="56.0" y="514" class="def"><tspan class="term">OSR</tspan>  Output Shift Register</text>
+<text x="56.0" y="535" class="def"><tspan class="term">FIFO</tspan>  First In, First Out queue</text>
+<text x="56.0" y="556" class="def"><tspan class="term">PULL</tspan>  load the OSR from the TX FIFO</text>
+<text x="56.0" y="577" class="def"><tspan class="term">OUT</tspan>  send n bits from the OSR</text>
+<text x="620.0" y="514" class="def"><tspan class="term">out_base</tspan>  first output pin of this machine</text>
+<text x="620.0" y="535" class="def"><tspan class="term">PAU / TX</tspan>  Protocol Acceleration Unit / transmit</text>
+<text x="620.0" y="556" class="def"><tspan class="term">PC</tspan>  Program Counter</text>
+<text x="620.0" y="577" class="def"><tspan class="term">noblock</tspan>  do not wait: use X when the FIFO is empty</text>
 </svg>
