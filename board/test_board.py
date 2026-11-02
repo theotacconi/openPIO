@@ -44,17 +44,23 @@ class Listen(unittest.TestCase):
         return out.splitlines()
 
     def test_hdlc_frames_with_their_crc(self):
-        """(The recording teaches the CRC, so every frame in it is right: test_learn.py has
-        the wrong ones.)"""
+        """One frame of the recording corrupted on the line: the CRC is learned from the
+        others, and that frame is printed with the CRC wrong."""
         rnd = random.Random(1)
         frames = [[rnd.randrange(256) for _ in range(n)] for n in (4, 9, 2, 12, 6, 3, 7, 5)]
-        out = self.listen(T.hdlc_trace(frames), "--lsb")
+        levels = T.hdlc_trace(frames)
+        edges = T.bursts(T.Capture.from_levels(levels), 80)[3][1]
+        t = next(t for t in range(edges[0] + 8 * 50, edges[-1], 8) if t not in edges)
+        levels[t:] = [lv ^ 1 for lv in levels[t:]]      # NRZI: a bit of the fourth frame flipped
+        out = self.listen(levels, "--lsb")
         self.assertIn("learned frames: nrzi", out[0])
+        self.assertIn("(one recorded frame wrong)", out[0])
         got = [line.split() for line in out[3:]]
         self.assertEqual(len(got), len(frames))
-        for words, f in zip(got, frames):
-            self.assertEqual(words[-2:], ["CRC", "ok"])
-            self.assertEqual(words[2:3 + len(f)], [f"{b:02x}" for b in [0x7E, *f]])
+        for k, (words, f) in enumerate(zip(got, frames)):
+            self.assertEqual(words[-2:], ["CRC", "WRONG" if k == 3 else "ok"])
+            if k != 3:
+                self.assertEqual(words[2:3 + len(f)], [f"{b:02x}" for b in [0x7E, *f]])
 
     def test_nec_remote(self):
         rnd = random.Random(2)
