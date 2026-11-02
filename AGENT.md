@@ -62,7 +62,7 @@
 * `src/`: RTL, Tiny Tapeout top `tt_um_theotacconi_openpio.v`; `src/config.json` and `src/pdn_cfg.tcl` with `librelane_plugin_openpio_pdn.py` and `odb_stripes.py` (repository root, where LibreLane finds them) configure the hardening.
 * `test/test.py`, `test/tb.v`, `test/Makefile`: cocotb tests of the chip through its pins (RTL, SRAM model, gate level). `test/lockstep/`: the RTL as a Yosys netlist stepped against the model every clock. `test/formal/`: SymbiYosys proofs by k-induction for every input sequence: the prescaler strobe (`strobe.sby`), the FIFOs pass every word once, in order, unchanged, with any SRAM that keeps its contract (`fifo.sby`); the properties sit in the RTL under `ifdef FORMAL`.
 * `fpga/tang_nano_20k/`: FPGA wrapper and build.
-* `board/`: the chip or the FPGA from the PC: a Raspberry Pi Pico as USB-to-SPI bridge (`pico/main.py`, MicroPython), `board.py` with Chip's `spi` for `host.py`, `bringup.py` the first checks (also `--model`).
+* `board/`: the chip or the FPGA from the PC: a Raspberry Pi Pico as USB-to-SPI bridge (`pico/main.py`, MicroPython), `board.py` with Chip's `spi` for `host.py` (`Model`: the same over the model, recordings played on its pins), `bringup.py` the first checks, `listen.py` a logic analyzer's recording (sigrok `.sr`) to a learned receiver on the board, `test_board.py` both on the model.
 * `ARCHITECTURE.md`: every block explained for non-experts, with the drawings of `docs/`; keep it in step with ISA.md and `docs/diagrams.py`.
 * `docs/`: `info.md` (Tiny Tapeout datasheet, required by the docs and gds workflows), `diagrams.py` and the SVGs it generates.
 * `scripts/`: `dev.sh` (container), `area.sh` (CMOS5L cell area of a design), `tt_signoff.py` (checks a gds run's logs).

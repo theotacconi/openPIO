@@ -7,8 +7,8 @@ Board has the SPI method of the model's Chip, so the reference driver runs on it
     host.load(0, assemble(source))
 
 Serial is the Pico's USB port (Linux and macOS, standard library only). Model is the same
-bridge over the Python model of the chip, with the board's pads, for running the bring-up
-checks without hardware.
+bridge over the Python model of the chip, with the board's pads and maybe recordings played
+on its pins, for running the bring-up checks and listen.py without hardware.
 """
 
 from __future__ import annotations
@@ -23,8 +23,10 @@ from typing import Callable, Sequence
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "sim" / "model"))
+sys.path.insert(0, str(HERE.parent / "sim" / "learn"))
 sys.path.insert(0, str(HERE / "pico"))
 from chip import TT_PADS, Chip                           # noqa: E402
+from learn import Capture                                # noqa: E402
 import main as bridge                                    # noqa: E402
 
 
@@ -52,20 +54,30 @@ class Serial:
 
 class Pads(Chip):
     """The model chip on the board: a bidirectional pin it drives reads its own value back, an
-    undriven one its pull-up (tang_top.v, the cst file)."""
+    undriven one the recording played on it, else its pull-up (tang_top.v, the cst file). The
+    recordings start at clock `t0`, once it is set; until then they hold their first level."""
+
+    def __init__(self, play: dict[int, Capture] | None = None) -> None:
+        super().__init__()
+        self.play = play or {}
+        self.played = sum(1 << k for k in self.play)
+        self.t0: int | None = None
 
     def step(self, cycles: int = 1) -> None:
         for _ in range(cycles):
             value, oe = self.pins
-            self.pin_in = (value & oe | ~oe) & TT_PADS[2]
+            t = -1 if self.t0 is None else self.cycle - self.t0
+            ext = sum(c.level_at(t) << k for k, c in self.play.items())
+            self.pin_in = value & oe | ~oe & (TT_PADS[2] & ~self.played | ext)
             super().step()
 
 
 class Model:
-    """The bridge's firmware over the model chip, in place of Serial."""
+    """The bridge's firmware over the model chip, in place of Serial; `play`: recordings
+    (times in clocks) on pins, from `chip.t0`."""
 
-    def __init__(self) -> None:
-        self.chip = Pads()
+    def __init__(self, play: dict[int, Capture] | None = None) -> None:
+        self.chip = Pads(play)
 
     def xfer(self, out: bytes) -> bytes:
         words = [out[i] << 8 | out[i + 1] for i in range(0, len(out), 2)]
