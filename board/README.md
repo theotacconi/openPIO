@@ -22,6 +22,8 @@ host.push(0, b"hello")
 - `bringup.py`: the first checks of a board: ID and pads, every MOSI and MISO bit, program
   memory, HOST_IRQ, 100 words through the FIFOs, and a UART on pin 0 read back by the other SM
   from the same pad. Only the bridge's wires are needed.
+- `listen.py`: from a logic analyzer's recording to a receiver on the board (below).
+- `test_board.py`: both on the model, without hardware.
 
 ## Wiring: Pico to Tang Nano 20K
 
@@ -60,3 +62,44 @@ ok    uart
 
 `python3 board/bringup.py --model` runs the same checks on the model. SCLK defaults to 1 MHz;
 the chip takes up to `clk` / 6 (`--hz`): 4.5 MHz on the FPGA's 27 MHz, 8.3 MHz on the chip.
+
+## From a recording to a receiver
+
+`listen.py` takes a recording of a line, finds its format with
+[sim/learn/learn.py](../sim/learn/learn.py), writes an openPIO receiver for it, loads it on the
+board and prints every frame it receives:
+
+1. Record the line with a logic analyzer in PulseView (any sigrok-supported analyzer, such as
+   the 8-channel 24 MHz ones) and save the session as a `.sr` file. A few frames are enough;
+   a CRC is believed from about 40 bits of evidence, e.g. 4 frames with a CRC-16.
+2. Connect the line to a `pio` pin of the board (and the analyzer's ground to the board's).
+3. Run listen.py with the recording's channel and the board's pin:
+   `python3 board/listen.py remote.sr --channel D0 --pin 0 --lsb`.
+
+A NEC remote's recording, sampled at 1 MHz and played here on the model (`--model
+--clock-hz 1e6`, which a board does not need), prints:
+
+```
+learned pulses: pulse distance, idle high, spaces of 562.5 / 1687.5 clocks (a long one is a 1), leader 9000 4500, sync -, no CRC
+receiver on pin 0, CLKDIV 8 + 0/256 at 1 MHz
+playing the recording
+  32 bits  82 7d b7 48
+  32 bits  0e f1 ee 11
+  ...
+```
+
+Each line is a frame: the address, its complement, the command, its complement.
+
+- `--kind` picks the family (pulses, frames, async, clocked); by default the first of pulses,
+  frames and async that explains the recording. A clocked line needs `--clock-channel` (and
+  `--select-channel` / `--select-pin` if it has a select); its clock goes to pin `--pin` + 1.
+- `--lsb` prints each byte's first bit as its LSB (UART, NEC, HDLC); the default is MSB first
+  (SPI, CAN, DALI).
+- `--clock-hz` is the board's clock, which the receiver counts: 27 MHz on the Tang Nano 20K,
+  50 MHz on the chip.
+- `--program` prints the receiver's source and stops; `--model` plays the recording on the
+  Python model's pin instead of using the board (slow: keep the recording short).
+
+Frames the recording cut at its start or end are left out of the learning. The receiver
+learns the line only: request-and-answer protocols need the hand-written programs in
+[programs/](../programs/).
