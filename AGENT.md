@@ -63,6 +63,7 @@
 * `test/test.py`, `test/tb.v`, `test/Makefile`: cocotb tests of the chip through its pins (RTL, SRAM model, gate level). `test/lockstep/`: the RTL as a Yosys netlist stepped against the model every clock. `test/formal/`: SymbiYosys proofs by k-induction for every input sequence: the prescaler strobe (`strobe.sby`), the FIFOs pass every word once, in order, unchanged, with any SRAM that keeps its contract (`fifo.sby`); the properties sit in the RTL under `ifdef FORMAL`.
 * `fpga/tang_nano_20k/`: FPGA wrapper and build.
 * `board/`: the chip or the FPGA from the PC: a Raspberry Pi Pico as USB-to-SPI bridge (`pico/main.py`, MicroPython), `board.py` with Chip's `spi` for `host.py`, `bringup.py` the first checks (also `--model`).
+* `ARCHITECTURE.md`: every block explained for non-experts, with the drawings of `docs/`; keep it in step with ISA.md and `docs/diagrams.py`.
 * `docs/`: `info.md` (Tiny Tapeout datasheet, required by the docs and gds workflows), `diagrams.py` and the SVGs it generates.
 * `scripts/`: `dev.sh` (container), `area.sh` (CMOS5L cell area of a design), `tt_signoff.py` (checks a gds run's logs).
 * `.github/workflows/`: `model` (Python model and programs), `test` (cocotb on the RTL), `gds` (hardening, precheck, gate-level test, sign-off), `docs`.
