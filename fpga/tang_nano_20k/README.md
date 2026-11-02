@@ -17,6 +17,8 @@ Leave the RGB LCD panel unplugged: the `pio` pins share the 40-pin LCD connector
 | pio[5..7] | 41, 42, 48 | J5 | in/out | `uio[5..7]`, weak pull-ups |
 | GND | | J5/J6 | | common ground with the SPI host |
 
+Only pins 0-7 of the 16 ISA pin positions are brought out (`uio`). Pins 10-15, `uo_out[2..7]` and `ui_in[3..7]` on the chip, are not: their inputs read 0, their outputs go nowhere.
+
 All I/O is 3.3 V LVCMOS. The internal pull-ups are weak; add 4.7 kOhm pull-ups for I2C, 1-Wire or SWD.
 
 Header and pin sources: Sipeed TangNano-20K-example `.cst` files and litex-boards `sipeed_tang_nano_20k.py`. The pins avoid the SD card (80-85), the MAX98357A amplifier (51, 54-56), HDMI DDC (52-53) and 1.8 V pins 25-26. Free pins left: 49, 71, 72.
@@ -34,14 +36,14 @@ Header and pin sources: Sipeed TangNano-20K-example `.cst` files and litex-board
 | 4 | Reset active |
 | 5 | Heartbeat, about 0.8 Hz: the clock is running |
 
-FIFO and stall flags are not on the TT pins; read STATUS (register 8) over SPI.
+FIFO and stall flags are not on the TT pins: read STATUS (register 0x00) over SPI, or watch MISO during the header, which carries the last transaction's SM STATUS (HOST.md).
 
 ## Build
 
 Open-source flow (oss-cad-suite, or `pip install yowasp-yosys yowasp-nextpnr-himbaechel-gowin apycula`):
 
 ```
-./build.sh            # -> build/tang_top.fs (prints Fmax; ~31-34 MHz, passes 27 MHz)
+./build.sh            # -> build/tang_top.fs (prints Fmax; ~42 MHz, passes 27 MHz)
 ./build.sh load       # program SRAM via the on-board BL616 (openFPGALoader -b tangnano20k)
 ./build.sh flash      # program the SPI flash
 YOSYS=yowasp-yosys NEXTPNR=yowasp-nextpnr-himbaechel-gowin ./build.sh   # YoWASP tools

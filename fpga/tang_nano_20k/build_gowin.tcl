@@ -2,7 +2,7 @@
 # Output: impl/pnr/openpio_tang.fs
 set_device -name GW2AR-18C GW2AR-LV18QN88C8/I7
 
-foreach f {alu shifter imem pau openpio_core fifo spi_cfg_interface tt_um_openpio} {
+foreach f {spi openpio openpio_sm pau fifo imem fifo_ram tt_um_theotacconi_openpio} {
     add_file ../../src/$f.v
 }
 add_file tang_top.v
