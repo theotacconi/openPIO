@@ -2,11 +2,12 @@
 """sim/learn/learn.py against the reference devices: each recording is made by a reference UART
 transmitter whose format the learner is not told; it must find that format, then its generated
 programs must receive a new transmission and send one the reference receiver accepts. Frames
-recorded from reference USB, CAN, MFM and biphase mark transmitters and from the chip's 10BASE-T
-program: the learner must find their line code, stuffing, sync bits and CRC, then its generated
-program must receive new frames with the CRC's verdict. Clocked lines recorded from the reference
-SPI master in its four modes and from the chip's SD card commands: the clock, its mode, the select
-pin, the CRC; the generated program receives new frames. Pulse-width codes recorded from the
+recorded from reference USB, CAN, MFM and biphase mark transmitters, a DALI bus with the chip's
+master and a reference gear, and the chip's HDLC and 10BASE-T programs: the learner must find
+their line code, stuffing, sync bits and CRC, then its generated program must receive new frames
+with the CRC's verdict. Clocked lines recorded from the reference SPI master in its four modes, a
+reference PS/2 keyboard and the chip's SD card commands: the clock, its mode, the select pin or
+the pauses, the CRC; the generated program receives new frames. Pulse-width codes recorded from the
 reference NEC remote, Sony and 433 MHz sensor frames and the chip's WS2812 program: the pulse
 that carries the bits, its widths, the leader, the CRC; the generated program receives new frames.
 
@@ -22,11 +23,12 @@ sys.path[:0] = [str(ROOT / "sim" / "learn"), str(ROOT / "sim" / "model"), str(RO
 from bench import Bench, Device, Script                  # noqa: E402
 from chip import IRQ                                     # noqa: E402
 from asm import assemble                                 # noqa: E402
-from devices import (BmcTx, CanNode, NecRemote, SpiMaster, UartRx, UartTx, UsbTx,  # noqa: E402
-                     WiredAndBus, can_bits, can_crc15, crc7_sd, crc16_usb, mfm_halves, mfm_sector,
-                     nec_levels)
-from learn import (Capture, clocked_rx_program, clocked_timing, decode, frame_timing,  # noqa: E402
-                   frames_rx_program, infer_async, infer_clocked, infer_frames, infer_pulses,
+from devices import (BmcTx, CanNode, DaliBus, DaliGear, NecRemote, Ps2Device,  # noqa: E402
+                     SpiMaster, UartRx, UartTx, UsbTx, WiredAndBus, can_bits, can_crc15, crc7_sd,
+                     crc16_usb, crc16_x25, mfm_halves, mfm_sector, nec_levels, ps2_bits)
+from learn import (Capture, bursts, clocked_rx_program, clocked_timing, decode,  # noqa: E402
+                   frame_timing, frames_rx_program, infer_async, infer_clocked, infer_frames,
+                   infer_pulses,
                    pau_directives, pulses_rx_program, pulses_timing, rx_program, timing,
                    tx_program, word_value)
 
@@ -167,6 +169,51 @@ def mfm_levels(sectors: list[list[int]]) -> list[int]:
     return levels
 
 
+def hdlc_trace(frames: list[list[int]]) -> list[int]:
+    """Pin 0 of programs/hdlc/hdlc_tx.asm sending the frames, the line idle before each."""
+    bench = Bench()
+    bench.load(0, (ROOT / "programs/hdlc/hdlc_tx.asm").read_text())
+    bench.start(1)
+    bench.run(300)                                       # the program sets the line idle
+    start = len(bench.trace)
+    for f in frames:
+        bench.send(0, [len(f)] + f)
+        bench.run((len(f) + 4) * 8 * 8 * 6 // 5 + 400)
+    return [lv & 1 for lv in bench.trace[start:]]
+
+
+def hdlc_bits(data: list[int]) -> list[int]:
+    """A frame's bits from the opening flag to the FCS, destuffed."""
+    fcs = crc16_x25(data)
+    return bits([0x7E, *data, fcs & 0xFF, fcs >> 8])
+
+
+def dali_wave(frames: list[int], answers: dict[int, int]) -> list[int]:
+    """The DALI bus as programs/dali/dali_master.asm sends the forward frames (24 clocks a
+    half-bit) and a gear answers the queries in `answers` 5.5 ms after."""
+    te = 24
+    bench = Bench()
+    bench.load(0, (ROOT / "programs/dali/dali_master.asm").read_text(), clkdiv_int=3)
+    bus = bench.add(DaliBus(0, 1, [DaliGear(te, answers, settle=round(5.5 * 2.4 * te))]))
+    bench.send(0, frames)
+    bench.start(1)
+    bench.run(len(frames) * 100 * te, until=lambda: len(bench.received[0]) == len(frames))
+    bench.run(500)
+    assert bench.errors() == []
+    return bus.wave
+
+
+def dali_frames(frames: list[int], answers: dict[int, int]) -> list[list[int]]:
+    """The bits on the bus: each forward frame, start bit and 16 bits MSB first, then its
+    answer, start bit and 8 bits."""
+    out = []
+    for f in frames:
+        out.append([1] + [f >> 15 - i & 1 for i in range(16)])
+        if f in answers:
+            out.append([1] + [answers[f] >> 7 - i & 1 for i in range(8)])
+    return out
+
+
 def frames_received(words: list[int]) -> list[tuple[list[int], int]]:
     """(bits, end word's bits 7:0) of each frame of frames_rx_program()'s RX words."""
     out, cur = [], []
@@ -190,6 +237,7 @@ class LearnFrames(unittest.TestCase):
         """The frames the generated program receives from the bench's devices."""
         _, div, frac = frame_timing(p)
         bench.load(0, frames_rx_program(p, PIN), clkdiv_int=div, clkdiv_frac=frac)
+        bench.run(4)                                     # the line through the synchronizer
         bench.start(1)
         bench.run(clocks)
         return frames_received(bench.received[0])
@@ -304,6 +352,47 @@ class LearnFrames(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "too fast"):
             frames_rx_program(p, 0)                      # 2 clocks a half-bit
 
+    def test_hdlc_from_the_chip(self):
+        """programs/hdlc/hdlc_tx.asm, the line idle between frames: NRZI, a 0 after five 1s,
+        the flag 0x7E, the FCS (CRC-16/X.25) after it. A bit flipped on the line makes the CRC
+        wrong."""
+        rnd = random.Random(12)
+        frames = [[rnd.randrange(256) for _ in range(n)] for n in (4, 9, 2, 12, 6, 3)]
+        p = self.learn(hdlc_trace(frames), 0)
+        self.check(p, "nrzi", (0, 5), (16, 0x1021, 1, 1), bits([0x7E]))
+        self.assertEqual(p.crc.start, 8, "after the flag")
+        self.assertEqual([f[:-8] for f in p.frames], [hdlc_bits(f) for f in frames])
+
+        frames = [[rnd.randrange(256) for _ in range(n)] for n in (5, 8, 3)]
+        levels = hdlc_trace(frames)
+        edges = bursts(Capture.from_levels(levels), 80)[1][1]
+        t = next(t for t in range(edges[0] + 8 * 40, edges[-1], 8) if t not in edges)
+        levels[t:] = [lv ^ 1 for lv in levels[t:]]      # NRZI: a 1 in the second frame now a 0
+        bench = Bench()
+        bench.add(played([lv << PIN for lv in levels], [PIN]))
+        got = self.receive(p, bench, len(levels))
+        self.assertEqual([v for _, v in got], [3, 1, 3])
+        for (b, _), f in zip(got[::2], frames[::2]):
+            self.assertEqual(b[:len(hdlc_bits(f))], hdlc_bits(f))
+
+    def test_dali(self):
+        """A DALI bus: forward frames from programs/dali/dali_master.asm, a gear's backward
+        frames, the next forward frame 6 half-bits after an answer: Manchester, idle high, a
+        start bit 1, frames of 17 and 9 bits, no CRC."""
+        answers = {0x0190: 0xA5, 0x03A0: 0x5A, 0xFF90: 0x04}
+        frames = [0x0105, 0x0190, 0x03A0, 0x05A1, 0xFF90, 0x1234]
+        p = self.learn(dali_wave(frames, answers), 0)
+        self.check(p, "manchester", None, None, [1])
+        self.assertEqual((p.inv, round(p.half)), (0, 24))
+        self.assertEqual(p.frames, dali_frames(frames, answers))
+
+        frames = [0x0190, 0x2B05, 0xFF90, 0x03A0]
+        wave = dali_wave(frames, answers)
+        bench = Bench()
+        bench.add(played([lv << PIN for lv in wave], [PIN]))
+        got = self.receive(p, bench, len(wave))
+        self.assertEqual(got, [(f, 1) for f in dali_frames(frames, answers)])
+
 
 def played(levels: list[int], pins) -> Script:
     """A device driving `pins` as in a recording, a level per clock."""
@@ -323,6 +412,12 @@ def sd_command(index: int, arg: int) -> list[int]:
 
 class LearnClocked(unittest.TestCase):
     """A clock pin, data pins, maybe a select pin."""
+
+    def ps2(self, keys, bad_parity=frozenset()):
+        """A PS/2 keyboard sending the keys: DATA on MOSI, CLK on SCK."""
+        bench = Bench(pullups=1 << MOSI | 1 << SCK)
+        bench.add(Ps2Device(SCK, MOSI, keys, bad_parity=bad_parity))
+        return bench, 50 + 1080 * len(keys) + 300
 
     def learn(self, levels, pins):
         return infer_clocked({k: Capture.from_levels(levels, k) for k in pins})
@@ -356,6 +451,26 @@ class LearnClocked(unittest.TestCase):
                 bench = self.spi(mode, transfers)
                 got = self.receive(p, bench, bench.devices[0].end + 100, CS)
                 self.assertEqual(got, [(bits(t, lsb_first=False), 1) for t in transfers])
+
+    def test_ps2_keyboard(self):
+        """A PS/2 keyboard's bytes: data set while the clock is high, sampled as it falls (mode
+        2), frames 3 clock periods apart, a start bit 0, odd parity: a 1-bit CRC, believed
+        from 41 bytes. A wrong parity bit makes the CRC wrong."""
+        rnd = random.Random(13)
+        keys = [rnd.randrange(256) for _ in range(48)]
+        bench, end = self.ps2(keys)
+        bench.run(end)
+        (p,) = self.learn(bench.trace, (MOSI, SCK))
+        self.assertEqual((p.clock, p.data, p.select, p.cpol, p.cpha), (SCK, MOSI, None, 1, 0))
+        self.assertEqual((p.sync, p.crc.width, p.crc.poly), ([0], 1, 1))   # the stop bit too
+        self.assertEqual(p.frames, [ps2_bits(k) for k in keys])
+
+        keys = [rnd.randrange(256) for _ in range(4)]
+        bench, end = self.ps2(keys, bad_parity={1})
+        got = self.receive(p, bench, end)
+        want = [ps2_bits(k) for k in keys]
+        want[1][9] ^= 1
+        self.assertEqual(got, [(b, v) for b, v in zip(want, (3, 1, 3, 3))])
 
     def test_sd_commands_from_the_chip(self):
         """programs/sd/sd_command.asm in each mode: the start bits 01, CRC-7 0x09, the end bit;
