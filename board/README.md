@@ -101,6 +101,9 @@ Each line is a frame: the address, its complement, the command, its complement.
 - `--program` prints the receiver's source and stops; `--model` plays the recording on the
   Python model's pin instead of using the board (slow: keep the recording short).
 
+The receiver runs on state machine 1's partner, SM 0; SM 1 is left as it is, so a transmitter
+loaded there on the same pin is received: the chip learns its own line.
+
 Frames the recording cut at its start or end are left out of the learning. The receiver
 learns the line only: request-and-answer protocols need the hand-written programs in
 [programs/](../programs/).

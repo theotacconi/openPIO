@@ -77,6 +77,46 @@ class Listen(unittest.TestCase):
         self.assertEqual("".join(eval(line.split(maxsplit=1)[1]) for line in out[3:]),
                          text.decode())
 
+    def test_its_own_line(self):
+        """A transmitter on SM 1 keeps running under listen.py: the learned receiver on SM 0
+        reads it from the same pad, as on the board, where it is loaded before listen.py."""
+        import contextlib
+        import io
+        import listen
+        from asm import assemble
+        text = b"openPIO learns its own line"
+        bench = T.Bench(pullups=1)
+        tx = bench.add(T.UartTx(0, 40, list(b"a recording of the chip's UART"), start=300))
+        bench.run(tx.end + 300)
+
+        class Model(listen.Model):                       # SM 1: uart_tx, 40 clocks a bit
+            def __init__(self, play=None):
+                super().__init__(play)
+                Host(self.chip).load(1, assemble((HERE.parent / "programs/uart/uart_tx.asm")
+                                                 .read_text()), clkdiv_int=5)
+                Host(self.chip).start(0b10)
+                self.sent = False
+
+            def ask(self, line):
+                if self.chip.t0 is not None and not self.sent:   # once SM 0 runs
+                    self.sent = True
+                    Host(self.chip).push(1, list(text))
+                return super().ask(line)
+
+        out = io.StringIO()
+        with tempfile.TemporaryDirectory() as d, contextlib.redirect_stdout(out):
+            write_sigrok(Path(d) / "rec.sr", bench.trace, 1e6)
+            argv, sys.argv = sys.argv, ["listen.py", str(Path(d) / "rec.sr"), "--model",
+                                        "--clock-hz", "1e6"]
+            model, listen.Model = listen.Model, Model
+            try:
+                listen.main()
+            finally:
+                sys.argv, listen.Model = argv, model
+        got = out.getvalue().splitlines()[3:]
+        self.assertEqual("".join(eval(line.split(maxsplit=1)[1]) for line in got),
+                         text.decode())
+
     def test_ps2_keyboard_with_its_parity(self):
         rnd = random.Random(3)
         keys = [rnd.randrange(256) for _ in range(44)]
