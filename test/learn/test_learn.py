@@ -31,8 +31,8 @@ from learn import (Capture, bursts, clocked_rx_program, clocked_timing, decode, 
                    write_sigrok, rx_frames as frames_received,
                    frame_timing, frames_rx_program, infer_async, infer_clocked, infer_frames,
                    infer_pulses,
-                   pau_directives, pulses_rx_program, pulses_timing, rx_program, timing,
-                   tx_program, word_value)
+                   pau_directives, pulses_check, pulses_rx_program, pulses_timing, rx_program,
+                   timing, tx_program, word_value)
 
 PIN = 3
 FORMATS = [  # (data bits, parity, stop bits, idle level, clocks a bit)
@@ -364,6 +364,23 @@ class LearnFrames(unittest.TestCase):
         for (b, _), f in zip(got[::2], frames[::2]):
             self.assertEqual(b[:len(hdlc_bits(f))], hdlc_bits(f))
 
+    def test_hdlc_one_frame_corrupted(self):
+        """A bit flipped in one recorded frame: the CRC is learned from the others, and that
+        frame is received with the CRC wrong."""
+        rnd = random.Random(17)
+        frames = [[rnd.randrange(256) for _ in range(n)] for n in (4, 9, 2, 12, 6, 3, 7, 5)]
+        levels = hdlc_trace(frames)
+        edges = bursts(Capture.from_levels(levels), 80)[3][1]
+        t = next(t for t in range(edges[0] + 8 * 50, edges[-1], 8) if t not in edges)
+        levels[t:] = [lv ^ 1 for lv in levels[t:]]      # NRZI: a 1 in the fourth frame now a 0
+        p = self.learn(levels, 0)
+        self.check(p, "nrzi", (0, 5), (16, 0x1021, 1, 1), bits([0x7E]))
+        self.assertEqual((p.crc.start, p.crc.spare), (8, 1))
+        bench = Bench()
+        bench.add(played([lv << PIN for lv in levels], [PIN]))
+        got = self.receive(p, bench, len(levels))
+        self.assertEqual([v for _, v in got], [3, 3, 3, 1, 3, 3, 3, 3])
+
     def test_dali(self):
         """A DALI bus: forward frames from programs/dali/dali_master.asm, a gear's backward
         frames, the next forward frame 6 half-bits after an answer: Manchester, idle high, a
@@ -592,6 +609,23 @@ class LearnPulses(unittest.TestCase):
         script, end = pulse_script([levels], 0.2, 1, 40000)
         got = self.receive(p, script, end)
         self.assertEqual([v for _, v in got], [1])
+
+    def test_nec_one_key_corrupted(self):
+        """Ten keys, a bit of the fourth flipped (a reflection): the check is learned from the
+        other nine, and a frame received with that bit flipped is still found wrong."""
+        rnd = random.Random(18)
+        keys = [(0x04, rnd.randrange(256)) for _ in range(10)]
+        levels = [nec_levels(k) for k in keys]
+        levels[3][2 + 2 * 19 + 1] = (1, 1687.5 + 562.5 - levels[3][2 + 2 * 19 + 1][1])
+        script, end = pulse_script(levels, 0.2, 1, 40000)
+        bench = Bench()
+        bench.add(script)
+        bench.run(end)
+        p = infer_pulses(Capture.from_levels(bench.trace, PIN))
+        self.assertEqual((p.crc.width, p.crc.poly, p.crc.spare), (8, 0x01, 1))
+        self.assertIsNotNone(pulses_check(p))
+        script, end = pulse_script([nec_levels(keys[0]), levels[3]], 0.2, 1, 40000)
+        self.assertEqual([v for _, v in self.receive(p, script, end)], [3, 1])
 
     def test_sirc(self):
         """Sony SIRC at an IR receiver's output: pulse width, idle high, the leader's mark."""

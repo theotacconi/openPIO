@@ -39,6 +39,7 @@ import json
 import re
 import sys
 import zipfile
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -374,11 +375,23 @@ class Crc:
     xorout: int
     start: int
     tail: int
+    spare: int = 0      # 1: one recorded frame does not end with it (corrupted on the line)
 
     def __str__(self) -> str:
         return (f"CRC-{self.width} 0x{self.poly:X}, init {'ones' if self.init else 0}, xorout "
                 f"{'ones' if self.xorout else 0}, from bit {self.start}, {self.tail} bits before "
-                f"the end")
+                f"the end{' (one recorded frame wrong)' if self.spare else ''}")
+
+    @property
+    def rank(self) -> tuple[bool, int]:
+        """Better first: a CRC every frame ends with, then the wider."""
+        return not self.spare, self.width
+
+
+def agreed(values: list, spare: int):
+    """The value all of them have, or all but `spare` (None is no value); None if none."""
+    top = Counter(v for v in values if v is not None).most_common(1)
+    return top[0][0] if top and top[0][1] >= len(values) - spare else None
 
 
 @dataclass
@@ -533,15 +546,46 @@ def to_int(bits: list[int]) -> int:
     return int("".join(map(str, bits)) or "0", 2)
 
 
-def find_crc(frames: list[list[int]], starts, tails) -> Crc | None:
+def gcds(polys: list[int], spare: int, low: int | None = None) -> list[int]:
+    """The gcd of the polynomials; with a spare, also the gcd of all of them but each one
+    (from the gcds of the ones before it and after it). A gcd stops once its degree is `low`
+    or less: no factor of a higher degree is left to find; with a spare, none is when both
+    halves' gcds stop so, as one half holds every polynomial but the spare one."""
+    if spare and low is not None:
+        half = len(polys) // 2
+        if all(deg(gcds(part, 0, low)[0]) <= low for part in (polys[:half], polys[half:])):
+            return []
+    if not spare:
+        g = 0
+        for a in polys:
+            g = pgcd([g, a])
+            if low is not None and deg(g) <= low:
+                break
+        return [g]
+    pre, suf = [0], [0]
+    for a in polys:
+        pre.append(pgcd([pre[-1], a]) if deg(pre[-1]) != 0 else 1)
+    for a in reversed(polys):
+        suf.append(pgcd([suf[-1], a]) if deg(suf[-1]) != 0 else 1)
+    suf.reverse()
+    return [pre[-1]] + [pgcd([pre[k], suf[k + 1]]) for k in range(len(polys))]
+
+
+def find_crc(frames: list[list[int]], starts, tails, spare: int = 0) -> Crc | None:
     """The widest CRC every frame ends with, `tail` bits before its end, over its bits from
-    `start`.
+    `start`; with `spare` 1, every frame but one.
 
     A frame's bits from `start` to the end of its CRC, as a polynomial B of length L, make
     B + I x^(L - w) + X a multiple of the polynomial P (I, X: the initial value and the final
     XOR, 0 or w ones). Frames aligned at their ends differ by multiples of P when I = 0, at
     their starts when X = 0: the gcd of the differences is P, whatever the width. With I and X
     both all ones, every width is tried on the frames themselves."""
+    def differences(vs: list[int]) -> list[int]:
+        """The gcds of the differences from the first frame; with a spare, of all but each
+        frame (the first: the differences from the second)."""
+        out = gcds([v ^ vs[0] for v in vs[1:]], spare)
+        return out + [pgcd(v ^ vs[1] for v in vs[2:])] if spare else out
+
     best = None
     for tail in tails:
         for s in starts:
@@ -549,23 +593,20 @@ def find_crc(frames: list[list[int]], starts, tails) -> Crc | None:
             n = max(k for _, k in bs)
             if min(k for _, k in bs) < 2:
                 continue
-            by_end = pgcd(v ^ bs[0][0] for v, _ in bs[1:])
-            by_start = pgcd(v << n - k ^ bs[0][0] << n - bs[0][1] for v, k in bs[1:])
+            by_end = differences([v for v, _ in bs])
+            by_start = differences([v << n - k for v, k in bs])
             for w in range(32, best.width if best else 0, -1):
                 ones = (1 << w) - 1
                 for init, xo in ((0, 0), (0, 1), (1, 0), (1, 1)):
                     ds = [v ^ (ones << k - w if init and k > w else 0) ^ (ones if xo else 0)
                           for v, k in bs]
-                    p = factor(by_start if init else by_end, w) if not (init and xo) else None
-                    if p is None and init and xo:
-                        g = 0
-                        for d in ds:                     # the gcd, stopped once below w
-                            g = pgcd([g, d])
-                            if deg(g) < w:
-                                break
-                        p = factor(g, w) if deg(g) >= w else None
-                    if p and all(pmod(d, p) == 0 for d in ds):
-                        best = Crc(w, p ^ 1 << w, init, xo, s, tail)
+                    hs = gcds(ds, spare, w - 1) if init and xo else by_start if init else by_end
+                    for h in hs:
+                        p = factor(h, w) if deg(h) >= w else None
+                        if p and sum(pmod(d, p) != 0 for d in ds) <= spare:
+                            best = Crc(w, p ^ 1 << w, init, xo, s, tail, spare)
+                            break
+                    if best and best.width == w:
                         break
                 if best and best.width == w:
                     break
@@ -591,13 +632,15 @@ def infer_frames(cap: Capture, gap: float = 10) -> Frames:
     else:
         raise ValueError("no line code explains every burst of the recording")
     p = max(found, key=lambda f: f[0])[1]
+    if not p.crc:                   # none a CRC every frame ends with: maybe all frames but one
+        p = max(_explained(bs, unit, 1), key=lambda f: f[0])[1]
     p.received = _received(p, bs)
     return p
 
 
-def _explained(bs: list[tuple[int, list[int]]], unit: float) -> list[tuple]:
+def _explained(bs: list[tuple[int, list[int]]], unit: float, spare: int = 0) -> list[tuple]:
     """(score, Frames) of every line code, polarity and alignment that explains every burst
-    (_structure)."""
+    (_structure, with a CRC every frame but `spare` ends with)."""
     inside = [b - a for _, e in bs for a, b in zip(e, e[1:])]
     found = []
     for h in (unit, unit / 2):
@@ -620,19 +663,26 @@ def _explained(bs: list[tuple[int, list[int]]], unit: float) -> list[tuple]:
                         break                            # end mark: USB SE0, 10BASE-T TP_IDL)
                     raw.append(bits)
                 else:
-                    found += _structure(h, name, inv, align, raw)
+                    found += _structure(h, name, inv, align, raw, spare)
     return found
 
 
-def frames_crc(frames: list[list[int]]) -> Crc | None:
+def frames_crc(frames: list[list[int]], spares=(0, 1)) -> Crc | None:
     """The CRC the frames end with, from up to 16 bits before the bits they all start with to
-    24 after, ending up to 3 bits before the bits they all end with; believed from EVIDENCE."""
+    24 after, ending up to 3 bits before the bits they all end with; believed from EVIDENCE.
+    When none is, a CRC all of them but one end with, believed from the others: a frame the
+    line corrupted (a reflection, a key half pressed) does not hide the CRC of the rest.
+    `spares`: the frames left out to try, in order."""
     sync, end = common_prefix(frames), common_suffix(frames)
-    crc = find_crc(frames, range(max(0, sync - 16), sync + 25), range(end + 4))
-    return crc if crc and crc.width * (len(frames) - 1) >= EVIDENCE else None
+    for spare in spares if len(frames) > 2 else (0,):
+        crc = find_crc(frames, range(max(0, sync - 16), sync + 25), range(end + 4), spare)
+        if crc and crc.width * (len(frames) - 1 - spare) >= EVIDENCE:
+            return crc
+    return None
 
 
-def _structure(h: float, name: str, inv: int, align: int, raw: list[list[int]]) -> list[tuple]:
+def _structure(h: float, name: str, inv: int, align: int, raw: list[list[int]],
+               spare: int = 0) -> list[tuple]:
     """(score, Frames) for each stuffing rule no recorded bit breaks (and none), with the CRC
     its frames end with. Stuffing stops at the bits every frame ends with (a delimiter, an end
     flag); it starts after the bits every frame starts with when they break the rule (an HDLC
@@ -651,11 +701,11 @@ def _structure(h: float, name: str, inv: int, align: int, raw: list[list[int]]) 
         k = rule[3] if rule else 0
         frames = ([f[:k] + destuff(f[k:len(f) - suf], *rule[:2])[0] + f[len(f) - suf:]
                    for f in raw] if rule else raw)
-        sync, crc = common_prefix(frames), frames_crc(frames)
+        sync, crc = common_prefix(frames), frames_crc(frames, (spare,))
         if rule and not crc and rule[2] < 8:
             continue
-        score = (crc.width if crc else 0, name not in LEVEL_CODES, rule is not None, -align, -inv,
-                 -CODES.index(name))
+        score = (crc.rank if crc else (False, 0), name not in LEVEL_CODES, rule is not None,
+                 -align, -inv, -CODES.index(name))
         out.append((score, Frames(h, name, inv, align, rule and rule[:2], frames[0][:sync], crc,
                                   frames, unstuffed=k)))
     return out
@@ -701,20 +751,22 @@ def _received(p: Frames, bs: list[tuple[int, list[int]]]) -> list[list[int]] | N
 def crc_check(p: Frames) -> tuple[int, int] | None:
     """(CRC_RES, K): the CRC right after a correct frame's CRC, and the bits a receiver takes
     after the last bit with that CRC (the CRC's last, or a later one that keeps it: a residue 0
-    and 0 bits) to the frame's end, both the same for every recorded frame. None when there is
-    no such pair (or K > 30)."""
+    and 0 bits) to the frame's end, both the same for every recorded frame (but the one the CRC
+    spares). None when there is no such pair (or K > 30)."""
     if not p.crc or not p.received:
         return None
-    pairs = set()
+    pairs = []
     for f, r in zip(p.frames, p.received):
         end = len(f) - p.crc.tail
         if r[:end] != f[:end]:
-            return None
+            pairs.append(None)
+            continue
         crcs = list(crc_steps(r[p.crc.start:], p.crc))
         res = crcs[end - p.crc.start - 1]
         last = max(i for i, v in enumerate(crcs) if v == res) + p.crc.start + 1
-        pairs.add((res, len(r) - last))
-    return pairs.pop() if len(pairs) == 1 and next(iter(pairs))[1] <= 30 else None
+        pairs.append((res, len(r) - last))
+    pair = agreed(pairs, p.crc.spare)
+    return pair if pair and pair[1] <= 30 else None
 
 
 def frame_timing(p: Frames) -> tuple[int, int, int]:
@@ -958,11 +1010,11 @@ def _clocked(caps: dict[int, Capture], clock: int, half: int, cut: float) -> lis
 
 
 def clocked_check(p: Clocked) -> int | None:
-    """CRC_RES: the CRC after a whole frame, the same for every recorded frame; None if not."""
+    """CRC_RES: the CRC after a whole frame, the same for every recorded frame (but the one the
+    CRC spares); None if not."""
     if not p.crc:
         return None
-    ends = {list(crc_steps(f[p.crc.start:], p.crc))[-1] for f in p.frames}
-    return ends.pop() if len(ends) == 1 else None
+    return agreed([list(crc_steps(f[p.crc.start:], p.crc))[-1] for f in p.frames], p.crc.spare)
 
 
 def clocked_timing(p: Clocked) -> tuple[int, int, int]:
@@ -1170,7 +1222,7 @@ def infer_pulses(cap: Capture) -> Pulses:
     for one in (1, 0):                                   # the sense the CRC is found in
         fs = [[b ^ 1 - one for b in f] for f in raw]
         crc = frames_crc(fs)
-        if best is None or crc and (not best[1] or crc.width > best[1].width):
+        if best is None or crc and (not best[1] or crc.rank > best[1].rank):
             best = (one, crc, fs)
     one, crc, fs = best
     return Pulses(idle, carrier, sum(short) / len(short), sum(long_) / len(long_), one,
@@ -1182,11 +1234,10 @@ def infer_pulses(cap: Capture) -> Pulses:
 def pulses_check(p: Pulses) -> int | None:
     """CRC_RES: the CRC after a whole frame, every bit fed from the first (the bits before the
     CRC's start feed it too: the same in every frame, or frames of one length), the same for
-    every recorded frame; None if not."""
+    every recorded frame (but the one the CRC spares); None if not."""
     if not p.crc:
         return None
-    ends = {list(crc_steps(f, p.crc))[-1] for f in p.frames}
-    return ends.pop() if len(ends) == 1 else None
+    return agreed([list(crc_steps(f, p.crc))[-1] for f in p.frames], p.crc.spare)
 
 
 def pulses_timing(p: Pulses) -> tuple[int, list[tuple[int, int]], tuple[int, int], int]:
