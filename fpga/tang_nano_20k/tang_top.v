@@ -13,7 +13,7 @@
 //         [4] reset active  [5] heartbeat (~0.8 Hz)
 // WS2812  held low (off)
 //
-// FIFO flags are not on the TT pins; read them via SPI STATUS (reg 8).
+// FIFO flags are not on the TT pins; read them via SPI STATUS (register 0x00).
 
 `default_nettype none
 
