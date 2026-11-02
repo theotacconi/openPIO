@@ -124,6 +124,14 @@ module openpio_sm (
     wire stb = run & strobe_r;
     assign strobe = stb;
 
+`ifdef FORMAL
+    // test/formal/strobe.sby: after the first clock (a chip reset), strobe_r is the rule above
+    // applied to the current state: the prescaler off, or the count at the period's end.
+    reg f_past = 1'b0;
+    always @(posedge clk) f_past <= 1'b1;
+    always @(*) if (f_past) assert (strobe_r == (~div_on | ({1'b0, div_cnt} + 17'd1 >= per_n)));
+`endif
+
     // ================================================================== decode
     wire [2:0] op      = instr[15:13];
     wire [4:0] ds      = instr[12:8];

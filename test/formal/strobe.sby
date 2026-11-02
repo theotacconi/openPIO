@@ -1,0 +1,14 @@
+[options]
+mode prove
+
+[engines]
+smtbmc yices
+
+[script]
+read -formal pau.v openpio_sm.v strobe.v
+prep -top strobe
+
+[files]
+../../src/pau.v
+../../src/openpio_sm.v
+strobe.v

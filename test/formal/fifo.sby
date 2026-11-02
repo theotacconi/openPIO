@@ -1,0 +1,13 @@
+[options]
+mode prove
+
+[engines]
+smtbmc yices
+
+[script]
+read -formal fifo.v fifo_check.v
+prep -top fifo_check
+
+[files]
+../../src/fifo.v
+fifo_check.v

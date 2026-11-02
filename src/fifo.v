@@ -153,6 +153,96 @@ module fifo (
         end
     end
 
+`ifdef FORMAL
+    // test/formal/fifo.sby: after a chip reset, for every host and SM sequence and any SRAM
+    // that keeps its contract, every word pushed comes out once, in order, unchanged, and a
+    // word read from the SRAM has room where it lands. One word of each FIFO, a free choice,
+    // is tracked: f_tpos / f_rpos count the words ahead of it, and its place follows. TX,
+    // oldest first: front, the read in flight, ring, IN register; RX: OUT register, the read
+    // in flight, ring, front.
+    reg f_past = 1'b0;
+    always @(posedge clk) f_past <= 1'b1;
+
+    // the SRAM's contract: a read gives, the clock after, the word last written there
+    reg [15:0] f_mem [0:255];
+    reg        f_rd;
+    reg [7:0]  f_ra;
+    always @(posedge clk) begin
+        if (ram_we)
+            f_mem[ram_addr] <= ram_wdata;
+        f_rd <= ram_re;
+        f_ra <= ram_addr;
+    end
+    always @(*) begin
+        if (f_rd) assume (ram_rdata == f_mem[f_ra]);
+        assume (!(tx_pop & tx_empty));                   // the SM pops a word,
+        assume (!(rx_push & rx_full));                   // pushes into room
+    end
+
+    wire       f_pick_tx = $anyseq, f_pick_rx = $anyseq;
+    reg        f_ton, f_ron;
+    reg [7:0]  f_tpos, f_rpos;
+    reg [15:0] f_tval, f_rval;
+    wire       f_rtake = h_pop & out_v;
+    always @(posedge clk) begin
+        if (!rst_n || reset) begin
+            {f_ton, f_ron} <= 2'b00;
+        end else begin
+            if (f_ton) begin
+                f_tpos <= f_tpos - {7'd0, tx_pop};
+                if (tx_pop & f_tpos == 8'd0)
+                    f_ton <= 1'b0;
+            end else if (h_push & ~in_v & f_pick_tx) begin
+                {f_ton, f_tval, f_tpos} <= {1'b1, h_wdata, tx_level - {7'd0, tx_pop}};
+            end
+            if (f_ron) begin
+                f_rpos <= f_rpos - {7'd0, f_rtake};
+                if (f_rtake & f_rpos == 8'd0)
+                    f_ron <= 1'b0;
+            end else if (rx_push & f_pick_rx) begin
+                {f_ron, f_rval, f_rpos} <= {1'b1, rx_data, rx_level - {7'd0, f_rtake}};
+            end
+        end
+    end
+
+    wire [7:0] f_tk = f_tpos - {5'd0, txn} - {7'd0, tx_fl};       // TX: ring index, then IN
+    wire [7:0] f_rk = f_rpos - {7'd0, out_v} - {7'd0, rx_fl};     // RX: ring index,
+    wire [7:0] f_rj = f_rk - rxr_n;                               // then front
+    wire [1:0] f_ti = txh + f_tpos[1:0], f_ri = rxh + f_rj[1:0];  // front slots
+    always @(*) if (f_past) begin
+        assert (txn <= 3'd4 && rxn <= 3'd4 && txr_n <= 8'd128 && rxr_n <= 8'd128);
+        assert (txr_n[6:0] == txr_wr - txr_rd && rxr_n[6:0] == rxr_wr - rxr_rd);
+        assert (!tx_fl || txn != 3'd4);                  // a TX read lands with room
+        assert (!rx_fl || !out_v);                       // an RX read lands in a free OUT
+        if (tx_fl) assert (f_rd && f_ra == {1'b0, txr_rd - 7'd1});
+        if (rx_fl) assert (f_rd && f_ra == {1'b1, rxr_rd - 7'd1});
+        if (f_ton) begin
+            assert (f_tpos < tx_level);
+            if (f_tpos < {5'd0, txn})
+                assert (txf[16*f_ti +: 16] == f_tval);
+            else if (tx_fl && f_tpos == {5'd0, txn})
+                assert (ram_rdata == f_tval);
+            else if (f_tk < txr_n)
+                assert (f_mem[{1'b0, txr_rd + f_tk[6:0]}] == f_tval);
+            else
+                assert (in_v && in_w == f_tval);
+            if (f_tpos == 8'd0 && !tx_empty)
+                assert (tx_data == f_tval);                       // the SM's next word
+        end
+        if (f_ron) begin
+            assert (f_rpos < rx_level);
+            if (f_rpos == 8'd0 && out_v)
+                assert (h_rdata == f_rval);                       // out through RX_POP
+            else if (rx_fl && f_rpos == {7'd0, out_v})
+                assert (ram_rdata == f_rval);
+            else if (f_rk < rxr_n)
+                assert (f_mem[{1'b1, rxr_rd + f_rk[6:0]}] == f_rval);
+            else
+                assert (f_rj < {5'd0, rxn} && rxf[16*f_ri +: 16] == f_rval);
+        end
+    end
+`endif
+
 endmodule
 
 `default_nettype wire
