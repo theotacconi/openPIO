@@ -681,6 +681,29 @@ class LearnRecordings(unittest.TestCase):
         self.assertEqual(len(p.frames), len(packets) - 2)
         self.assertEqual([f[8:16] for f in p.frames], [bits([0xC3])] * (len(packets) - 2))
 
+    def test_remote_pressed_by_hand(self):
+        """NEC keys pressed by hand, from 0.3 to 1.5 s apart, the recording started 150 ms
+        before the first and stopped 100 ms after the last: closer than the presses, still a
+        pause, so each frame is whole and six give the check. Stopped in the middle of a
+        seventh, that one is left out."""
+        rnd = random.Random(16)
+        keys = [(0x04, rnd.randrange(256)) for _ in range(7)]
+        edges, t, level = [], 150_000, 1
+        for k, key in enumerate(keys):
+            for lv, us in nec_levels(key):
+                if lv != level:
+                    edges.append(round(t))
+                    level = lv
+                t += us
+            edges.append(round(t))                           # 68 edges a frame
+            level, t = 1, t + rnd.randrange(300_000, 1_500_000)
+        whole = Capture(1, edges[:-68], (0, edges[-69] + 100_000))
+        cut = Capture(1, edges[:-30], (0, edges[-31] + 300))
+        for cap, n in ((whole, 6), (cut, 6)):
+            p = infer_pulses(cap)
+            self.assertEqual(p.frames, [bits([a, a ^ 255, c, c ^ 255]) for a, c in keys[:n]])
+            self.assertEqual((p.crc.width, p.crc.poly), (8, 0x01))
+
     def test_ps2_cut_at_both_ends(self):
         """A PS/2 keyboard recorded from the middle of a byte to the middle of another."""
         rnd = random.Random(15)

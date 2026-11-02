@@ -1118,8 +1118,8 @@ def infer_pulses(cap: Capture) -> Pulses:
     if ratio < 2:
         raise ValueError("no pauses between frames: no idle width far past the others")
     gap = spaces[k + 1]
-    if cap.span:                                             # not a frame the recording cut
-        cap = cap.window(*cap.settled(gap))
+    if cap.span:                    # not a frame the recording cut: idle longer than any space
+        cap = cap.window(*cap.settled((spaces[k] * gap) ** 0.5))   # in a frame is a pause
         ws = cap.widths()
         lv = [cap.level ^ (k + 1 & 1) for k in range(len(ws))]
     frames, cur = [], [] if cap.level == idle else None
