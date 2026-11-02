@@ -71,7 +71,7 @@ bit:
 - lines with a clock pin: the clock, its SPI mode, the select pin and the CRC;
 - pulse-width codes: which pulse carries the bits, their two widths and the leader.
 
-It is tested on UART, USB, CAN, MFM, SPI, SD card commands, NEC infrared and WS2812B: it learns each from a recording, and its receiver takes new frames. For 10BASE-T it learns the frames, but the line is too fast for its receiver. It learns the line, not the conversation: request-and-answer protocols on a shared wire (I2C, SWD, 1-Wire, ISO 7816) and the formats outside the four families (I2S, SENT, MIL-STD-1553B, 4B5B) need the hand-written programs above.
+It is tested on UART, USB, CAN, HDLC, DALI, MFM, SPI, SD card commands, PS/2, NEC infrared and WS2812B: it learns each from a recording, and its receiver takes new frames. For 10BASE-T it learns the frames, but the line is too fast for its receiver. It learns the line, not the conversation: request-and-answer protocols on a shared wire (I2C, SWD, 1-Wire, ISO 7816) and the formats outside the four families (I2S, SENT, MIL-STD-1553B, 4B5B) need the hand-written programs above.
 
 ## The chip
 
