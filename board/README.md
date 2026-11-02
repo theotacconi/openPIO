@@ -42,7 +42,8 @@ and ground. Other pins: edit the constants at the top of `pico/main.py`.
 ## Setup
 
 1. MicroPython on the Pico: hold BOOTSEL while plugging it in and copy the UF2 from
-   micropython.org (RPI_PICO or RPI_PICO2) to the drive that appears.
+   micropython.org for your board (RPI_PICO, RPI_PICO2, or the W ones: RPI_PICO_W,
+   RPI_PICO2_W) to the drive that appears.
 2. The bridge: `mpremote cp board/pico/main.py :main.py + reset` (`pipx install mpremote`).
    It starts at every power-up.
 3. The FPGA: `fpga/tang_nano_20k/build.sh load`, or `flash` to keep it across power cycles.
