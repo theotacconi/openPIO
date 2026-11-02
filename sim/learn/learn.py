@@ -4,7 +4,8 @@ programs that receive and send it.
 openPIO's line layer is a small space of numbers (ISA.md, Principles): a protocol of its family
 is one point in it. Learning is a search of that space against a recording:
 
-    capture  -> edges of a pin (programs/logic/edges.asm on the chip, or any logic analyzer)
+    capture  -> edges of a pin (programs/logic/edges.asm on the chip, or any logic analyzer:
+                Capture.from_sigrok reads PulseView's session files)
     infer    -> the parameters, each checked against every character of the recording
     generate -> RX and TX programs for those parameters, as assembler source
 
@@ -32,9 +33,12 @@ from __future__ import annotations
 
 import argparse
 import bisect
+import configparser
 import itertools
 import json
+import re
 import sys
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -44,9 +48,12 @@ from asm import PAU_CODE_RX, PAU_CODES                   # noqa: E402
 
 @dataclass
 class Capture:
-    """A pin's recording: its level before the first edge, then the clock of every edge."""
+    """A pin's recording: its level before the first edge, then the clock of every edge; and
+    when it is a recording of a running line (a logic analyzer's), its first and last clock:
+    a burst within a pause of either may be cut (settled)."""
     level: int
     edges: list[int]
+    span: tuple[int, int] | None = None
 
     @staticmethod
     def from_levels(levels: list[int], pin: int = 0) -> "Capture":
@@ -86,6 +93,82 @@ class Capture:
     def level_at(self, t: float) -> int:
         """The level at clock t."""
         return self.level ^ (bisect.bisect_right(self.edges, t) & 1)
+
+    def settled(self, pause: float) -> tuple[float, float]:
+        """The times between which the recording holds no burst it may have cut: after the
+        first pause of `pause` clocks or more when its start comes less than that before the
+        first edge, before the last such pause when its end comes less than that after the last
+        edge. The whole recording without a span (a bench trace starts at power-up)."""
+        a, b, e = -1.0, float("inf"), self.edges
+        if self.span is None or not e:
+            return a, b
+        gaps = [k for k in range(len(e) - 1) if e[k + 1] - e[k] >= pause]
+        if e[0] - self.span[0] < pause:
+            a = e[gaps[0]] if gaps else float("inf")
+        if self.span[1] - e[-1] < pause:
+            b = e[gaps[-1] + 1] if gaps else -1.0
+        return a, b
+
+    def window(self, a: float, b: float) -> "Capture":
+        """The edges after clock a and before b."""
+        return Capture(self.level_at(a), [t for t in self.edges if a < t < b], self.span)
+
+    @staticmethod
+    def from_sigrok(path: str | Path, clock_hz: float) -> dict[str, "Capture"]:
+        """Every channel of a sigrok session file (.sr, as PulseView saves it), by name, its
+        times in clocks of `clock_hz` (the chip's clock, which the generated programs count)."""
+        with zipfile.ZipFile(path) as z:
+            meta = configparser.ConfigParser(interpolation=None)
+            meta.read_string(z.read("metadata").decode())
+            dev = meta[next(s for s in meta.sections() if s.startswith("device"))]
+            name, unit = dev["capturefile"], int(dev.get("unitsize", "1"))
+            parts = sorted((n for n in z.namelist() if n == name or n.startswith(name + "-")),
+                           key=lambda n: int(n[len(name) + 1:] or 0))
+            data = b"".join(z.read(n) for n in parts)
+        num, mult = re.fullmatch(r"\s*([\d.]+)\s*([kMG]?)Hz\s*", dev["samplerate"]).groups()
+        rate = float(num) * {"": 1, "k": 1e3, "M": 1e6, "G": 1e9}[mult]
+        scale, n = clock_hz / rate, len(data) // unit
+        runs = [(m.start() // unit, int.from_bytes(m.group(1), "little"))
+                for m in re.finditer(b"(.{%d})\\1*" % unit, data[:n * unit], re.S)]
+        out = {}
+        for key, label in dev.items():
+            if key.startswith("probe") and key[5:].isdigit():
+                bit = int(key[5:]) - 1
+                level, edges = runs[0][1] >> bit & 1, []
+                for (t, v), (_, u) in zip(runs[1:], runs):
+                    if (v ^ u) >> bit & 1:
+                        edges.append(round(t * scale))
+                out[label] = Capture(level, edges, (0, round(n * scale)))
+        return out
+
+
+def write_sigrok(path: str | Path, levels: list[int], samplerate: float,
+                 channels: int = 8) -> None:
+    """A sigrok session file of a level per sample (bit k: channel Dk), for PulseView and
+    Capture.from_sigrok."""
+    unit = (channels + 7) // 8
+    meta = (f"[global]\nsigrok version=0.5.2\n\n[device 1]\ncapturefile=logic-1\n"
+            f"total probes={channels}\nsamplerate={samplerate / 1e6:g} MHz\ntotal analog=0\n"
+            + "".join(f"probe{k + 1}=D{k}\n" for k in range(channels)) + f"unitsize={unit}\n")
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("version", "2")
+        z.writestr("metadata", meta)
+        z.writestr("logic-1-1", b"".join(lv.to_bytes(unit, "little") for lv in levels))
+
+
+def rx_frames(words: list[int]) -> list[tuple[list[int], int]]:
+    """(bits, verdict) of each frame in the RX words of a generated frames, clocked or pulses
+    receiver: 8 bits a word in bits 15:8 (the first in bit 8), then an end word, the last 0..7
+    bits under a 1 in bits 15:8, the verdict in bits 7:0 (1, or 3 when the CRC is right)."""
+    out, cur = [], []
+    for w in words:
+        if w & 0xFF:
+            last = w >> 8
+            out.append((cur + [last >> i & 1 for i in range(last.bit_length() - 1)], w & 0xFF))
+            cur = []
+        else:
+            cur += [w >> 8 + i & 1 for i in range(8)]
+    return out
 
 
 @dataclass
@@ -492,14 +575,15 @@ def infer_frames(cap: Capture, gap: float = 10) -> Frames:
     """The self-clocked framing that explains every burst of the recording, or ValueError.
     Bursts are apart by more than `gap` times the narrowest pulse; when no line code explains
     them so, by a shorter pause (pauses: from 2 narrowest pulses up), tried from the longest:
-    DALI's next forward frame comes 6 half-bits after a backward frame."""
+    DALI's next forward frame comes 6 half-bits after a backward frame. A burst the recording
+    may have cut is left out (Capture.settled)."""
     widths = cap.widths()
     if not widths:
         raise ValueError("no edges: nothing to learn")
     shortest = sorted(widths)[:max(1, len(widths) // 10)]
     unit = sum(shortest) / len(shortest)                 # a half-bit, or a bit of a level code
     for cut in [gap * unit] + pauses(widths, 2 * unit, gap * unit):
-        bs = bursts(cap, cut)
+        bs = bursts(cap.window(*cap.settled(cut)), cut)
         found = _explained(bs, unit)
         if found:
             break
@@ -518,7 +602,11 @@ def _explained(bs: list[tuple[int, list[int]]], unit: float) -> list[tuple]:
     for h in (unit, unit / 2):
         for _ in range(3):                               # least squares over the half-bit counts
             counted = [(w, round(w / h)) for w in inside if 0 < round(w / h) <= 32]
+            if not counted:
+                break                                    # no pulse of a few half-bits: no code
             h = sum(w for w, _ in counted) / sum(n for _, n in counted)
+        if not counted:
+            continue
         for name in CODES:
             if name in LEVEL_CODES and h > unit * 0.75:  # a level code's narrowest pulse is a bit
                 continue
@@ -803,8 +891,9 @@ def infer_clocked(caps: dict[int, Capture], gap: float = 10) -> list[Clocked]:
     half = min(widths)
     error = ValueError("no pin changes while the clock is at one level")
     for cut in [gap * half] + pauses(widths, half, gap * half):
+        a, b = caps[clock].settled(cut)              # not a frame the recording may have cut
         try:
-            out = _clocked(caps, clock, half, cut)
+            out = _clocked({k: c.window(a, b) for k, c in caps.items()}, clock, half, cut)
         except ValueError as e:
             error = e
             continue
@@ -1029,6 +1118,10 @@ def infer_pulses(cap: Capture) -> Pulses:
     if ratio < 2:
         raise ValueError("no pauses between frames: no idle width far past the others")
     gap = spaces[k + 1]
+    if cap.span:                                             # not a frame the recording cut
+        cap = cap.window(*cap.settled(gap))
+        ws = cap.widths()
+        lv = [cap.level ^ (k + 1 & 1) for k in range(len(ws))]
     frames, cur = [], [] if cap.level == idle else None
     for w, v in zip(ws, lv):
         if v == idle and w >= gap:
