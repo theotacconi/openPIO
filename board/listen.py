@@ -13,6 +13,8 @@ an openPIO receiver for it, and this loads it on state machine 0 and prints what
 The line goes to the board's pin --pin (and, for a clocked line, its clock to --pin + 1); the
 recording's times count clocks of --clock-hz, the board's clock (the Tang Nano 20K: 27 MHz).
 Each frame is printed as its bits in hex, and the CRC's verdict when the line has a CRC.
+State machine 1 is left as it is: a transmitter loaded there on the same pin is received, the
+chip learning its own line.
 """
 
 from __future__ import annotations
@@ -24,7 +26,7 @@ import time
 from board import Board, Model, Serial
 
 from asm import assemble                                 # noqa: E402  (board put it on the path)
-from chip import FIFO_LEVEL                              # noqa: E402
+from chip import CTRL, FIFO_LEVEL                        # noqa: E402
 from host import Host                                    # noqa: E402
 from learn import (Capture, clocked_check, clocked_rx_program, clocked_timing,  # noqa: E402
                    crc_check, frame_timing, frames_rx_program, infer_async, infer_clocked,
@@ -122,7 +124,7 @@ def main() -> int:
         port, end = Serial(args.port), None
     host = Host(Board(port, args.hz))
     host.load(0, assemble(src), clkdiv_int=div, clkdiv_frac=frac)
-    host.start(0b01)
+    host.start(host.read(0, CTRL)[0] | 0b01)            # SM 1 left as it is
     if args.model:                                     # the recording from now on, then the
         port.chip.t0 = port.chip.cycle                     # line at rest a tenth as long: a
         end += port.chip.t0 + end // 10 + 1000             # receiver sees the last frame end
@@ -150,7 +152,7 @@ def main() -> int:
             words = words[done:]
     except KeyboardInterrupt:
         pass
-    host.start(0)
+    host.start(host.read(0, CTRL)[0] & ~0b01)
     return 0
 
 
