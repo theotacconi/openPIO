@@ -2,7 +2,7 @@
 // Tiny Tapeout design. FPGA-only wrapper: src/ is used unmodified.
 //
 // clk     27 MHz crystal, used directly (TT target is 50 MHz; this runs
-//         slower, so SPI SCLK <= 27 MHz / 12 = 2.25 MHz)
+//         slower, so SPI SCLK <= 27 MHz / 6 = 4.5 MHz)
 // reset   S1 (pin 88) reads 1 while pressed (Sipeed examples invert it);
 //         2-FF synchronized, OR'ed with a 16-clk power-on reset
 // SPI     host bridge on J5/J6 header pins (see tang_nano_20k.cst)
