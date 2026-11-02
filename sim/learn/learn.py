@@ -491,16 +491,17 @@ def deg(p: int) -> int:
 
 
 def pmod(a: int, m: int) -> int:
-    while deg(a) >= deg(m):
-        a ^= m << deg(a) - deg(m)
+    n = m.bit_length()
+    while (k := a.bit_length() - n) >= 0:
+        a ^= m << k
     return a
 
 
 def pdiv(a: int, m: int) -> int:
-    q = 0
-    while deg(a) >= deg(m):
-        q |= 1 << deg(a) - deg(m)
-        a ^= m << deg(a) - deg(m)
+    q, n = 0, m.bit_length()
+    while (k := a.bit_length() - n) >= 0:
+        q |= 1 << k
+        a ^= m << k
     return q
 
 
