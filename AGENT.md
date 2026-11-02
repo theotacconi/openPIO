@@ -28,8 +28,8 @@
 * No combinational path from an input pin to an output pin: inputs pass the 2-flip-flop synchronizer.
 * Timing lessons from the v1 hardening (CMOS5L slow corner, 20 ns):
   * The SRAM's clock-to-output (up to 5.3 ns) starts the critical path: keep the logic from the IMEM output to the next PC short. The four condition values depend only on state, not on the instruction: compute them while the IMEM reads, so the instruction only selects one.
-  * Register wide comparisons (CRC == CRC_RES) and the prescaler strobe (one clock ahead, v1 `fb87441`, proven in `test/formal/core_strobe.sby`).
-  * No ripple chains over the bits of a word: v1's NRZI / stuffing encoder had to be rewritten as parallel per-bit windows (`c797771`, proven in `test/formal/nrzi_equiv.sby`).
+  * Register wide comparisons (CRC == CRC_RES) and the prescaler strobe (one clock ahead, v1 `fb87441`, proven in `test/formal/strobe.sby`).
+  * No ripple chains over the bits of a word: v1's NRZI / stuffing encoder had to be rewritten as parallel per-bit windows (`c797771`, proven equivalent then; the v3 encoder takes a bit a strobe).
   * High-fanout enables need the wire-length repair of `src/config.json`. Design repair sees all three corners, but on estimated parasitics: the placement and global-route estimates put about half the extracted capacitance on some nets, so margins are wide (`src/config.json`) and setup is repaired after global routing too.
   * Known issue, to fix before tape-out if time allows: slew over the SRAM input pins' 0.476 ns limit (typical) on 1-4 pins per run (REN/WEN, a DIN bit), nets of ~150 um from small gates that OpenROAD's post-GRT repair leaves alone. `scripts/tt_signoff.py` reports them (KNOWN_SLEW). The fix is calibrating the estimates (LibreLane `LAYERS_RC`) against a run's extracted parasitics; a placement-parasitics repair before detailed routing and a `set_load` on those nets did not buffer them.
 
@@ -60,13 +60,13 @@
 * `test/shared/`: `devices.py`, reference devices written from the protocol specifications (UART, SPI, I2C, USB, CAN, ...), `bench.py` the pin-level bench, `test_devices.py` their own tests.
 * `test/model/`: tests of the ISA, the assembler and the chip model.
 * `src/`: RTL, Tiny Tapeout top `tt_um_theotacconi_openpio.v`; `src/config.json` and `src/pdn_cfg.tcl` with `librelane_plugin_openpio_pdn.py` and `odb_stripes.py` (repository root, where LibreLane finds them) configure the hardening.
-* `test/test.py`, `test/tb.v`, `test/Makefile`: cocotb tests of the chip through its pins (RTL, SRAM model, gate level). `test/lockstep/`: the RTL as a Yosys netlist stepped against the model every clock. `test/formal/`: SymbiYosys proofs.
+* `test/test.py`, `test/tb.v`, `test/Makefile`: cocotb tests of the chip through its pins (RTL, SRAM model, gate level). `test/lockstep/`: the RTL as a Yosys netlist stepped against the model every clock. `test/formal/`: SymbiYosys proofs by k-induction for every input sequence: the prescaler strobe (`strobe.sby`), the FIFOs pass every word once, in order, unchanged, with any SRAM that keeps its contract (`fifo.sby`); the properties sit in the RTL under `ifdef FORMAL`.
 * `fpga/tang_nano_20k/`: FPGA wrapper and build.
 * `docs/`: `info.md` (Tiny Tapeout datasheet, required by the docs and gds workflows), `diagrams.py` and the SVGs it generates.
 * `scripts/`: `dev.sh` (container), `area.sh` (CMOS5L cell area of a design), `tt_signoff.py` (checks a gds run's logs).
 * `.github/workflows/`: `model` (Python model and programs), `test` (cocotb on the RTL), `gds` (hardening, precheck, gate-level test, sign-off), `docs`.
 
-Status (2026-10-31): ISA v3 on `main`: the model, the programs, the docs and the RTL are v3, the RTL in lockstep with the model. On 6x4 tiles routing, not cell area, is the limit: v3 left out the 256-word IMEM in pages (JMP condition 001 is reserved for FAR, back if the tiles grow to 8x4), the receiver's sync hunt (programs hunt), pin groups past pin 15 and 32-bit PAU queues. The macro floorplan matters as much as the area: with SM0's FIFO RAM inboard, 2203 global-routing overflows and shorts over it; at the left edge, 0 (`src/config.json`, MACROS). Tag `v3-candidate` (5d17f40), the v3 gds run, is green on 6x4 (gds, precheck, gate-level test, sign-off): 407k um2 of cells, 50 MHz typical (+3.8 ns), 39 MHz slow corner, 2 h 18 min on the CI runner. Tag `v2-baseline` (b2f5003) is the earlier v2 candidate. Next: `test/formal/` and `fpga/`, still v1.
+Status (2026-10-31): ISA v3 on `main`: the model, the programs, the docs and the RTL are v3, the RTL in lockstep with the model. On 6x4 tiles routing, not cell area, is the limit: v3 left out the 256-word IMEM in pages (JMP condition 001 is reserved for FAR, back if the tiles grow to 8x4), the receiver's sync hunt (programs hunt), pin groups past pin 15 and 32-bit PAU queues. The macro floorplan matters as much as the area: with SM0's FIFO RAM inboard, 2203 global-routing overflows and shorts over it; at the left edge, 0 (`src/config.json`, MACROS). Tag `v3-candidate` (5d17f40), the v3 gds run, is green on 6x4 (gds, precheck, gate-level test, sign-off): 407k um2 of cells, 50 MHz typical (+3.8 ns), 39 MHz slow corner, 2 h 18 min on the CI runner. Tag `v2-baseline` (b2f5003) is the earlier v2 candidate. Next: `fpga/`, still v1.
 
 ## Testing
 
