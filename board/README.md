@@ -72,7 +72,8 @@ board and prints every frame it receives:
 
 1. Record the line with a logic analyzer in PulseView (any sigrok-supported analyzer, such as
    the 8-channel 24 MHz ones) and save the session as a `.sr` file. A few frames are enough;
-   a CRC is believed from about 40 bits of evidence, e.g. 4 frames with a CRC-16.
+   a CRC is believed from about 40 bits of evidence, e.g. 4 frames with a CRC-16. One frame
+   the line corrupted in the recording is spared: the CRC is learned from the others.
 2. Connect the line to a `pio` pin of the board (and the analyzer's ground to the board's).
 3. Run listen.py with the recording's channel and the board's pin:
    `python3 board/listen.py remote.sr --channel D0 --pin 0 --lsb`.
