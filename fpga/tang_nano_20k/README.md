@@ -8,7 +8,7 @@ Leave the RGB LCD panel unplugged: the `pio` pins share the 40-pin LCD connector
 
 | Signal | FPGA pin | Header | Direction | Notes |
 |---|---|---|---|---|
-| SPI SCLK | 73 | J6 | in | mode 0, <= 2.25 MHz (27 MHz / 12), pulled down |
+| SPI SCLK | 73 | J6 | in | mode 0, <= 4.5 MHz (27 MHz / 6), pulled down |
 | SPI MOSI | 74 | J6 | in | pulled down |
 | SPI CS_n | 76 | J6 | in | pulled up (idle) |
 | SPI MISO | 75 | J5 | out | |
@@ -53,4 +53,8 @@ Gowin EDA: `gw_sh build_gowin.tcl` (uses `tang_nano_20k.cst` and `tang_nano_20k.
 
 ## Bring-up
 
-Use the SPI sequence in `docs/info.md` ("How to test"), with SCLK at or below 2.25 MHz. The echo program there is a quick end-to-end check: a word pushed with TX_PUSH comes back from RX_POP.
+`board/` drives the board from the PC through a Raspberry Pi Pico: the wiring, the Pico's
+firmware, and `board/bringup.py`, which checks the SPI lines, the registers, program memory,
+HOST_IRQ, the FIFOs and a UART on pin 0. By hand, the SPI sequence in `docs/info.md`
+("How to test") is the same check in five transactions: a word pushed with TX_PUSH comes back
+from RX_POP.

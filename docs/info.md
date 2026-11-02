@@ -54,7 +54,7 @@ The instruction set has 16 pin positions; pin k is `uio[k]`, pin 8 + k is `uo_ou
 
 ## How to test
 
-You need an SPI master on `ui_in[2:0]` / `uo_out[0]`: the RP2040 of the demo board, another microcontroller or a USB-SPI adapter. `sim/model/host.py` is a reference driver.
+You need an SPI master on `ui_in[2:0]` / `uo_out[0]`: the RP2040 of the demo board, another microcontroller or a USB-SPI adapter. `sim/model/host.py` is a reference driver; `board/` runs it from a PC through a Raspberry Pi Pico, with first checks in `board/bringup.py`.
 
 1. Reset the design (`rst_n` low, then high).
 2. Write the program with IMEM_WR (header 0xC000 for SM 0, then the start address), then its configuration with REG_WR. `asm.py` produces both from one source file.
