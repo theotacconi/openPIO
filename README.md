@@ -26,7 +26,7 @@ Data flows in a straight line, one way in each direction:
 - **Sending:** the host writes words over SPI into the **TX FIFO** (a queue). The SM pulls a word into its **OSR** (output shift register), which feeds the bits out one at a time, to the pins directly or through the PAU.
 - **Receiving:** bits from the pins (or the PAU) shift into the **ISR** (input shift register). When it is full, the SM pushes the word into the **RX FIFO**, where the host reads it.
 
-The parts of each state machine (a drawing of each one is in [docs/blocks/](docs/blocks/)):
+The parts of each state machine ([ARCHITECTURE.md](ARCHITECTURE.md) explains each one, with a drawing):
 
 | Block | Role |
 |-------|------|
@@ -86,6 +86,7 @@ It is tested on UART, USB, CAN, MFM, SPI, SD card commands, NEC infrared and WS2
 
 ## Documentation
 
+- [ARCHITECTURE.md](ARCHITECTURE.md): how the chip works, block by block, for readers new to chip design.
 - [docs/info.md](docs/info.md): datasheet: pins, host commands, how to test the chip.
 - [sim/model/ISA.md](sim/model/ISA.md): the instruction set and the PAU, exactly.
 - [sim/model/HOST.md](sim/model/HOST.md): the SPI commands and registers.
