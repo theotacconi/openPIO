@@ -26,7 +26,7 @@
     set pau_ctl, tx         ; the encoder starts from the pin: bus high
     out pins, 1
     mov osr, x
-    out pins, 16            ; 17 bits queued (the queue holds 32)
+    out pins, 16            ; waits for room: the queue holds 16 bits
     set pau_ctl, 0          ; drain: the pin returns to the latch after the last bit
     wait 1 pau tx_idle
     set dlymul, 8
