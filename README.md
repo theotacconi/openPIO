@@ -64,7 +64,14 @@ bit:
 
 24 protocols and a logic analyzer, each tested on its pins against a reference device written from the protocol's specification: CAN, LIN, I2C, SPI, UART, USB low speed, USB Power Delivery, 10BASE-T Ethernet (transmit), HDLC, Modbus, DALI, JTAG, SWD, 1-Wire, PS/2, I2S, WS2812B, NEC infrared, SENT, ISO 7816 smart cards, MIL-STD-1553B, SD cards, an MFM disk controller and a quadrature encoder. Several of them were written after the instruction set was frozen, without changing the hardware. See [programs/README.md](programs/README.md).
 
-[sim/learn/learn.py](sim/learn/learn.py) goes the other way: from a recording of an unknown signal it finds the protocol's settings. For asynchronous serial lines it also writes the openPIO programs that receive and send them. For framed protocols (USB, CAN, HDLC, Ethernet, MFM, ...) it finds the line code, bit stuffing, sync bits and CRC, including the CRC polynomial, which it computes from the frames instead of looking it up in a table. It then writes a receiver that hands each frame to the host with one extra word saying whether its CRC is right. It does the same for lines with a clock pin, such as SPI: it finds the clock, its mode and the select pin. For pulse-width codes (infrared remotes, WS2812 LEDs, 433 MHz sensors) it finds which pulse carries the bits, their two widths and the leader, and writes a receiver that times each pulse.
+[sim/learn/learn.py](sim/learn/learn.py) goes the other way: from a one-way recording of a line it finds the line's settings and writes an openPIO receiver for them. It knows four families of line formats:
+
+- asynchronous serial: bit time, parity, stop bits; it also writes the transmitter;
+- self-clocked frames: the line code, bit stuffing, sync bits and the CRC, whose polynomial it computes from the frames instead of looking it up in a table. The receiver hands each frame to the host with one extra word saying whether its CRC is right;
+- lines with a clock pin: the clock, its SPI mode, the select pin and the CRC;
+- pulse-width codes: which pulse carries the bits, their two widths and the leader.
+
+It is tested on UART, USB, CAN, MFM, SPI, SD card commands, NEC infrared and WS2812B: it learns each from a recording, and its receiver takes new frames. For 10BASE-T it learns the frames, but the line is too fast for its receiver. It learns the line, not the conversation: request-and-answer protocols on a shared wire (I2C, SWD, 1-Wire, ISO 7816) and the formats outside the four families (I2S, SENT, MIL-STD-1553B, 4B5B) need the hand-written programs above.
 
 ## The chip
 
