@@ -15,6 +15,7 @@ that carries the bits, its widths, the leader, the CRC; the generated program re
 """
 import random
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -27,6 +28,7 @@ from devices import (BmcTx, CanNode, DaliBus, DaliGear, NecRemote, Ps2Device,  #
                      SpiMaster, UartRx, UartTx, UsbTx, WiredAndBus, can_bits, can_crc15, crc7_sd,
                      crc16_usb, crc16_x25, mfm_halves, mfm_sector, nec_levels, ps2_bits)
 from learn import (Capture, bursts, clocked_rx_program, clocked_timing, decode,  # noqa: E402
+                   write_sigrok, rx_frames as frames_received,
                    frame_timing, frames_rx_program, infer_async, infer_clocked, infer_frames,
                    infer_pulses,
                    pau_directives, pulses_rx_program, pulses_timing, rx_program, timing,
@@ -211,19 +213,6 @@ def dali_frames(frames: list[int], answers: dict[int, int]) -> list[list[int]]:
         out.append([1] + [f >> 15 - i & 1 for i in range(16)])
         if f in answers:
             out.append([1] + [answers[f] >> 7 - i & 1 for i in range(8)])
-    return out
-
-
-def frames_received(words: list[int]) -> list[tuple[list[int], int]]:
-    """(bits, end word's bits 7:0) of each frame of frames_rx_program()'s RX words."""
-    out, cur = [], []
-    for w in words:
-        if w & 0xFF:
-            last = w >> 8
-            out.append((cur + [last >> i & 1 for i in range(last.bit_length() - 1)], w & 0xFF))
-            cur = []
-        else:
-            cur += [w >> 8 + i & 1 for i in range(8)]
     return out
 
 
@@ -662,6 +651,47 @@ class LearnPulses(unittest.TestCase):
         got = self.receive(p, played([lv << PIN for lv in levels], [PIN]), len(levels))
         self.assertEqual(got, [(bits([c for led in leds for c in led], lsb_first=False), 1)
                                for leds in colours])
+
+
+class LearnRecordings(unittest.TestCase):
+    """Recordings as a logic analyzer saves them (sigrok session files): sampled at another rate
+    than the chip's clock, started and stopped in the middle of a frame."""
+
+    def recorded(self, levels: list[int], cut: tuple[int, int], rate: float, clock_hz: float):
+        """The channels of levels[cut[0]:cut[1]] saved at `rate` samples a second, read back
+        in clocks of `clock_hz`."""
+        with tempfile.TemporaryDirectory() as d:
+            write_sigrok(Path(d) / "rec.sr", levels[cut[0]:cut[1]], rate)
+            return Capture.from_sigrok(Path(d) / "rec.sr", clock_hz)
+
+    def test_usb_cut_at_both_ends(self):
+        """USB packets, the first and the last cut by the recording: they are left out; the
+        clock twice the sample rate doubles every time."""
+        rnd = random.Random(14)
+        packets = [(0xC3, [0xFF, 0xFF] + [rnd.randrange(256) for _ in range(n)])
+                   for n in (3, 2, 4, 2, 6, 4, 1, 5)]
+        bench = usb_bench(packets)
+        bench.run(bench.devices[0].end + 100)
+        bs = bursts(Capture.from_levels(bench.trace, PIN), 400)
+        cut = ((bs[0][1][0] + bs[0][1][-1]) // 2, (bs[-1][1][0] + bs[-1][1][-1]) // 2)
+        cap = self.recorded(bench.trace, cut, 24e6, 48e6)[f"D{PIN}"]
+        p = infer_frames(cap)
+        self.assertEqual((p.code, p.stuff, p.crc.width, p.crc.poly), ("nrzi", (0, 6), 16, 0x8005))
+        self.assertAlmostEqual(p.half, 40, delta=0.4)
+        self.assertEqual(len(p.frames), len(packets) - 2)
+        self.assertEqual([f[8:16] for f in p.frames], [bits([0xC3])] * (len(packets) - 2))
+
+    def test_ps2_cut_at_both_ends(self):
+        """A PS/2 keyboard recorded from the middle of a byte to the middle of another."""
+        rnd = random.Random(15)
+        keys = [rnd.randrange(256) for _ in range(50)]
+        bench = Bench(pullups=1 << MOSI | 1 << SCK)
+        bench.add(Ps2Device(SCK, MOSI, keys))
+        bench.run(50 + 1080 * len(keys) + 300)
+        caps = self.recorded(bench.trace, (50 + 400, 50 + 1080 * 49 + 400), 1e6, 1e6)
+        (p,) = infer_clocked({MOSI: caps[f"D{MOSI}"], SCK: caps[f"D{SCK}"]})
+        self.assertEqual((p.clock, p.data, p.cpol, p.cpha, p.crc.width), (SCK, MOSI, 1, 0, 1))
+        self.assertEqual(p.frames, [ps2_bits(k) for k in keys[1:-1]])
 
 
 if __name__ == "__main__":
