@@ -27,6 +27,8 @@ host.push(0, b"hello")
 
 ## Wiring: Pico to Tang Nano 20K
 
+Step by step, with drawings: [fpga/tang_nano_20k/WIRING.md](../fpga/tang_nano_20k/WIRING.md).
+
 | Signal | Pico GPIO | Pico pin | FPGA pin | Header |
 |---|---|---|---|---|
 | SCLK | GP2 | 4 | 73 | J6 |

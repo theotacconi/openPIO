@@ -4,6 +4,8 @@
 
 ## Wiring
 
+Step by step, with drawings and the demo parts: [WIRING.md](WIRING.md).
+
 Leave the RGB LCD panel unplugged: the `pio` pins share the 40-pin LCD connector.
 
 | Signal | FPGA pin | Header | Direction | Notes |
