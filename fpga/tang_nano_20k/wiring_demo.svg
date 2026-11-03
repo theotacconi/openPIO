@@ -1,0 +1,192 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 720" width="1000" height="720" role="img" aria-labelledby="t d">
+<title id="t">The demo parts</title>
+<desc id="d">The Pico&#x27;s VBUS (pin 40) through a 1N4007, stripe towards the ring, to the ring&#x27;s 5V; the Pico&#x27;s GND (pin 38) to the ring&#x27;s GND and the IR receiver&#x27;s minus; the Pico&#x27;s 3V3(OUT) (pin 36) to the IR receiver&#x27;s plus; the receiver&#x27;s S to FPGA pin 27 (pio 0); FPGA pin 28 (pio 1) through 330 ohm to the ring&#x27;s DI.</desc>
+<style>
+.bg { fill: #ffffff; }
+text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: #1f2933; }
+.title { font-size: 17px; font-weight: 700; }
+.sub { font-size: 12px; fill: #52606d; }
+.pin { font-size: 11.5px; fill: #9aa5b1; }
+.pinu { font-size: 12px; font-weight: 700; fill: #1f2933; }
+.num { font-size: 10.5px; fill: #9aa5b1; }
+.numu { font-size: 10.5px; font-weight: 700; fill: #1f2933; }
+.wire { font-size: 12.5px; font-weight: 700; }
+.term { font-size: 12.5px; font-weight: 700; fill: #1f2933; }
+.note { font-size: 12px; fill: #52606d; }
+.warn { font-size: 12px; font-weight: 700; fill: #b42318; }
+.pico { fill: #edf7ef; stroke: #2f8a4c; stroke-width: 2; }
+.usb { fill: #d9dee4; stroke: #616e7c; stroke-width: 1.5; }
+.tang { fill: #f7f8fa; stroke: #323f4b; stroke-width: 2.2; }
+.part { fill: #ffffff; stroke: #616e7c; stroke-width: 1.8; }
+.free { fill: #ffffff; stroke: #9aa5b1; stroke-width: 1.3; }
+</style>
+<rect class="bg" width="1000" height="720"/>
+<rect x="40" y="50" width="230" height="648" rx="10" class="pico"/>
+<rect x="131.0" y="40" width="48" height="26" rx="4" class="usb"/>
+<text x="155.0" y="86" class="sub" text-anchor="middle">USB</text>
+<text x="155.0" y="664" class="title" text-anchor="middle">Raspberry Pi</text>
+<text x="155.0" y="684" class="sub" text-anchor="middle">Pico 2 W, from the top</text>
+<circle cx="56" cy="120" r="6" class="free"/>
+<text x="70" y="124" class="num" text-anchor="start">1</text>
+<text x="92" y="124" class="pin" text-anchor="start">GP0</text>
+<circle cx="56" cy="146" r="6" class="free"/>
+<text x="70" y="150" class="num" text-anchor="start">2</text>
+<text x="92" y="150" class="pin" text-anchor="start">GP1</text>
+<circle cx="56" cy="172" r="6" class="free"/>
+<text x="70" y="176" class="num" text-anchor="start">3</text>
+<text x="92" y="176" class="pin" text-anchor="start">GND</text>
+<circle cx="56" cy="198" r="6" class="free"/>
+<text x="70" y="202" class="num" text-anchor="start">4</text>
+<text x="92" y="202" class="pin" text-anchor="start">GP2</text>
+<circle cx="56" cy="224" r="6" class="free"/>
+<text x="70" y="228" class="num" text-anchor="start">5</text>
+<text x="92" y="228" class="pin" text-anchor="start">GP3</text>
+<circle cx="56" cy="250" r="6" class="free"/>
+<text x="70" y="254" class="num" text-anchor="start">6</text>
+<text x="92" y="254" class="pin" text-anchor="start">GP4</text>
+<circle cx="56" cy="276" r="6" class="free"/>
+<text x="70" y="280" class="num" text-anchor="start">7</text>
+<text x="92" y="280" class="pin" text-anchor="start">GP5</text>
+<circle cx="56" cy="302" r="6" class="free"/>
+<text x="70" y="306" class="num" text-anchor="start">8</text>
+<text x="92" y="306" class="pin" text-anchor="start">GND</text>
+<circle cx="56" cy="328" r="6" class="free"/>
+<text x="70" y="332" class="num" text-anchor="start">9</text>
+<text x="92" y="332" class="pin" text-anchor="start">GP6</text>
+<circle cx="56" cy="354" r="6" class="free"/>
+<text x="70" y="358" class="num" text-anchor="start">10</text>
+<text x="92" y="358" class="pin" text-anchor="start">GP7</text>
+<circle cx="56" cy="380" r="6" class="free"/>
+<text x="70" y="384" class="num" text-anchor="start">11</text>
+<text x="92" y="384" class="pin" text-anchor="start">GP8</text>
+<circle cx="56" cy="406" r="6" class="free"/>
+<text x="70" y="410" class="num" text-anchor="start">12</text>
+<text x="92" y="410" class="pin" text-anchor="start">GP9</text>
+<circle cx="56" cy="432" r="6" class="free"/>
+<text x="70" y="436" class="num" text-anchor="start">13</text>
+<text x="92" y="436" class="pin" text-anchor="start">GND</text>
+<circle cx="56" cy="458" r="6" class="free"/>
+<text x="70" y="462" class="num" text-anchor="start">14</text>
+<text x="92" y="462" class="pin" text-anchor="start">GP10</text>
+<circle cx="56" cy="484" r="6" class="free"/>
+<text x="70" y="488" class="num" text-anchor="start">15</text>
+<text x="92" y="488" class="pin" text-anchor="start">GP11</text>
+<circle cx="56" cy="510" r="6" class="free"/>
+<text x="70" y="514" class="num" text-anchor="start">16</text>
+<text x="92" y="514" class="pin" text-anchor="start">GP12</text>
+<circle cx="56" cy="536" r="6" class="free"/>
+<text x="70" y="540" class="num" text-anchor="start">17</text>
+<text x="92" y="540" class="pin" text-anchor="start">GP13</text>
+<circle cx="56" cy="562" r="6" class="free"/>
+<text x="70" y="566" class="num" text-anchor="start">18</text>
+<text x="92" y="566" class="pin" text-anchor="start">GND</text>
+<circle cx="56" cy="588" r="6" class="free"/>
+<text x="70" y="592" class="num" text-anchor="start">19</text>
+<text x="92" y="592" class="pin" text-anchor="start">GP14</text>
+<circle cx="56" cy="614" r="6" class="free"/>
+<text x="70" y="618" class="num" text-anchor="start">20</text>
+<text x="92" y="618" class="pin" text-anchor="start">GP15</text>
+<circle cx="254" cy="614" r="6" class="free"/>
+<text x="240" y="618" class="num" text-anchor="end">21</text>
+<text x="218" y="618" class="pin" text-anchor="end">GP16</text>
+<circle cx="254" cy="588" r="6" class="free"/>
+<text x="240" y="592" class="num" text-anchor="end">22</text>
+<text x="218" y="592" class="pin" text-anchor="end">GP17</text>
+<circle cx="254" cy="562" r="6" class="free"/>
+<text x="240" y="566" class="num" text-anchor="end">23</text>
+<text x="218" y="566" class="pin" text-anchor="end">GND</text>
+<circle cx="254" cy="536" r="6" class="free"/>
+<text x="240" y="540" class="num" text-anchor="end">24</text>
+<text x="218" y="540" class="pin" text-anchor="end">GP18</text>
+<circle cx="254" cy="510" r="6" class="free"/>
+<text x="240" y="514" class="num" text-anchor="end">25</text>
+<text x="218" y="514" class="pin" text-anchor="end">GP19</text>
+<circle cx="254" cy="484" r="6" class="free"/>
+<text x="240" y="488" class="num" text-anchor="end">26</text>
+<text x="218" y="488" class="pin" text-anchor="end">GP20</text>
+<circle cx="254" cy="458" r="6" class="free"/>
+<text x="240" y="462" class="num" text-anchor="end">27</text>
+<text x="218" y="462" class="pin" text-anchor="end">GP21</text>
+<circle cx="254" cy="432" r="6" class="free"/>
+<text x="240" y="436" class="num" text-anchor="end">28</text>
+<text x="218" y="436" class="pin" text-anchor="end">GND</text>
+<circle cx="254" cy="406" r="6" class="free"/>
+<text x="240" y="410" class="num" text-anchor="end">29</text>
+<text x="218" y="410" class="pin" text-anchor="end">GP22</text>
+<circle cx="254" cy="380" r="6" class="free"/>
+<text x="240" y="384" class="num" text-anchor="end">30</text>
+<text x="218" y="384" class="pin" text-anchor="end">RUN</text>
+<circle cx="254" cy="354" r="6" class="free"/>
+<text x="240" y="358" class="num" text-anchor="end">31</text>
+<text x="218" y="358" class="pin" text-anchor="end">GP26</text>
+<circle cx="254" cy="328" r="6" class="free"/>
+<text x="240" y="332" class="num" text-anchor="end">32</text>
+<text x="218" y="332" class="pin" text-anchor="end">GP27</text>
+<circle cx="254" cy="302" r="6" class="free"/>
+<text x="240" y="306" class="num" text-anchor="end">33</text>
+<text x="218" y="306" class="pin" text-anchor="end">GND</text>
+<circle cx="254" cy="276" r="6" class="free"/>
+<text x="240" y="280" class="num" text-anchor="end">34</text>
+<text x="218" y="280" class="pin" text-anchor="end">GP28</text>
+<circle cx="254" cy="250" r="6" class="free"/>
+<text x="240" y="254" class="num" text-anchor="end">35</text>
+<text x="218" y="254" class="pin" text-anchor="end">ADC_VREF</text>
+<circle cx="254" cy="224" r="7" fill="#f59e0b"/>
+<text x="240" y="228" class="numu" text-anchor="end">36</text>
+<text x="218" y="228" class="pinu" text-anchor="end">3V3(OUT)</text>
+<circle cx="254" cy="198" r="6" class="free"/>
+<text x="240" y="202" class="num" text-anchor="end">37</text>
+<text x="218" y="202" class="pin" text-anchor="end">3V3_EN</text>
+<circle cx="254" cy="172" r="7" fill="#111827"/>
+<text x="240" y="176" class="numu" text-anchor="end">38</text>
+<text x="218" y="176" class="pinu" text-anchor="end">GND</text>
+<circle cx="254" cy="146" r="6" class="free"/>
+<text x="240" y="150" class="num" text-anchor="end">39</text>
+<text x="218" y="150" class="pin" text-anchor="end">VSYS</text>
+<circle cx="254" cy="120" r="7" fill="#dc2626"/>
+<text x="240" y="124" class="numu" text-anchor="end">40</text>
+<text x="218" y="124" class="pinu" text-anchor="end">VBUS</text>
+<rect x="470" y="80" width="210" height="130" rx="10" class="part"/>
+<text x="575.0" y="106" class="title" text-anchor="middle">WS2812 ring</text>
+<text x="575.0" y="126" class="sub" text-anchor="middle">12 LEDs</text>
+<polyline points="254,120 470,120" fill="none" stroke="#dc2626" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<rect x="334" y="108" width="52" height="24" rx="4" fill="#323f4b"/>
+<rect x="374" y="108" width="7" height="24" fill="#d9dee4"/>
+<polygon points="348,113 348,127 364,120" fill="#ffffff"/>
+<rect x="364" y="113" width="2.5" height="14" fill="#ffffff"/>
+<text x="360" y="100" class="term" text-anchor="middle">1N4007</text>
+<text x="360" y="150" class="note" text-anchor="middle">stripe towards the ring</text>
+<text x="482" y="124" class="term" text-anchor="start">5V</text>
+<polyline points="254,172 470,172" fill="none" stroke="#111827" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="482" y="176" class="term" text-anchor="start">GND</text>
+<text x="668" y="184" class="term" text-anchor="end">DI</text>
+<rect x="470" y="330" width="210" height="140" rx="10" class="part"/>
+<text x="575.0" y="436" class="title" text-anchor="middle">IR receiver</text>
+<text x="575.0" y="456" class="sub" text-anchor="middle">KY-022</text>
+<polyline points="420,172 420,370 470,370" fill="none" stroke="#111827" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="420" cy="172" r="4.5" fill="#111827"/>
+<text x="482" y="374" class="term" text-anchor="start">−</text>
+<polyline points="254,224 380,224 380,420 470,420" fill="none" stroke="#f59e0b" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="482" y="424" class="term" text-anchor="start">+</text>
+<text x="330" y="446" class="warn" text-anchor="middle">3.3 V, never 5 V</text>
+<text x="668" y="399" class="term" text-anchor="end">S</text>
+<rect x="800" y="80" width="170" height="390" rx="10" class="tang"/>
+<text x="816" y="106" class="title" text-anchor="start">Tang Nano 20K</text>
+<text x="816" y="126" class="sub" text-anchor="start">FPGA pin, chip pin</text>
+<polyline points="680,180 800,180" fill="none" stroke="#16a34a" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<rect x="714" y="171" width="52" height="18" rx="4" fill="#e9d8a6" stroke="#8d6e2f" stroke-width="1.3"/>
+<rect x="726" y="171" width="4" height="18" fill="#8d6e2f"/>
+<rect x="734" y="171" width="4" height="18" fill="#8d6e2f"/>
+<rect x="742" y="171" width="4" height="18" fill="#8d6e2f"/>
+<text x="740" y="164" class="term" text-anchor="middle">330 Ω</text>
+<circle cx="800" cy="180" r="4.5" fill="#16a34a"/>
+<text x="814" y="184" class="term" text-anchor="start">28  pio 1</text>
+<polyline points="680,395 800,395" fill="none" stroke="#2563eb" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="800" cy="395" r="4.5" fill="#2563eb"/>
+<text x="814" y="399" class="term" text-anchor="start">27  pio 0</text>
+<polygon points="747,395 734,389 734,401" fill="#2563eb"/>
+<text x="816" y="436" class="note" text-anchor="start">GND: the bridge&#x27;s</text>
+<text x="816" y="454" class="note" text-anchor="start">ground wire</text>
+<text x="470" y="540" class="note" text-anchor="start">The bridge stays wired as in wiring_bridge.svg: one ground for every board.</text>
+<text x="470" y="562" class="note" text-anchor="start">Logic analyzer: D0 on pin 27 (the IR line), D1 on pin 28, its GND on any GND.</text>
+</svg>
