@@ -195,7 +195,7 @@ def check_can(host: Host) -> str | None:
     host.start(0b11)
     rnd = random.Random(8)
     frames = [(rnd.randrange(2048), [rnd.randrange(256) for _ in range(rnd.randrange(9))]) for _ in range(12)]
-    frames[1] = (0x7F0, [0xFF, 0xFF])                     # long recessive runs: stuffing
+    frames[1] = (0x7EF, [0xFF, 0xFF])                     # long recessive runs (0x7F0 up: not legal)
     for k, (ident, data) in enumerate(frames):
         host.push(0, frame_words(ident, data))
         if not wait(host, lambda: flags(host, 0) and flags(host, 1), 20000):
