@@ -738,6 +738,24 @@ class LearnRecordings(unittest.TestCase):
             self.assertEqual(p.frames, [bits([a, a ^ 255, c, c ^ 255]) for a, c in keys[:n]])
             self.assertEqual((p.crc.width, p.crc.poly), (8, 0x01))
 
+    def test_uart_cut_at_both_ends(self):
+        """Text sent 20 characters back to back at a time, recorded from the middle of the
+        second character to the middle of the last (on the board: the first test of the chip's
+        UART). The first and last bursts are left out."""
+        fmt, bit = (8, None, 1, 1, 40), 40
+        data = values(fmt, 17, 80)
+        gaps = [300 if k % 20 == 19 else 0 for k in range(len(data))]
+        bench = Bench(pullups=1 << PIN)
+        bench.add(UartTx(PIN, bit, data, start=200, gap=gaps))
+        bench.run(200 + (len(data) * 10 + 4 * 300) * bit)
+        char = 10 * bit
+        cut = (200 + char + char // 2, 200 + (len(data) * 10 + 3 * 300) * bit - char // 2)
+        cap = self.recorded(bench.trace, cut, 1e6, 1e6)[f"D{PIN}"]
+        p = infer_async(cap)
+        Learn.check(self, p, fmt)
+        got = decode(cap, p)
+        self.assertTrue(any(got[k:k + 40] == data[20:60] for k in range(len(got))))
+
     def test_ps2_cut_at_both_ends(self):
         """A PS/2 keyboard recorded from the middle of a byte to the middle of another."""
         rnd = random.Random(15)
