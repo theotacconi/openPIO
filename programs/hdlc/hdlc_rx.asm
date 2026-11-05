@@ -15,26 +15,28 @@
 .y 0x7E00                       ; a flag, as it lands in the ISR
 
     mov osr, x
-    set pau_ctl, rx|stuff|crc
+idle:                           ; no destuffing while hunting: a long idle has no stuffed bits,
+    set pau_ctl, rx|crc         ; and a stuffing slot there would delete a flag's first 0
 hunt:                           ; 4 strobes a bit
     in pins, 1
     mov x, isr
     and x, osr
     jmp x!=y, hunt
+    set pau_ctl, rx|stuff|crc   ; the run starts at the flag's last 0
 frame:
     pau crc_reset               ; CRC and stuff_err for this frame
     mov isr, null
     in pins, 8
     jmp !pau stuff_err, data
     mov x, isr
-    jmp x!=y, hunt              ; six 1s, not a flag: abort or idle
+    jmp x!=y, idle              ; six 1s, not a flag: abort or idle
     jmp frame                   ; another flag: an empty frame
 data:
     push                        ; a byte
     in pins, 8
     jmp !pau stuff_err, data
     mov x, isr
-    jmp x!=y, hunt
+    jmp x!=y, idle
     set x, 1                    ; a flag: end of frame, checked 5 strobes after its last bit,
     jmp !pau crc_ok, end        ; before the next bit feeds the CRC
     set x, 3
