@@ -225,16 +225,18 @@ def characters(cap: Capture, p: AsyncSerial) -> list[list[int]]:
     return out
 
 
+def broken(bits: list[int], p: AsyncSerial) -> bool:
+    """A character that breaks the format: a start bit not 0, a stop bit not 1, a wrong parity."""
+    data = bits[1:1 + p.data_bits]
+    ok = bits[0] == 0 and all(bits[1 + p.data_bits + (p.parity is not None):])
+    if p.parity:
+        ok &= (sum(data) + bits[1 + p.data_bits] + (p.parity == "odd")) % 2 == 0
+    return not ok
+
+
 def errors(chars: list[list[int]], p: AsyncSerial) -> int:
-    """Characters that break the format: a start bit not 0, a stop bit not 1, a wrong parity."""
-    bad = 0
-    for bits in chars:
-        data = bits[1:1 + p.data_bits]
-        ok = bits[0] == 0 and all(bits[1 + p.data_bits + (p.parity is not None):])
-        if p.parity:
-            ok &= (sum(data) + bits[1 + p.data_bits] + (p.parity == "odd")) % 2 == 0
-        bad += not ok
-    return bad
+    """Characters that break the format."""
+    return sum(broken(bits, p) for bits in chars)
 
 
 def infer_async(cap: Capture) -> AsyncSerial:
@@ -247,15 +249,21 @@ def infer_async(cap: Capture) -> AsyncSerial:
     explains a ninth bit better than data), then more stop bits (safe to send: the recording
     never had less idle). Characters a logic analyzer's recording may have cut are left out
     first (a level held longer than a character's 12 bits, 9 data, parity and 2 stop, is idle);
-    the whole recording is tried when nothing is left."""
+    the whole recording is tried when nothing is left. A recording cut in the middle of
+    characters back to back has no such pause: as a receiver does, the first characters may
+    break the format until one is read from its start bit (in ASCII text that can take 7), then
+    none may; up to 16 are left out, fewer than are left."""
     bit = bit_time(cap.widths())
-    for c in (cap.window(*cap.settled(13 * bit)), cap):
+    cut = cap.span is not None and bool(cap.edges) and cap.edges[0] - cap.span[0] < 13 * bit
+    for c, lead in ((cap.window(*cap.settled(13 * bit)), 0), (cap, 0), (cap, 16 if cut else 0)):
         best = None
         for idle, data_bits, parity, stop_bits in itertools.product(
                 (0, 1), range(5, 10), (None, "even", "odd"), (1, 2)):
             p = AsyncSerial(bit, idle, data_bits, parity, stop_bits)
             chars = characters(c, p)
-            if not chars or errors(chars, p):
+            out = max((k + 1 for k in range(min(lead, len(chars))) if broken(chars[k], p)), default=0)
+            chars = chars[out:]
+            if len(chars) <= out or errors(chars, p):
                 continue
             constant = sum(len({x[1 + k] for x in chars}) == 1 for k in range(data_bits))
             score = (constant, data_bits, -stop_bits)

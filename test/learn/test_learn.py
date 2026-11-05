@@ -756,6 +756,19 @@ class LearnRecordings(unittest.TestCase):
         got = decode(cap, p)
         self.assertTrue(any(got[k:k + 40] == data[20:60] for k in range(len(got))))
 
+    def test_uart_back_to_back_cut(self):
+        """ASCII text back to back with no pause, recorded from the middle of a character (on
+        the board: 60 baud from SM 1): read from there, the first characters keep the format
+        for a while (7 here) before a stop bit breaks it and the reading finds the start bits."""
+        text = b"openPIO learns its own line. " * 4
+        bench = Bench(pullups=1 << PIN)
+        bench.add(UartTx(PIN, 40, list(text), start=200))
+        bench.run(200 + len(text) * 400 + 4000)
+        cap = self.recorded(bench.trace, (200 + 2 * 400 + 130, len(bench.trace)), 1e6, 1e6)[f"D{PIN}"]
+        p = infer_async(cap)
+        Learn.check(self, p, (8, None, 1, 1, 40))
+        self.assertIn(b"learns its own line. " + b"openPIO learns its own line. " * 3, bytes(decode(cap, p)))
+
     def test_ps2_cut_at_both_ends(self):
         """A PS/2 keyboard recorded from the middle of a byte to the middle of another."""
         rnd = random.Random(15)
