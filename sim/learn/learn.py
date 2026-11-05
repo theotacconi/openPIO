@@ -245,22 +245,25 @@ def infer_async(cap: Capture) -> AsyncSerial:
     the next start bit where characters are back to back). Of the rest, the one with fewer data
     bits that never change wins (more likely stop bits), then fewer data bits (a parity bit
     explains a ninth bit better than data), then more stop bits (safe to send: the recording
-    never had less idle)."""
+    never had less idle). Characters a logic analyzer's recording may have cut are left out
+    first (a level held longer than a character's 12 bits, 9 data, parity and 2 stop, is idle);
+    the whole recording is tried when nothing is left."""
     bit = bit_time(cap.widths())
-    best = None
-    for idle, data_bits, parity, stop_bits in itertools.product(
-            (0, 1), range(5, 10), (None, "even", "odd"), (1, 2)):
-        p = AsyncSerial(bit, idle, data_bits, parity, stop_bits)
-        chars = characters(cap, p)
-        if not chars or errors(chars, p):
-            continue
-        constant = sum(len({c[1 + k] for c in chars}) == 1 for k in range(data_bits))
-        score = (constant, data_bits, -stop_bits)
-        if best is None or score < best[0]:
-            best = (score, p)
-    if best is None:
-        raise ValueError(f"no asynchronous format explains the recording (bit {bit:.2f} clocks)")
-    return best[1]
+    for c in (cap.window(*cap.settled(13 * bit)), cap):
+        best = None
+        for idle, data_bits, parity, stop_bits in itertools.product(
+                (0, 1), range(5, 10), (None, "even", "odd"), (1, 2)):
+            p = AsyncSerial(bit, idle, data_bits, parity, stop_bits)
+            chars = characters(c, p)
+            if not chars or errors(chars, p):
+                continue
+            constant = sum(len({x[1 + k] for x in chars}) == 1 for k in range(data_bits))
+            score = (constant, data_bits, -stop_bits)
+            if best is None or score < best[0]:
+                best = (score, p)
+        if best is not None:
+            return best[1]
+    raise ValueError(f"no asynchronous format explains the recording (bit {bit:.2f} clocks)")
 
 
 def decode(cap: Capture, p: AsyncSerial) -> list[int]:
