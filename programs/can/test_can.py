@@ -37,7 +37,7 @@ class CanTx(unittest.TestCase):
         rng = random.Random(6)
         frames = [(rng.randrange(2048), [rng.randrange(256) for _ in range(rng.randrange(9))])
                   for _ in range(30)]                   # many CRCs: stuffing next to the delimiter
-        frames[1] = (0x7F0, [0xFF])               # long recessive runs: stuffing
+        frames[1] = (0x7EF, [0xFF])               # long recessive runs: stuffing (0x7F0 up: not legal)
         listener = CanNode(BIT)
         bench, bus = tx_bench([listener], [])
         irqs = []
