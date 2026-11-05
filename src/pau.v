@@ -116,6 +116,7 @@ module pau (
     reg [5:0]  a_cnt;                      // CRC append: bits still to send, before the queue
     reg        a_s, a_m;                   // their stuffing and monitor flags
     reg        t_act, t_half, t_bit, t_line, t_mon, t_err;
+    reg        t_clk;                      // t_act & (cpha ^ t_half): bit_clk from one flip-flop
     reg        t_p, t_last;                // the bit before the one sent; the last bit started
     reg [4:0]  t_cnt;                      // strobes left in the half-bit, minus 1
     reg [4:0]  ts_run;                     // TX stuffing: qualifying bits in a row
@@ -400,8 +401,19 @@ module pau (
     assign rx_bits_s = rq_b_s;
     assign drive     = drives;
     assign line      = t_line ^ inv;
-    assign bit_clk   = t_act ? cpol ^ cpha ^ t_half : cpol;
+    assign bit_clk   = cpol ^ t_clk;                        // t_act ? cpol ^ cpha ^ t_half : cpol, without
+                                                            // a glitch where t_act and t_half change together
     assign crc       = crc_a;
+
+`ifdef FORMAL
+    // test/formal/strobe.sby: after the first clock (a chip reset), t_clk is the bit clock's
+    // phase of the current state, so bit_clk is the combinational rule clock for clock (CPHA
+    // written by the host takes one clock more, while it changes).
+    reg f_past = 1'b0;
+    reg f_cpha = 1'b0;
+    always @(posedge clk) {f_past, f_cpha} <= {1'b1, cpha};
+    always @(*) if (f_past && f_cpha == cpha) assert (t_clk == (t_act & (cpha ^ t_half)));
+`endif
 
     // ------------------------------------------------------------------ step 3 and registers
     wire [15:0] tx_mask  = ~(16'hFFFF << tx_n) << tq_len_s;
@@ -417,6 +429,7 @@ module pau (
             tq_len  <= 5'd0;
             {a_cnt, a_s, a_m} <= 8'd0;
             {t_act, t_half, t_bit, t_line, t_mon, t_err, t_p, t_last} <= 8'd0;
+            t_clk   <= 1'b0;
             t_cnt   <= 5'd0;
             {ts_run, ts_last, ts_pend, ts_pval} <= 8'd0;
             e_prev  <= rst_n & pin_in1;
@@ -435,6 +448,7 @@ module pau (
             {tq_b, tq_s, tq_m, tq_c, tq_len, a_cnt} <= {tq_b_s, tq_s_s, tq_m_s, tq_c_s, tq_len_s, a_cnt_s};
             {t_act, t_half, t_bit, t_line, t_mon, t_err} <= {t_act_s, t_half_s, t_bit_s, t_line_s, t_mon_s, t_err_s};
             {t_p, t_last} <= {t_p_s, t_last_s};
+            t_clk <= t_act_s & (cpha ^ t_half_s);
             {t_cnt, ts_run, ts_last, ts_pend, ts_pval} <= {t_cnt_s, ts_run_s, ts_last_s, ts_pend_s, ts_pval_s};
             {rq_b, rq_len, r_cnt, r_since, r_quiet} <= {rq_b_s, rq_len_s, r_cnt_s, r_since_s, r_quiet_s};
             {r_prev, r_armed, r_last, r_p} <= {r_prev_s, r_armed_s, r_last_s, r_p_s};
@@ -499,6 +513,7 @@ module pau (
                     tq_len  <= 5'd0;
                     a_cnt   <= 6'd0;
                     t_act   <= 1'b0;
+                    t_clk   <= 1'b0;
                     ts_pend <= 1'b0;
                 end
             end
