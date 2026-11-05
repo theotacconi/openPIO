@@ -22,8 +22,10 @@ host.push(0, b"hello")
 - `bringup.py`: the first checks of a board: ID and pads, every MOSI and MISO bit, program
   memory, HOST_IRQ, 100 words through the FIFOs, and a UART on pin 0 read back by the other SM
   from the same pad. Only the bridge's wires are needed.
+- `loopback.py`: the protocol programs through the chip's own pads, each line from one SM to the
+  other (below).
 - `listen.py`: from a logic analyzer's recording to a receiver on the board (below).
-- `test_board.py`: both on the model, without hardware.
+- `test_board.py`: the three on the model, without hardware.
 
 ## Wiring: Pico to Tang Nano 20K
 
@@ -65,6 +67,28 @@ ok    uart
 
 `python3 board/bringup.py --model` runs the same checks on the model. SCLK defaults to 1 MHz;
 the chip takes up to `clk` / 6 (`--hz`): 4.5 MHz on the FPGA's 27 MHz, 8.3 MHz on the chip.
+
+## The programs on the board
+
+`loopback.py` runs the protocol programs on the board with no wires but the bridge's: a
+transmitter on SM 0 and its receiver (or peer) on SM 1, on the same pads, and the host checks
+what comes back: UART at 3.375 Mbaud and 115200, autobaud, full duplex on both SMs crossed,
+HDLC with its FCS, USB low speed with its CRC16, CAN on one open-drain pad (a wired-AND bus of
+two nodes, the pad's pull-up recessive, each frame acknowledged), 4b5b on BMC, SPI master to
+target, SD commands with their CRC-7, I2S in lockstep, and edge timestamps of a UART read back
+as the learner reads a recording. A logic analyzer on the pio pins sees every line.
+
+```
+$ python3 board/loopback.py
+ok    uart
+ok    autobaud
+...
+ok    edges
+```
+
+Through the bridge an SPI word takes 16 us or more, longer than a byte of HDLC at 844 kbit/s or
+of USB: those checks queue a frame whole with SM 0 stopped, as a host does for a line faster
+than it can feed. `--model` runs the same checks on the model.
 
 ## From a recording to a receiver
 

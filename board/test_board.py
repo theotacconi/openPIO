@@ -16,6 +16,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path[:0] = [str(HERE), str(HERE.parent / "test" / "learn")]
 import bringup                                           # noqa: E402
+import loopback                                          # noqa: E402
 from board import Board, Model                           # noqa: E402
 from host import Host                                    # noqa: E402
 from learn import write_sigrok                           # noqa: E402
@@ -30,6 +31,15 @@ class BringUp(unittest.TestCase):
         for check in bringup.CHECKS:
             host.write(0, 0x20, 0x30)
             self.assertIsNone(check(board, host), check.__name__)
+
+
+class Loopback(unittest.TestCase):
+
+    def test_checks_pass_on_the_model(self):
+        host = Host(Board(Model()))
+        for check in loopback.CHECKS:
+            loopback.release(host)
+            self.assertIsNone(check(host), check.__name__)
 
 
 class Listen(unittest.TestCase):
