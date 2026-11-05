@@ -1,6 +1,7 @@
-// strobe.v - proves the FORMAL assertion in src/openpio_sm.v: the strobe registered one clock
-// ahead equals the emu.py prescaler rule on the current state, for every input sequence after
-// a chip reset (every instruction, host write, CLKDIV and fraction). Run: sby -f strobe.sby
+// strobe.v - proves the FORMAL assertions in src/openpio_sm.v and src/pau.v, for every input
+// sequence after a chip reset (every instruction, host write, CLKDIV and fraction): the strobe
+// registered one clock ahead equals the emu.py prescaler rule on the current state, and the
+// PAU's bit clock, from one flip-flop, equals its combinational rule. Run: sby -f strobe.sby
 
 `default_nettype none
 
