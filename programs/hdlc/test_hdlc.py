@@ -3,7 +3,8 @@
 five 1s (also inside the FCS), FCS against CRC-16/X.25, frames of 1 to 20 bytes, including
 bytes that look like flags; a frame the host cancels is aborted at once (seven 1s), the next
 one goes out once the host has loaded the program again. The receiver program on the other SM gets the same frames from
-the line, with the FCS verdict, and flags a corrupted frame."""
+the line, with the FCS verdict, and flags a corrupted frame; frames after an idle line of any
+length (found on the FPGA board)."""
 import random
 import sys
 import unittest
@@ -67,6 +68,23 @@ class Hdlc(unittest.TestCase):
         bench.run(len(bits) * BIT + 100)
         self.assertEqual(received(bench.received[1]),
                          [(good + crc_bytes(good), True), (bad + [0x12, 0x34], False)])
+
+
+    def test_receiver_after_any_idle(self):
+        """Frames after an idle line of 7 to 30 bit times, every length a stuffing slot could
+        fall on: found on the board, where frames come whenever the host sends them. A
+        destuffer counting through the idle deleted the first 0 of a flag after 6k + 5 1s."""
+        good = [0x41, 0x7E, 0xFF]
+        bits = []
+        for n in range(7, 31):
+            bits += idle(n) + flag() + stuffed(good + crc_bytes(good)) + flag()
+        bits += idle(3)
+        bench = Bench()
+        bench.load(1, (HERE / "hdlc_rx.asm").read_text())
+        bench.add(Script(nrzi(bits)))
+        bench.start(0b10)
+        bench.run(len(bits) * BIT + 100)
+        self.assertEqual(received(bench.received[1]), [(good + crc_bytes(good), True)] * 24)
 
 
 def crc_bytes(data):
