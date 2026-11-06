@@ -178,7 +178,7 @@ class Chip:
         sm = self.sms[n]
         stopped = not self.en >> n & 1
         if addr == WRAP:
-            sm.wrap_bottom, sm.wrap_top = val & 0x3F, val >> 8 & 0x3F
+            sm.wrap_bottom, sm.wrap_top = val & 0xFF, val >> 8 & 0xFF
         elif addr == SIDESET:
             sm.side_set_count, sm.side_set_opt = val & 7, bool(val >> 3 & 1)
             sm.side_set_pindirs, sm.sideset_base = bool(val >> 4 & 1), val >> 8 & 15

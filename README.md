@@ -12,7 +12,7 @@ openPIO is a PIO built around one idea: **a serial protocol is a short program p
 
 | Layer | Decides | What it is |
 |-------|---------|------------|
-| **State machine (SM)** | *when* things happen | A tiny processor that runs a program of up to 64 instructions. Every instruction takes a known number of steps, so a program's timing can be read off its text: no caches, no waiting on shared buses. |
+| **State machine (SM)** | *when* things happen | A tiny processor that runs a program of up to 64 instructions, one of four it holds. Every instruction takes a known number of steps, so a program's timing can be read off its text: no caches, no waiting on shared buses. |
 | **PAU** (Protocol Acceleration Unit) | *how a bit looks on the wire* | An optional helper between the SM and the pins that does what software cannot do fast enough: line codes (NRZ, NRZI, Manchester, Miller, ...), bit stuffing, CRCs, recovering the clock from the data, an external bit clock, watching a shared bus for collisions. Each one is a setting, not a protocol. |
 
 A protocol is then a point in a small space of settings, plus a program for the rest. USB low speed, for example, is NRZI on two complementary pins, bit stuffing and a CRC-16 on the PAU, and a 19-instruction program that frames the packets.
@@ -30,7 +30,7 @@ The parts of each state machine ([ARCHITECTURE.md](ARCHITECTURE.md) explains eac
 
 | Block | Role |
 |-------|------|
-| Program memory | 64 instructions, loaded by the host |
+| Program memory | 256 instructions, four programs of up to 64, loaded by the host |
 | Clock divider | sets the step rate: one instruction per step, the step being any fraction of the 50 MHz clock |
 | X, Y and the ALU | two 16-bit registers for counters and simple math (add, subtract, and, or, xor, reverse bits) |
 | Conditions | four tests a jump can use: a pin, a flag, a register bit, a FIFO or PAU status |

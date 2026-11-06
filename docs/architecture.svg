@@ -116,7 +116,7 @@ text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 <text x="510" y="352" class="group" text-anchor="start">Core: executes your program</text>
 <rect x="510" y="366" width="135" height="66" rx="8" class="b"/>
 <text x="577.5" y="394.5" class="h" text-anchor="middle">Program</text>
-<text x="577.5" y="413.5" class="d" text-anchor="middle">64 instructions</text>
+<text x="577.5" y="413.5" class="d" text-anchor="middle">256 instructions</text>
 <rect x="660" y="366" width="130" height="66" rx="8" class="b"/>
 <text x="725.0" y="394.5" class="h" text-anchor="middle">Control</text>
 <text x="725.0" y="413.5" class="d" text-anchor="middle">decodes, steps</text>
