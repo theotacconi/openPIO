@@ -97,7 +97,7 @@ class LockstepChip(Chip):
             self.model_only = False
         r.tick()
         for i in range(n_sm):
-            a = im_addr >> 6 * i & 63
+            a = im_addr >> 8 * i & 0xFF
             if im_we >> i & 1:
                 self.imem[i][a] = im_wdata
             else:

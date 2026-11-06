@@ -23,7 +23,7 @@ from cocotb.triggers import ClockCycles, RisingEdge
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "sim" / "model"), str(ROOT / "test" / "shared")]
 from asm import assemble                                       # noqa: E402
-from chip import (CTRL, ID, OP_REG_RD, OP_REG_WR, OP_RX_POP, OP_TX_PUSH, PADS_BIDIR,  # noqa: E402
+from chip import (CTRL, ID, OP_IMEM_RD, OP_REG_RD, OP_REG_WR, OP_RX_POP, OP_TX_PUSH, PADS_BIDIR,  # noqa: E402
                   PC, STATUS, WRAP, Chip, header, sm_register)
 from devices import UartRx, UartTx                             # noqa: E402
 from host import Host                                          # noqa: E402
@@ -135,11 +135,35 @@ async def test_id_and_registers(dut):
     await board.load(1, "loop:\njmp loop")                      # SM 1 runs only words written
     await board.write(1, WRAP, 0x2A05, 0x0F1B)                 # WRAP, SIDESET
     assert await board.read(1, WRAP, 2) == [0x2A05, 0x0F1B]
-    assert await board.read(0, WRAP) == [0x3F00], "SM 0 untouched"
+    assert await board.read(0, WRAP) == [0xFF00], "SM 0 untouched"
     await board.write(0, CTRL, 0b10)                           # SM 1 runs: STATUS bit 5
     # the header's MISO is the STATUS of the previous transaction's SM
     assert (await board.spi(header(OP_REG_RD, 1, PC), [0]))[0] >> 5 & 1 == 0, "SM 0's"
     assert (await board.spi(header(OP_REG_RD, 1, STATUS), [0]))[0] >> 5 & 1 == 1, "SM 1's"
+
+
+@cocotb.test()
+async def test_pages(dut):
+    """Two programs in pages 0 and 3 of SM 0's IMEM: JMP and OUT PC stay in page 3, then the
+    host switches to page 0 without reloading it (ISA.md, Pages)."""
+    board = Board(dut)
+    await board.start()
+    table = (".y 1\n.start start\njmp even\njmp odd\nstart:\npull block\nmov x, osr\n"
+             "out pc, 1\neven:\nadd x, y\nodd:\nadd x, y\nmov isr, x\npush block\njmp start")
+    await board.load(0, ".wrap_target\npull block\nmov isr, osr\npush block\n.wrap")
+    await board.load(0, table, page=3)
+    assert (await board.spi(header(OP_IMEM_RD, 0), [0xC0, 0, 0]))[2:] == list(assemble(table))[:2]
+    await board.write(0, CTRL, 0b01)
+    await board.spi(header(OP_TX_PUSH, 0), [4, 5, 6, 7])
+    await ClockCycles(dut.clk, 300)
+    assert (await board.spi(header(OP_RX_POP, 0, 4), [0] * 4))[1:] == [6, 6, 8, 8], "page 3"
+    assert (await board.read(0, PC))[0] >> 6 == 3, "PC stayed in page 3"
+    await board.write(0, CTRL, 1 << 4)                         # stop, RESET
+    await board.write(0, WRAP, 0x0200)                         # the echo's wrap, PC 0
+    await board.write(0, CTRL, 0b01)
+    await board.spi(header(OP_TX_PUSH, 0), [4, 5])
+    await ClockCycles(dut.clk, 200)
+    assert (await board.spi(header(OP_RX_POP, 0, 2), [0] * 2))[1:] == [4, 5], "page 0: the echo"
 
 
 @cocotb.test()
