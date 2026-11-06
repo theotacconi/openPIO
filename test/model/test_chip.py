@@ -20,12 +20,63 @@ def load(chip, n, program, **cfg):
     Host(chip).load(n, program, **cfg)
 
 
+class Pages(unittest.TestCase):
+    """A 256-word IMEM in four pages of 64: JMP and OUT PC stay in their page, so a program runs
+    in any page unchanged; only the host moves PC to another page (ISA.md, JMP)."""
+
+    # a jump table (OUT PC to word 0 or 1) and a loop (JMP): w comes back as w + 2 - (w & 1)
+    TABLE = assemble(".y 1\n.start start\njmp even\njmp odd\nstart:\npull block\nmov x, osr\n"
+                     "out pc, 1\neven:\nadd x, y\nodd:\nadd x, y\nmov isr, x\npush block\njmp start")
+
+    def run_words(self, chip, words):
+        out = []
+        for w in words:
+            chip.tx_push(0, w)
+            for _ in range(60):
+                chip.step()
+                if (r := chip.sms[0].rx_read()) is not None:
+                    out.append(r)
+                    break
+        return out
+
+    def test_a_program_runs_in_every_page(self):
+        for page in range(4):
+            chip = Chip(2)
+            load(chip, 0, self.TABLE, page=page)
+            chip.reg_write(0, CTRL, 0b01)
+            self.assertEqual(self.run_words(chip, [4, 5, 6, 7]), [6, 6, 8, 8], f"page {page}")
+            pc = chip.reg_read(0, PC)
+            self.assertEqual(pc // 64, page, f"PC {pc:#x} left page {page}")
+            self.assertEqual(chip.reg_read(0, STATUS) >> 8, pc, "STATUS bits 15:8: the PC")
+
+    def test_the_host_switches_programs_by_pc(self):
+        chip = Chip(2)
+        host = Host(chip)
+        host.load(0, self.TABLE, page=3)
+        host.load(0, assemble(".wrap_target\npull block\nmov isr, osr\npush block\n.wrap"), page=1)
+        host.start(0b01)
+        self.assertEqual(self.run_words(chip, [8, 9]), [8, 9], "page 1: the echo")
+        host.start(0)
+        host.write(0, CTRL, 1 << 4)                            # RESET: no stall left behind
+        host.write(0, WRAP, 0xC9 << 8 | 0xC0)                  # TABLE's wrap and start in page 3
+        host.write(0, PC, 0xC2, 0, 1)                          # PC, X, Y: the registers are the SM's
+        host.start(0b01)
+        self.assertEqual(self.run_words(chip, [8, 9]), [10, 10], "page 3: the table, not reloaded")
+
+    def test_assembler_keeps_a_program_to_one_page(self):
+        from asm import AssemblerError
+        with self.assertRaises(AssemblerError):
+            assemble("nop\n" * 65)
+        with self.assertRaises(ValueError):
+            load(Chip(2), 0, self.TABLE, page=4)
+
+
 class HostInterface(unittest.TestCase):
 
     def test_reset_values_and_id(self):
         chip = Chip(2)
         regs = chip.spi(header(OP_REG_RD, 1, WRAP), [0] * 6)[1:]
-        self.assertEqual(regs, [0x3F00, 0, 0x5000, 0xFFFF, 0x0003, 0x0001])   # WRAP .. CLKDIV
+        self.assertEqual(regs, [0xFF00, 0, 0x5000, 0xFFFF, 0x0003, 0x0001])   # WRAP .. CLKDIV
         self.assertEqual(chip.reg_read(0, COND_CFG01), 0x6160)
         self.assertEqual(chip.reg_read(0, COND_CFG23), 0xE400)
         self.assertEqual(chip.reg_read(0, ID), 0x3250)
@@ -35,7 +86,7 @@ class HostInterface(unittest.TestCase):
         prog = assemble("pull block\nmov isr, osr\npush block")
         chip.spi(header(OP_IMEM_WR, 1), [0, *prog])        # the first word: the address
         self.assertEqual(chip.spi(header(OP_IMEM_RD, 1), [0] * 4)[2:], list(prog))
-        chip.spi(header(OP_IMEM_WR, 1), [0x0128, 0x1234])  # address 40: its low 6 bits
+        chip.spi(header(OP_IMEM_WR, 1), [0x0128, 0x1234])  # address 40: its low 8 bits
         self.assertEqual(chip.spi(header(OP_IMEM_RD, 1), [39, 0, 0])[2:], [0, 0x1234])
         chip.reg_write(1, WRAP, 2 << 8)
         chip.spi(header(OP_TX_PUSH, 1), [0x1111, 0x2222, 0x3333, 0x4444, 0x5555])

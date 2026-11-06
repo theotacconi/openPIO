@@ -1,6 +1,6 @@
 """asm.py - Assembler for the openPIO ISA v3 (ISA.md).
 
-Converts assembly text into 16-bit instruction words (max 64), plus the per-SM configuration
+Converts assembly text into 16-bit instruction words (max 64, one IMEM page), plus the per-SM configuration
 the program needs as Program.cfg: every register host.Host.load writes comes from the source.
 Configuration directives (a field not set keeps its reset value, HOST.md):
 
@@ -38,7 +38,8 @@ class AssemblerError(Exception):
         super().__init__(f"{prefix}{message}{context}")
 
 
-IMEM_WORDS = 64
+IMEM_WORDS = 256    # four pages of PAGE_WORDS
+PAGE_WORDS = 64     # a program: JMP and OUT PC stay in their page, so it runs in any page
 
 # Opcodes (bits [15:13]); JMP and ALU take two (bit 13 = target bit 5 / operation bit 2)
 OP_JMP = 0
@@ -479,8 +480,8 @@ def assemble(source_code: str) -> Program:
             code_part = m.group(2).strip()
         if not code_part:
             continue
-        if current_addr >= IMEM_WORDS:
-            raise AssemblerError(f"Program exceeds {IMEM_WORDS} instructions", line_num, raw_line)
+        if current_addr >= PAGE_WORDS:
+            raise AssemblerError(f"Program exceeds {PAGE_WORDS} instructions", line_num, raw_line)
         instructions.append((current_addr, code_part, line_num))
         current_addr += 1
 
@@ -520,8 +521,8 @@ def assemble(source_code: str) -> Program:
 
         def target_of(tok: str) -> int:
             t = labels[tok.lower()] if tok.lower() in labels else _parse_int(tok, line_num, clean)
-            if not 0 <= t < IMEM_WORDS:
-                raise AssemblerError(f"JMP target out of range (0-{IMEM_WORDS - 1}): {t}", line_num, clean)
+            if not 0 <= t < PAGE_WORDS:
+                raise AssemblerError(f"JMP target out of range (0-{PAGE_WORDS - 1}): {t}", line_num, clean)
             return t
 
         def jmp(cond_code: int, target: int) -> int:

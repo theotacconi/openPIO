@@ -11,7 +11,7 @@ the tests.
 openPIO rests on two ideas; everything else is the least that serves them.
 
 1. **A deterministic state machine.** Each state machine (SM) executes one 16-bit instruction per
-   strobe from its own 64-word memory; CLKDIV (16-bit integer, 8-bit fraction) makes every Nth
+   strobe from its own 256-word memory, four pages of 64; CLKDIV (16-bit integer, 8-bit fraction) makes every Nth
    clock a strobe. Every instruction takes a known number of strobes, and nothing on the SM's
    path waits for anything it cannot see: no cache, no shared bus, inputs through a fixed
    2-clock synchronizer. The timing of a program is a property of its text: it can be computed
@@ -90,12 +90,20 @@ indices 0..7 of the Conditions tables, bit i = index i.
  0   0   A | delay / side-set | C2  C1  C0 | A4  A3  A2  A1  A0
 ```
 
-Target = `{A, A4..A0}` (0..63). The condition is evaluated on the state before the instruction.
+Target = `{A, A4..A0}` (0..63), an address in the page of the JMP: PC = `{PC[7:6], A, A4..A0}`.
+The condition is evaluated on the state before the instruction.
+
+**Pages.** The IMEM holds 256 words, four pages of 64. JMP and OUT PC keep PC in its page, so
+a program (at most 64 words) runs unchanged in any page, and the IMEM holds four programs at
+once. Only the host moves PC to another page (HOST.md, PC): to switch programs it stops the
+SM, RESETs it, and writes PC and the program's configuration (the SM's registers are not per
+page). The next instruction after the last word of a page, without a JMP or wrap, is the first
+of the next page.
 
 | Code | Condition | Jumps when | Pair |
 |---|---|---|---|
 | `000` | always | always | always / far |
-| `001` | far | reserved: a NOP (delay and side-set apply); FAR of a larger, paged IMEM | |
+| `001` | far | reserved: a NOP (delay and side-set apply) | |
 | `010` | X-- | X != 0, then X = X - 1 | X-- / Y-- |
 | `011` | Y-- | Y != 0, then Y = Y - 1 | |
 | `100` | COND0 | programmable condition 0 is true | programmable, see Conditions |
@@ -118,7 +126,7 @@ In time order the bits of a `count`-bit value go from bit 0 up when shifting rig
   - Auto (autopush): then, if `isr_count >= push threshold`, pushes the ISR to the RX FIFO
     (ISR and count cleared); on a full RX FIFO it stalls until there is room, then pushes.
 - **OUT**: shifts `count` bits out of the OSR into the destination; `osr_count += count`
-  (max 16). OUT PC jumps to the low 6 bits. OUT PINS feeds the PAU TX queue instead of the
+  (max 16). OUT PC jumps to the low 6 bits, in the page of the OUT (`{PC[7:6], value[5:0]}`). OUT PINS feeds the PAU TX queue instead of the
   pins while the PAU transmitter is on.
   - Auto (autopull): if `osr_count >= pull threshold` when the OUT issues, it stalls until the
     TX FIFO has a word, loads it into the OSR (count cleared) and issues again on the next
@@ -556,6 +564,14 @@ the shift counts. A program carries all of it as assembler directives (`sim/mode
 - **PAU receiver timing needs H >= 2** for transition codes (half-bits taken H / 2 after their start).
 
 ## History
+
+### Changes on 8x4 tiles
+
+Decided by the user on 2026-11-06, with the tiles grown to 8x4: the 256-word IMEM in four pages
+of 64. JMP and OUT PC stay in their page, so every program runs in any page unchanged and the
+host switches between four resident programs by writing PC; JMP condition `001` stays reserved
+(a NOP) instead of FAR. PC, WRAP and the IMEM address are 8 bits (HOST.md: WRAP [7:0] / [15:8],
+PC [7:0], STATUS [15:8], IMEM_WR / IMEM_RD addresses 0..255).
 
 ### Changes from ISA v2
 

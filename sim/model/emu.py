@@ -16,7 +16,7 @@ from typing import Sequence
 import asm
 from asm import (
     CS_GPIO, CS_INBASE, CS_IRQ, CS_PEER, CS_STATUS, CS_XBIT, CS_YBIT,
-    COND_RESET, CT_FIFO, CT_IRQ, CT_PAU, CT_WAIT, IMEM_WORDS,
+    COND_RESET, CT_FIFO, CT_IRQ, CT_PAU, CT_WAIT, IMEM_WORDS, PAGE_WORDS,
     JC_ALWAYS, JC_FAR, JC_XDEC, JC_YDEC,
     OP_ALU, OP_CTRL, OP_IN, OP_JMP, OP_OUT,
     R_ISR, R_OSR, R_PINDIRS, R_PINS, R_SPECIAL, R_X, R_Y,
@@ -275,15 +275,18 @@ class StateMachine:
         return pad_outputs(self.bus, [self])[0]
 
     def load_program(self, program: Sequence[int], origin: int = 0) -> None:
-        """Load instruction words and the configuration an asm.Program sets (its cfg; start, X
-        and Y are for the host to preset after RESET)."""
+        """Load instruction words from address `origin` (a page's first, for a program that
+        runs there) and the configuration an asm.Program sets, its wrap moved with it (its cfg;
+        start, X and Y are for the host to preset after RESET)."""
         for i, word in enumerate(program):
             if origin + i < IMEM_WORDS:
                 self.memory[origin + i] = word & 0xFFFF
         names = {"clkdiv_int": "clkdiv_cfg_int", "clkdiv_frac": "clkdiv_cfg_frac"}
         for key, val in getattr(program, "cfg", {}).items():
-            if key in ("start", "x", "y") or origin and key in ("wrap_bottom", "wrap_top"):
+            if key in ("start", "x", "y"):
                 continue
+            if key in ("wrap_bottom", "wrap_top"):
+                val += origin
             setattr(self, names.get(key, key), list(val) if key == "cond_cfg" else val)
 
     def reset(self, pc: int = 0) -> None:
@@ -911,7 +914,7 @@ class StateMachine:
             else:
                 taken = bool(self._cond_value(cond - 4))
             if taken:
-                next_pc = target
+                next_pc = self.pc & -PAGE_WORDS | target        # in the page of the JMP
 
         elif opcode == OP_IN:
             src, auto = (args >> 5) & 7, (args >> 4) & 1
@@ -979,8 +982,8 @@ class StateMachine:
                 self.isr, self.isr_count = val, count
             elif dest == R_OSR:                         # PAU_BAUD
                 self.pau_baud = val & 0x1F
-            elif dest == R_SPECIAL:
-                next_pc = val % IMEM_WORDS
+            elif dest == R_SPECIAL:                     # in the page of the OUT
+                next_pc = self.pc & -PAGE_WORDS | val % PAGE_WORDS
 
         elif opcode >> 1 == OP_ALU >> 1:
             op = ((opcode & 1) << 2) | ((args >> 3) & 3)

@@ -138,7 +138,8 @@ settings the host writes.
 
 A state machine (SM) is a very small processor. It has:
 
-- its own **program memory** of 64 instructions, written by the host;
+- its own **program memory** of 256 instructions, four pages of 64: up to four programs, one
+  running, written by the host;
 - a **clock divider** that sets how fast it runs;
 - two working registers, **X** and **Y**, and a small calculator, the **ALU**;
 - four **conditions**, tests it can jump or wait on;
