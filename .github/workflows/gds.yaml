@@ -17,6 +17,8 @@ on:
       - 'scripts/tt_signoff.py'
       - 'librelane_plugin_openpio_pdn.py'
       - 'odb_stripes.py'
+      - 'librelane_plugin_openpio_place.py'
+      - 'odb_seed.py'
   workflow_dispatch:
 
 jobs:

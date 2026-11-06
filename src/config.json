@@ -117,7 +117,10 @@
   "PDN_CFG": "dir::pdn_cfg.tcl",
   "meta": {
     "flow": "Classic",
-    "substituting_steps": { "+OpenROAD.GeneratePDN": "Project.ExtendPowerStripes" }
+    "substituting_steps": {
+      "+OpenROAD.GeneratePDN": "Project.ExtendPowerStripes",
+      "-OpenROAD.GlobalPlacement*": "Project.SeedPlacement"
+    }
   },
 
   "//": "GeneratePDN checks the grid before ExtendPowerStripes connects the SRAM: it always counts",
@@ -137,12 +140,15 @@
   "//": "test_fifo_echo; reproduced on a 4-line module). Off for the whole design.",
   "SYNTH_ARITH_TREE": false,
 
-  "//": "Global placement on 6x4 has two outcomes: each SM's logic beside its own SRAMs (HPWL ~1.55M,",
-  "//": "global route 56 %, 0 overflows), or the two SMs crossed, SM0 drawn right and SM1 across the",
-  "//": "top (HPWL ~1.8M, 77 %, ~6000 overflows, a 6 h run). Which one depends on the netlist: one",
-  "//": "flip-flop per SM (pau.v's registered bit clock) moved AREA 0 to the crossed one. AREA 2 places",
-  "//": "it uncrossed at densities 51, 53 and 55 (AREA 0, 1, 3 and densities 50-58 do not).",
+  "//": "Global placement on 6x4 has two outcomes: each SM's logic beside its own SRAMs (HPWL ~1.5M,",
+  "//": "global route ~55 %, 0 overflows), or the two SMs crossed, SM0 drawn right and SM1 across the",
+  "//": "top (HPWL ~1.8M, 77 %, ~6000 overflows, a 6 h run). The initial placement picks one by chance:",
+  "//": "one flip-flop per SM moved AREA 0 to the crossed one. Project.SeedPlacement",
+  "//": "(librelane_plugin_openpio_place.py, odb_seed.py) starts each SM's cells in its own half,",
+  "//": "and the placement skips its initial one: uncrossed with AREA 0 and AREA 2 on this RTL and",
+  "//": "the one before it. AREA 2: 0 overflows on both (AREA 0: 8 on this one).",
   "SYNTH_STRATEGY": "AREA 2",
+  "PL_SKIP_INITIAL_PLACEMENT": true,
 
   "//": "RUN_LINTER, LINTER_INCLUDE_PDK_MODELS - Disabling the linter is not recommended!",
   "RUN_LINTER": 1,
