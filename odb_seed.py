@@ -1,6 +1,6 @@
 # Seed global placement: each SM's cells start in the middle of its own column of the core.
 #
-# On 6x4 the global placement has two outcomes, decided by its initial (quadratic) placement:
+# On 6x4 the global placement had two outcomes, decided by its initial (quadratic) placement:
 # each SM's logic beside its own SRAMs, or the two SMs crossed (SM0 drawn right, SM1 across the
 # top), which does not route. Which one a netlist lands on is chance. This script, run by
 # Project.SeedPlacement (librelane_plugin_openpio_place.py) before each global placement, puts
