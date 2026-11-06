@@ -14,7 +14,7 @@ module top_tb (
     output wire        h_valid,
     output wire [2:0]  h_op,
     output wire [1:0]  h_sm,
-    output wire [5:0]  h_addr,
+    output wire [7:0]  h_addr,
     output wire [15:0] h_wdata
 );
 
