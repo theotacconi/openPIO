@@ -137,6 +137,13 @@
   "//": "test_fifo_echo; reproduced on a 4-line module). Off for the whole design.",
   "SYNTH_ARITH_TREE": false,
 
+  "//": "Global placement on 6x4 has two outcomes: each SM's logic beside its own SRAMs (HPWL ~1.55M,",
+  "//": "global route 56 %, 0 overflows), or the two SMs crossed, SM0 drawn right and SM1 across the",
+  "//": "top (HPWL ~1.8M, 77 %, ~6000 overflows, a 6 h run). Which one depends on the netlist: one",
+  "//": "flip-flop per SM (pau.v's registered bit clock) moved AREA 0 to the crossed one. AREA 2 places",
+  "//": "it uncrossed at densities 51, 53 and 55 (AREA 0, 1, 3 and densities 50-58 do not).",
+  "SYNTH_STRATEGY": "AREA 2",
+
   "//": "RUN_LINTER, LINTER_INCLUDE_PDK_MODELS - Disabling the linter is not recommended!",
   "RUN_LINTER": 1,
   "LINTER_INCLUDE_PDK_MODELS": 1,
