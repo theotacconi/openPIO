@@ -26,6 +26,8 @@ host.push(0, b"hello")
   other (below).
 - `listen.py`: from a logic analyzer's recording to a receiver on the board (below).
 - `test_board.py`: the three on the model, without hardware.
+- `captures/`: logic analyzer recordings of the Tang Nano build, what the learner finds in each
+  (`test/learn/test_captures.py`).
 
 ## Wiring: Pico to Tang Nano 20K
 

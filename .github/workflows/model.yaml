@@ -8,6 +8,7 @@ on:
       - 'sim/model/**'
       - 'sim/learn/**'
       - 'test/learn/**'
+      - 'board/**'
       - 'test/model/**'
       - 'test/shared/**'
       - 'programs/**'
@@ -31,6 +32,7 @@ jobs:
           for t in test/model/test_*.py; do python3 "$t"; done
           (cd test/shared && python3 test_devices.py)
           python3 test/learn/test_learn.py
+          python3 test/learn/test_captures.py
           python3 board/test_board.py
 
       - name: Protocol programs and their table
