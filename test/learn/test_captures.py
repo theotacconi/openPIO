@@ -2,6 +2,7 @@
 Tang Nano 20K build (board/captures/README.md). What each one must be learned as, without a
 board or sigrok."""
 
+import random
 import sys
 import unittest
 from pathlib import Path
@@ -63,6 +64,22 @@ class Captures(unittest.TestCase):
         self.assertEqual([k[2] for k in keys], [0x45, 0x46, 0x47, 0x16, 0x0D, 0x1C, 0x08, 0x5A,
                                                 0x19, 0x1C])
         self.assertTrue(all(a == 0 and b == 0xFF and c ^ d == 0xFF for a, b, c, d in keys))
+
+    def test_ws2812(self):
+        """ws2812.asm on pio 1 to a ring of 12 LEDs, random colours (each 0..23, G R B) every
+        40 ms, sampled at 24 MHz (the times in samples): pulse width, idle low, a long mark a 1.
+        The frames recorded are a run of the colours sent."""
+        p = infer_pulses(Capture.from_sigrok(CAPTURES / "ws2812_random.sr", 24e6)["D0"])
+        self.assertEqual((p.carrier, p.idle, p.one, p.crc), ("mark", 0, 1, None))
+        self.assertEqual((round(p.short), round(p.long)), (9, 21))         # 375, 875 ns
+        rnd = random.Random(5)
+        sent = [[c for _ in range(12) for c in (rnd.randrange(24) for _ in range(3))]
+                for _ in range(120)]
+        sent = [[led[k] for i in range(0, 36, 3) for led in [f[i:i + 3]] for k in (1, 0, 2)]
+                for f in sent]                                            # R G B -> G R B
+        got = [[word_msb(f[k:k + 8]) for k in range(0, 288, 8)] for f in p.frames]
+        start = sent.index(got[0])
+        self.assertEqual(got, sent[start:start + len(got)])
 
 
 if __name__ == "__main__":
