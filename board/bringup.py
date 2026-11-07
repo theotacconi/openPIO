@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """bringup.py - First checks of a chip (or the FPGA build) through the Pico bridge, wire by
-wire: the SPI lines, registers, program memory, FIFOs, HOST_IRQ, then a UART on pin 0 read
+wire: the SPI lines, registers, program memory (all four pages), FIFOs, HOST_IRQ, then a UART on pin 0 read
 back by the other SM. No wires besides the bridge's.
 
     python3 board/bringup.py                  # the Pico on /dev/ttyACM0
@@ -18,7 +18,7 @@ from pathlib import Path
 from board import Board, Model, Serial
 
 ROOT = Path(__file__).resolve().parents[1]
-from asm import assemble                                 # noqa: E402  (board put it on the path)
+from asm import IMEM_WORDS, assemble                     # noqa: E402  (board put it on the path)
 from chip import (CRC_POLY_LO, CTRL, FIFO_LEVEL, ID, IRQ, ISA_VERSION, OP_IMEM_RD,   # noqa: E402
                   OP_IMEM_WR, PADS_BIDIR, TT_PADS, header)
 from host import Host                                    # noqa: E402
@@ -59,10 +59,10 @@ def check_lines(board: Board, host: Host) -> str | None:
 def check_imem(board: Board, host: Host) -> str | None:
     rng = random.Random(1)
     for n in (0, 1):
-        words = [rng.randrange(1 << 16) for _ in range(64)]
+        words = [rng.randrange(1 << 16) for _ in range(IMEM_WORDS)]
         board.spi(header(OP_IMEM_WR, n), [0, *words])
-        got = board.spi(header(OP_IMEM_RD, n), [0] * 65)[2:]
-        bad = [a for a in range(64) if got[a] != words[a]]
+        got = board.spi(header(OP_IMEM_RD, n), [0] * (IMEM_WORDS + 1))[2:]
+        bad = [a for a in range(IMEM_WORDS) if got[a] != words[a]]
         if bad:
             a = bad[0]
             return f"SM {n}: {len(bad)} words differ, at {a}: {words[a]:#06x} -> {got[a]:#06x}"
@@ -82,19 +82,24 @@ def check_irq(board: Board, host: Host) -> str | None:
 
 
 def check_echo(board: Board, host: Host) -> str | None:
-    """100 words through both FIFOs of SM 0 and its program."""
-    host.load(0, assemble(ECHO))
-    host.start(0b01)
+    """100 words through both FIFOs of SM 0 and its program, 25 from each IMEM page: the other
+    pages hold `jmp 0` (word 0), which loops in its page and echoes nothing."""
     rng = random.Random(2)
-    words = [rng.randrange(1 << 16) for _ in range(100)]
-    host.push(0, words)
-    if not wait_rx(host, 0, len(words)):
-        return f"RX FIFO holds {host.read(0, FIFO_LEVEL)[0] >> 8} words of {len(words)}"
-    got = host.pop(0, len(words))
-    bad = [i for i in range(len(words)) if got[i] != words[i]]
-    if bad:
-        i = bad[0]
-        return f"{len(bad)} words differ, word {i}: sent {words[i]:#06x}, got {got[i]:#06x}"
+    for page in range(4):
+        host.write(0, CTRL, 0x10)                          # stop and reset SM 0
+        board.spi(header(OP_IMEM_WR, 0), [0] + [0] * IMEM_WORDS)
+        host.load(0, assemble(ECHO), page=page)
+        host.start(0b01)
+        words = [rng.randrange(1 << 16) for _ in range(25)]
+        host.push(0, words)
+        if not wait_rx(host, 0, len(words)):
+            return f"page {page}: RX FIFO holds {host.read(0, FIFO_LEVEL)[0] >> 8} words of {len(words)}"
+        got = host.pop(0, len(words))
+        bad = [i for i in range(len(words)) if got[i] != words[i]]
+        if bad:
+            i = bad[0]
+            return (f"page {page}: {len(bad)} words differ, word {i}: sent {words[i]:#06x}, "
+                    f"got {got[i]:#06x}")
     return None
 
 
