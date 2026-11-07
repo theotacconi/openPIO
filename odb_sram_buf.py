@@ -6,8 +6,8 @@
 # drawn it: on 8x4 four A_DOUT nets ended at 0.064-0.084 pF, and a smaller repair margin or a
 # shorter maximum wire only moved the violations. A buffer at the pin leaves A_DOUT a few
 # microns of wire and one input. Run by Project.BufferSramOutputs
-# (librelane_plugin_openpio_place.py) after global placement; the new nets and instances are
-# named sram_dout_*, and RSZ_DONT_TOUCH_RX keeps the resizer from removing or resizing them.
+# (librelane_plugin_openpio_place.py) after global placement; the new nets are named sram_dout_*,
+# the buffers sram_dout_buf_*, and RSZ_DONT_TOUCH_RX keeps the resizer from removing or resizing them.
 # Detailed placement then legalizes the buffers next to the pins.
 import re
 
@@ -50,9 +50,9 @@ def buffer(reader, macro_rx, pin_rx, cell):
             site = row.getSpacing()
             x0 = row.getBBox().xMin()
             x = x0 + (pin.xMin() - x0) // site * site
-            name = "sram_dout_" + re.sub(r"\W+", "_", f"{inst.getName()}_{it.getMTerm().getName()}").strip("_")
-            buf = odb.dbInst.create(block, master, name)
-            new = odb.dbNet.create(block, name)
+            name = re.sub(r"\W+", "_", f"{inst.getName()}_{it.getMTerm().getName()}").strip("_")
+            buf = odb.dbInst.create(block, master, "sram_dout_buf_" + name)   # Verilog: an instance
+            new = odb.dbNet.create(block, "sram_dout_" + name)               # and a net, two names
             new.setSigType("SIGNAL")
             it.disconnect()
             it.connect(new)
