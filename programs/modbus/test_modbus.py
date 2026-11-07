@@ -2,7 +2,9 @@
 """Modbus RTU receiver fed by the reference UART transmitter: frames of 11-bit characters at
 9600 baud from a 50 MHz clock (CLKDIV 651 + 11 / 256), ended by 3.5 characters of silence; gaps
 of 1.5 characters inside a frame; CRC-16/MODBUS checked on the chip (good and corrupted frames);
-a transmitter 2 % fast or slow; a framing error."""
+a transmitter 2 % fast or slow; a framing error. A slave on two SMs: the receiver releases the
+transmitter on the peer SM through its IRQ (irq clear peer), so a reply the host queued before the
+request arrived goes out after the request's 3.5 characters of silence, with DE around it."""
 import random
 import sys
 import unittest
@@ -11,9 +13,10 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[1] / "test" / "shared"))
 from bench import Bench                                  # noqa: E402
-from devices import UartTx, crc16_modbus                 # noqa: E402
+from devices import UartRx, UartTx, crc16_modbus         # noqa: E402
 
-RX = 0
+RX, TX, DE = 0, 1, 2       # RS-485 transceiver: RO, DI, DE
+CHAR = 11 * 32              # clocks a character at CLKDIV 4
 GOOD, BAD = 0x0001, 0x0003
 
 
@@ -72,6 +75,61 @@ class ModbusRx(unittest.TestCase):
         frame = adu(0x01, 0x05, 0x00, 0x13, 0xFF, 0x00)
         bench, got = run([frame], stop_low={2})
         self.assertTrue(bench.chip.sms[0].irq_flags[0])
+
+
+def slave(requests, replies):
+    """The master sends the requests, each followed by 16 characters of silence (room for the
+    reply); the host queued every reply (N, then the bytes) before the first request."""
+    data, gaps = [], []
+    for f in requests:
+        data += f
+        gaps += [0] * (len(f) - 1) + [16 * 11]
+    bench = Bench(pullups=1 << RX | 1 << TX)
+    bench.load(0, (HERE / "modbus_rx.asm").read_text(), clkdiv_int=4)
+    bench.load(1, (HERE / "modbus_tx.asm").read_text(), clkdiv_int=4)
+    bench.send(1, [w for r in replies for w in [len(r)] + r])
+    master = bench.add(UartTx(RX, 32, data, start=80, gap=gaps, stop_bits=2))
+    reply = bench.add(UartRx(TX, 32, stop_bits=2))
+    bench.start(0b11)
+    bench.run(master.end)
+    ends = []                                              # each request's last stop bit ends
+    t = 80
+    for f in requests:
+        t += len(f) * CHAR
+        ends.append(t)
+        t += 16 * CHAR
+    return bench, reply, ends
+
+
+class ModbusSlave(unittest.TestCase):
+
+    def test_reply_after_the_request(self):
+        request = adu(0x11, 0x03, 0x00, 0x6B, 0x00, 0x01)
+        answer = adu(0x11, 0x03, 0x02, 0x12, 0x34)
+        bench, reply, (end,) = slave([request], [answer])
+        self.assertEqual(bench.received[0], words(request, GOOD))
+        self.assertEqual(reply.frames, answer)
+        self.assertEqual(bench.errors(), [])
+        start = next(t for t, lv in bench.edges(TX) if lv == 0)
+        self.assertGreaterEqual(start - end, 3.5 * CHAR)  # the silence, though queued long before
+        self.assertLess(start - end, 4 * CHAR)
+        de = bench.runs(DE)                                # DE high only around the reply
+        self.assertEqual([lv for lv, _ in de], [0, 1, 0])
+        on, off = de[0][1], de[0][1] + de[1][1]
+        self.assertLess(on, start)
+        self.assertGreaterEqual(off, start + len(answer) * CHAR)
+        self.assertLess(off, start + len(answer) * CHAR + 32)
+
+    def test_no_reply_then_reply(self):
+        other = adu(0x22, 0x03, 0x00, 0x00, 0x00, 0x01)    # for another slave: N = 0
+        request = adu(0x11, 0x06, 0x00, 0x01, 0x00, 0x03)
+        bench, reply, ends = slave([other, request], [[], request])     # a write echoes it
+        self.assertEqual(bench.received[0], words(other, GOOD) + words(request, GOOD))
+        self.assertEqual(reply.frames, request)
+        self.assertEqual(bench.errors(), [])
+        start = next(t for t, lv in bench.edges(TX) if lv == 0)
+        self.assertGreaterEqual(start - ends[1], 3.5 * CHAR)
+        self.assertEqual([lv for lv, _ in bench.runs(DE)], [0, 1, 0])
 
 
 if __name__ == "__main__":
