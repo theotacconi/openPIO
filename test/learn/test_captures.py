@@ -86,6 +86,20 @@ class Captures(unittest.TestCase):
         start = sent.index(got[0])
         self.assertEqual(got, sent[start:start + len(got)])
 
+    def test_ws2812_comet(self):
+        """A comet going round the ring every 40 ms (DEMO.md): 23 frames, but only 12 kinds,
+        each a rotation of the others by whole LEDs. No CRC: a CRC-15 that divides x^288 + 1
+        fits every rotation of a frame it fits, and the rotations are no evidence."""
+        p = infer_pulses(Capture.from_sigrok(CAPTURES / "ws2812_comet.sr", 24e6)["D0"])
+        self.assertEqual((p.carrier, p.idle, p.one, p.crc), ("mark", 0, 1, None))
+        self.assertEqual(len(p.frames), 23)
+        leds = [[word_msb(f[k:k + 24]) for k in range(0, 288, 24)] for f in p.frames]
+        tail = [0x010406, 0x02080C, 0x041018, 0x082030]           # G R B, the dimmest first
+        for ring in leds:
+            k = ring.index(tail[-1])
+            self.assertEqual([ring[(k - 3 + i) % 12] for i in range(4)], tail)
+            self.assertEqual(sum(1 for c in ring if c), 4)
+
 
 if __name__ == "__main__":
     unittest.main()

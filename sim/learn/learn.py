@@ -683,13 +683,27 @@ def frames_crc(frames: list[list[int]], spares=(0, 1)) -> Crc | None:
     24 after, ending up to 3 bits before the bits they all end with; believed from EVIDENCE.
     When none is, a CRC all of them but one end with, believed from the others: a frame the
     line corrupted (a reflection, a key half pressed) does not hide the CRC of the rest.
-    `spares`: the frames left out to try, in order."""
+    `spares`: the frames left out to try, in order. A frame of 32 bits or more that is a
+    rotation of another (the same, or a pattern going round a LED ring) is no evidence: a
+    polynomial that divides x^n + 1 divides every rotation of a frame of n bits it divides,
+    and random frames that long are rotations of each other about once in 2^27. Shorter
+    frames are, by chance (an 11-bit PS/2 byte), and each is counted."""
     sync, end = common_prefix(frames), common_suffix(frames)
+    kinds = len({rotation_class(f) for f in frames})
     for spare in spares if len(frames) > 2 else (0,):
         crc = find_crc(frames, range(max(0, sync - 16), sync + 25), range(end + 4), spare)
-        if crc and crc.width * (len(frames) - 1 - spare) >= EVIDENCE:
+        if crc and crc.width * (kinds - 1 - spare) >= EVIDENCE:
             return crc
     return None
+
+
+def rotation_class(bits: list[int]) -> tuple[int, ...] | int:
+    """The least of the rotations of 32 bits or more: the same for a frame and its rotations;
+    a shorter frame is a class of its own."""
+    if len(bits) < 32:
+        return id(bits)
+    s = "".join(map(str, bits))
+    return tuple(map(int, min(s[k:] + s[:k] for k in range(len(s)))))
 
 
 def _structure(h: float, name: str, inv: int, align: int, raw: list[list[int]],
