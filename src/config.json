@@ -108,7 +108,8 @@
     "flow": "Classic",
     "substituting_steps": {
       "+OpenROAD.GeneratePDN": "Project.ExtendPowerStripes",
-      "-OpenROAD.GlobalPlacement*": "Project.SeedPlacement"
+      "-OpenROAD.GlobalPlacement*": "Project.SeedPlacement",
+      "+OpenROAD.GlobalPlacement": "Project.BufferSramOutputs"
     }
   },
 
@@ -137,6 +138,13 @@
   "//": "and the placement skips its initial one: uncrossed with AREA 0 and AREA 2 on this RTL and",
   "//": "the one before it. AREA 2: 0 overflows on both (AREA 0: 8 on this one).",
   "SYNTH_STRATEGY": "AREA 2",
+
+  "//": "SRAM data outputs: A_DOUT's max capacitance is 0.064 pF, and the repair sees it only through",
+  "//": "placement and global-route estimates, about half the routed capacitance: on 8x4 four A_DOUT",
+  "//": "nets ended at 0.064-0.084 pF, and a repair cap margin of 30 or 20 % or a maximum wire of",
+  "//": "150 um only moved the violations. Project.BufferSramOutputs (odb_sram_buf.py) puts a buffer",
+  "//": "in the first row past each A_DOUT pin; the resizer leaves those nets and buffers alone.",
+  "RSZ_DONT_TOUCH_RX": "^sram_dout_",
   "PL_SKIP_INITIAL_PLACEMENT": true,
 
   "//": "RUN_LINTER, LINTER_INCLUDE_PDK_MODELS - Disabling the linter is not recommended!",
