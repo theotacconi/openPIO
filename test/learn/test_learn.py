@@ -610,6 +610,20 @@ class LearnPulses(unittest.TestCase):
         got = self.receive(p, script, end)
         self.assertEqual([v for _, v in got], [1])
 
+    def test_nec_more_repeats_than_frames(self):
+        """A remote that sends a repeat code even after a short press, two after a longer one:
+        the frames are fewer than the repeat codes but hold more pulses, and are the ones
+        learned."""
+        rnd = random.Random(28)
+        frames = [(0x00, rnd.randrange(256)) for _ in range(5)]
+        sent = [x for f in frames for x in (f, "repeat", "repeat")]
+        bench = Bench()
+        remote = bench.add(NecRemote(PIN, sent, us=0.2, start=100, gap=40000))
+        bench.run(remote.end + 100)
+        p = infer_pulses(Capture.from_levels(bench.trace, PIN))
+        self.assertEqual((p.carrier, p.ignored), ("space", 10))
+        self.assertEqual(p.frames, [bits([a, a ^ 0xFF, c, c ^ 0xFF]) for a, c in frames])
+
     def test_nec_one_key_corrupted(self):
         """Ten keys, a bit of the fourth flipped (a reflection): the check is learned from the
         other nine, and a frame received with that bit flipped is still found wrong."""

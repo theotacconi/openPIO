@@ -1168,7 +1168,8 @@ def infer_pulses(cap: Capture) -> Pulses:
     largest ratio between two widths of the idle level. Widths fall in groups (a mark's and a
     space's apart); a group is the bits' when a frame holds two pulses of it, and the leader is
     a frame's pulses before the first such, a mark and a space each. The frames of the leader
-    most of them have are the ones learned. Their marks or spaces have two widths, the others
+    whose frames hold the most pulses
+    after it are the ones learned (not a remote's repeat codes, though more of them). Their marks or spaces have two widths, the others
     one (or the complement: a long mark and a short space, a short mark and a long space)."""
     ws = cap.widths()
     if len(ws) < 8:
@@ -1206,7 +1207,8 @@ def infer_pulses(cap: Capture) -> Pulses:
     for f, cs in zip(frames, cls):
         n = next((k for k, c in enumerate(cs) if c in bit), len(f))
         kinds.setdefault(tuple(cs[:n + (n & 1)]), []).append(f)
-    key, main = max(kinds.items(), key=lambda kv: (len(kv[1]), sum(map(len, kv[1]))))
+    key, main = max(kinds.items(),                      # the most pulses past the leader
+                    key=lambda kv: (sum(len(f) - len(kv[0]) for f in kv[1]), len(kv[1])))
     n = len(key)
     body = [f[n:] for f in main]
     if not all(body):
