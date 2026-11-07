@@ -44,14 +44,19 @@ class Captures(unittest.TestCase):
         self.assertEqual(got, texts)
 
     def test_bridge_spi(self):
-        """The Pico's SPI to the chip during bringup.py, sampled at 12 MHz (the times in
-        samples): mode 0, framed by CS_N low, 1 MHz."""
-        c = Capture.from_sigrok(CAPTURES / "bridge_spi.sr", 12e6)
-        p = infer_clocked({k: c[k] for k in ("D0", "D1", "D2")})[0]
-        self.assertEqual((p.clock, p.data, p.select, p.cpol, p.cpha), ("D0", "D1", ("D2", 0), 0, 0))
-        self.assertEqual(p.period, 12)
-        self.assertEqual(len(p.frames), 55)
-        self.assertEqual([word_msb(p.frames[1][k:k + 16]) for k in (0, 16)], [0x4020, 0x0010])
+        """The Pico's SPI to the chip during bringup.py, sampled at 12 MHz: mode 0, framed by
+        CS_N low, 1 MHz. In samples, and in clocks of 27 MHz, where a sample is 2.25 clocks and
+        a data edge a sample before the clock's comes 2 or 3 clocks before it."""
+        for hz in (12e6, 27e6):
+            with self.subTest(hz=hz):
+                c = Capture.from_sigrok(CAPTURES / "bridge_spi.sr", hz)
+                p = infer_clocked({k: c[k] for k in ("D0", "D1", "D2")})[0]
+                self.assertEqual((p.clock, p.data, p.select, p.cpol, p.cpha),
+                                 ("D0", "D1", ("D2", 0), 0, 0))
+                self.assertEqual(p.period, hz / 1e6)
+                self.assertEqual(len(p.frames), 55)
+                self.assertEqual([word_msb(p.frames[1][k:k + 16]) for k in (0, 16)],
+                                 [0x4020, 0x0010])
 
     def test_nec_remote(self):
         """A NEC remote at a KY-022: ten keys, a repeat code after each and more on a held one

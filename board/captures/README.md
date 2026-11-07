@@ -30,8 +30,7 @@ The HDLC frames:
 python3 board/listen.py board/captures/hdlc_9600.sr --channel D0 --kind frames --program
 ```
 
-The bridge's SPI. `--clock-hz` is the sample rate here, so the times stay whole samples. At
-27e6 the learner finds no data pin.
+The bridge's SPI:
 
 ```
 python3 board/listen.py board/captures/bridge_spi.sr --channel D1 --clock-channel D0 \

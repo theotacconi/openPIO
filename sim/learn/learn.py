@@ -946,18 +946,21 @@ def infer_clocked(caps: dict[int, Capture], gap: float = 10) -> list[Clocked]:
     (pauses), tried from the longest: a PS/2 device's bytes come 3 clock periods apart. A data
     pin changes, between a frame's first and last
     clock edges, while the clock is at one level, always the same: the sampling edge ends it.
-    A data edge within a quarter of the clock's shortest half from a clock edge counts as
+    A data edge within a quarter of the clock's typical half (the median width: a recording's
+    times rounded to the chip's clock make the shortest one short) from a clock edge counts as
     after it (the shift edge, whichever side the recording shows the data on)."""
     clock = max(caps, key=lambda k: len(caps[k].edges))
     widths = caps[clock].widths()
     if len(widths) < 2:
         raise ValueError("no clock: too few edges")
     half = min(widths)
+    near_by = sorted(widths)[len(widths) // 2] / 4     # a data edge this near a clock edge
     error = ValueError("no pin changes while the clock is at one level")
     for cut in [gap * half] + pauses(widths, half, gap * half):
         a, b = caps[clock].settled(cut)              # not a frame the recording may have cut
         try:
-            out = _clocked({k: c.window(a, b) for k, c in caps.items()}, clock, half, cut)
+            out = _clocked({k: c.window(a, b) for k, c in caps.items()}, clock, half, near_by,
+                           cut)
         except ValueError as e:
             error = e
             continue
@@ -966,7 +969,8 @@ def infer_clocked(caps: dict[int, Capture], gap: float = 10) -> list[Clocked]:
     raise error
 
 
-def _clocked(caps: dict[int, Capture], clock: int, half: int, cut: float) -> list[Clocked]:
+def _clocked(caps: dict[int, Capture], clock: int, half: int, near_by: float,
+             cut: float) -> list[Clocked]:
     """infer_clocked() with clock bursts apart by more than `cut`: [] when no pin is data."""
     clk = caps[clock]
     bs = [(e[0], e[-1]) for _, e in bursts(clk, cut) if len(e) > 1]
@@ -999,7 +1003,7 @@ def _clocked(caps: dict[int, Capture], clock: int, half: int, cut: float) -> lis
             if inside(t):
                 i = bisect.bisect_left(clk.edges, t)
                 e = min(clk.edges[max(0, i - 1):i + 1], key=lambda x: abs(x - t))
-                near.add(clk.level_at(e if abs(e - t) <= half / 4 else t))
+                near.add(clk.level_at(e if abs(e - t) <= near_by else t))
         if len(near) != 1:
             continue                          # not data on this clock
         rising = near.pop() == 0              # data changes while the clock is low: sampled rising
