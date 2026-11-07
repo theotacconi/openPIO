@@ -6,13 +6,14 @@ its own column of the core. src/config.json inserts it before both global placem
 pattern matches OpenROAD.GlobalPlacementSkipIO and OpenROAD.GlobalPlacement) and sets
 PL_SKIP_INITIAL_PLACEMENT, so the placement starts from the seed.
 
-Project.BufferSramOutputs runs odb_sram_buf.py after the global placement: a buffer at every
-SRAM data output, so A_DOUT keeps under its max capacitance. RSZ_DONT_TOUCH_RX (^sram_dout_)
-keeps the resizer off them.
+Project.BufferSramPins runs odb_sram_buf.py after the global placement: a buffer at every SRAM
+signal pin, so A_DOUT keeps under its max capacitance and the inputs under their max slew.
+RSZ_DONT_TOUCH_RX (^sram_pin_) keeps the resizer off the short nets from
+buffer to pin.
 
     "meta": { "substituting_steps": {
         "-OpenROAD.GlobalPlacement*": "Project.SeedPlacement",
-        "+OpenROAD.GlobalPlacement": "Project.BufferSramOutputs" } }
+        "+OpenROAD.GlobalPlacement": "Project.BufferSramPins" } }
 
 LibreLane imports every module on the Python path whose name starts with ``librelane_plugin_``
 (librelane_plugin_openpio_pdn.py).
@@ -35,9 +36,9 @@ class SeedPlacement(OdbpyStep):
 
 
 @Step.factory.register()
-class BufferSramOutputs(OdbpyStep):
-    id = "Project.BufferSramOutputs"
-    name = "Buffer the SRAM Data Outputs"
+class BufferSramPins(OdbpyStep):
+    id = "Project.BufferSramPins"
+    name = "Buffer the SRAM Signal Pins"
 
     def get_script_path(self):
         return os.path.join(HERE, "odb_sram_buf.py")
