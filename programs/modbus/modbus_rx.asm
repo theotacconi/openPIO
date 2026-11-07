@@ -4,7 +4,8 @@
 ; Pin: in_base (RX). 8 strobes a bit: baud = clk / (8 x CLKDIV); 9600 baud from 50 MHz is CLKDIV
 ; 651 + 11 / 256. Cycles below count from a start edge, seen at cycle 1-2.
 ; RX FIFO: each byte in bits 15:8 (low byte 0), then 0x0001 after a frame with a good CRC,
-; 0x0003 after one with a bad CRC. A low stop bit raises IRQ 0.
+; 0x0003 after one with a bad CRC. A low stop bit raises IRQ 0. At a frame's end it clears the
+; peer's IRQ 1: modbus_tx on the peer SM waits on it to send the reply.
 .in_pins 0
 .crc width=16 poly=0x8005 init=ones     ; bits LSB first: CRC-16/MODBUS, 0 after a good CRC
 
@@ -32,6 +33,7 @@ bit:
     wait 1 in_base 0
     jmp next
 end:
+    irq clear peer 1        ; the peer's reply may go out
     set x, 1
     jmp pau crc_ok, mark
     set x, 3
