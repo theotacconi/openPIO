@@ -101,5 +101,19 @@ class Captures(unittest.TestCase):
             self.assertEqual(sum(1 for c in ring if c), 4)
 
 
+    def test_midea_ac_remote(self):
+        """A Comfee RG57H4 air conditioner remote (Midea) at the KY-022: seven presses, each a
+        frame of 48 bits and 5.2 ms later the same inverted; a few marks broken by spikes of
+        1 us. The last byte is 0x100 minus the sum of the others: a checksum, no CRC."""
+        p = infer_pulses(Capture.from_sigrok(CAPTURES / "midea_ac_remote.sr", 27e6)["D0"])
+        self.assertEqual((p.carrier, p.idle, p.one, p.crc, p.ignored), ("space", 1, 1, None, 0))
+        self.assertEqual(len(p.frames), 14)
+        for a, b in zip(p.frames[0::2], p.frames[1::2]):
+            data = [byte_lsb(a[k:k + 8]) for k in range(0, 48, 8)]
+            self.assertEqual(b, [x ^ 1 for x in a])
+            self.assertEqual(data[0], 0x85)
+            self.assertEqual(sum(data) & 0xFF, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

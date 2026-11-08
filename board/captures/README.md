@@ -14,6 +14,7 @@ FPGA pin 27, pio 1 pin 28.
 | `hdlc_9600.sr` | pio 0 | D0, 1 MHz | `hdlc_tx.asm` on SM 0 and `hdlc_rx.asm` on SM 1, the same pin, CLKDIV 351 + 144/256; six frames, all received with the right CRC | NRZI, 1406.38 clocks a half-bit, stuffing after 5 ones, sync 01111110, CRC-16 0x1021, init ones, xorout ones |
 | `bridge_spi.sr` | the Pico's SPI | D0 SCLK (GP2), D1 MOSI (GP3), D2 CS_N (GP5), 12 MHz, 0.2 s | `bringup.py`, all ok; 55 transactions at 1 MHz | data D1 on clock D0, mode 0, 12 samples a bit, frames while D2 is 0 |
 | `nec_remote.sr` | KY-022 output on pio 0 | D0, 1 MHz, 30 s | `nec_rx.asm` on SM 0, CLKDIV 27: ten keys, address 0, commands 45 46 47 16 0d 1c 08 5a 19 1c, a repeat code after each and more on the key held | pulse distance, idle high, leader 9.06 ms + 4.39 ms, spaces 541 / 1635 us, CRC-8 0x01 (each byte's complement); 13 repeat codes ignored |
+| `midea_ac_remote.sr` | KY-022 output on pio 0 | D0, 1 MHz, 20 s (2026-11-08, `demo.py`) | nothing: a Comfee RG57H4 air conditioner remote, seven presses | pulse distance, idle high, leader 4.4 ms + 4.3 ms, spaces 520 / 1592 us; each press two frames of 48 bits 5.2 ms apart, the second inverted; spikes of 1 us in a few marks merged; no CRC (the last byte is 0x100 minus the sum of the others, LSB first) |
 | `ws2812_random.sr` | pio 1, the ring's DI before the 330 ohm | D0, 24 MHz, 1 s | `ws2812.asm` on SM 0, CLKDIV 3 + 96/256, 12 LEDs of random colours (`random.Random(5)`, each 0..23) every 40 ms; sigrok's WS281x decoder reads the colours sent | pulse width, idle low, marks of 9 / 21 samples (375 / 875 ns), a long one a 1, no CRC |
 | `ws2812_comet.sr` | pio 1, as above | D0, 24 MHz, 1 s | the same, a comet of 4 LEDs going round (DEMO.md), a step every 40 ms; 23 frames, 12 kinds, rotations of each other | pulse width as above, no CRC: rotations of a frame are no evidence (before 2026-11-07, a CRC-15 0x203 that fits every rotation) |
 
@@ -43,6 +44,12 @@ received keys 45 46 47 40 16, all with the right complements.
 
 ```
 python3 board/listen.py board/captures/nec_remote.sr --channel D0 --pin 0 --lsb --program
+```
+
+The air conditioner remote:
+
+```
+python3 board/listen.py board/captures/midea_ac_remote.sr --channel D0 --pin 0 --lsb --program
 ```
 
 The ring:

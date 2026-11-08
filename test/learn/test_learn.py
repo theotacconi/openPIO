@@ -526,6 +526,26 @@ def pulse_script(frames: list[list[tuple[int, float]]], scale: float, idle: int,
     return Script(steps), round(t)
 
 
+def midea_levels(data: list[int], glitch: int | None = None) -> list[tuple[int, float]]:
+    """A Midea air conditioner remote's press at an IR receiver's output (Comfee RG57H4): a
+    leader of 4400 us and 4400 us, 48 bits LSB first, 560 us marks, spaces of 560 us (0) or 1680
+    (1), a stop mark; 5200 us later the same frame inverted. With `glitch`, that mark of the
+    first frame broken by spikes of 1 us, as a real receiver's output had."""
+    out: list[tuple[int, float]] = []
+    for frame in (data, [b ^ 0xFF for b in data]):
+        if out:
+            out.append((1, 5200))
+        out += [(0, 4400), (1, 4400)]
+        for b in bits(frame) + [None]:
+            out.append((0, 560))
+            if b is not None:
+                out.append((1, 1680 if b else 560))
+    if glitch is not None:
+        k = 2 + 2 * glitch
+        out[k:k + 1] = [(0, 130), (1, 1), (0, 4), (1, 1), (0, 424)]
+    return out
+
+
 def sirc_levels(command: int, address: int) -> list[tuple[int, float]]:
     """A Sony SIRC 12-bit frame at an IR receiver's output: the leader, then 7 command and 5
     address bits LSB first, a 1 a mark of 1200 us, a 0 of 600, 600 us spaces."""
@@ -640,6 +660,30 @@ class LearnPulses(unittest.TestCase):
         self.assertIsNotNone(pulses_check(p))
         script, end = pulse_script([nec_levels(keys[0]), levels[3]], 0.2, 1, 40000)
         self.assertEqual([v for _, v in self.receive(p, script, end)], [3, 1])
+
+    def test_midea_air_conditioner(self):
+        """A Midea remote sends each frame twice, the second inverted, 5.2 ms after the first's
+        stop mark, a pause close to the 4.4 ms of its leader's space: the leader within a press
+        starts another frame. A spike in a mark is merged with it. The last byte is a checksum
+        (0x100 minus the sum of the others), not a CRC: none is found."""
+        rnd = random.Random(29)
+        keys = []
+        for _ in range(6):
+            data = [0x85, rnd.randrange(256), rnd.randrange(256), 0xFF, 0xFF]
+            keys.append(data + [-sum(data) & 0xFF])
+        script, end = pulse_script([midea_levels(k, 7 if i == 2 else None)
+                                    for i, k in enumerate(keys)], 0.2, 1, 40000)
+        bench = Bench()
+        bench.add(script)
+        bench.run(end)
+        p = infer_pulses(Capture.from_levels(bench.trace, PIN))
+        self.assertEqual((p.carrier, p.idle, p.one, p.crc, p.ignored), ("space", 1, 1, None, 0))
+        self.assertEqual([round(w) for w in p.leader], [880, 880])
+        sent = [bits(f) for k in keys for f in (k, [b ^ 0xFF for b in k])]
+        self.assertEqual(p.frames, sent)
+
+        script, end = pulse_script([midea_levels(k) for k in keys[:2]], 0.22, 1, 40000)
+        self.assertEqual(self.receive(p, script, end), [(f, 1) for f in sent[:4]])
 
     def test_sirc(self):
         """Sony SIRC at an IR receiver's output: pulse width, idle high, the leader's mark."""

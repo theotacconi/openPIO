@@ -114,6 +114,17 @@ class Capture:
         """The edges after clock a and before b."""
         return Capture(self.level_at(a), [t for t in self.edges if a < t < b], self.span)
 
+    def deglitched(self, shortest: float) -> "Capture":
+        """Without pulses shorter than `shortest` clocks, each merged with its neighbours: an
+        IR receiver's output may break a mark with spikes of a microsecond."""
+        out: list[int] = []
+        for t in self.edges:
+            if out and t - out[-1] < shortest:
+                out.pop()
+            else:
+                out.append(t)
+        return Capture(self.level, out, self.span)
+
     @staticmethod
     def from_sigrok(path: str | Path, clock_hz: float) -> dict[str, "Capture"]:
         """Every channel of a sigrok session file (.sr, as PulseView saves it), by name, its
@@ -1179,6 +1190,27 @@ def group_of(gs: list[tuple[float, float]], w: float) -> int:
     return next(k for k, (a, b) in enumerate(gs) if a <= w <= b)
 
 
+def leaders_within(frames: list[list[float]], gap: float) -> tuple[list[list[float]], float]:
+    """The frames split before each mark of the widest marks' width within them, when every
+    frame starts with one and they are a leader, under one mark in eight: a Midea air
+    conditioner remote sends each frame twice, 5 ms apart, a pause close to its leader's
+    space. The shortest pause between frames, those within with them."""
+    marks = groups(w for f in frames for w in f[0::2])
+    if len(marks) < 2:
+        return frames, gap
+    lo, hi = marks[-1]
+    lead = lambda w: lo <= w <= hi                                 # noqa: E731
+    count = sum(lead(w) for f in frames for w in f[0::2])
+    if not all(f and lead(f[0]) for f in frames) or 8 * count > sum(len(f[0::2]) for f in frames):
+        return frames, gap
+    out = []
+    for f in frames:
+        cut = [0] + [k for k in range(2, len(f), 2) if lead(f[k])]
+        gap = min([gap] + [f[k - 1] for k in cut[1:]])
+        out += [f[a:b - 1] if b < len(f) else f[a:] for a, b in zip(cut, cut[1:] + [len(f)])]
+    return out, gap
+
+
 def infer_pulses(cap: Capture) -> Pulses:
     """The pulse-width code that explains the recording, or ValueError.
 
@@ -1192,6 +1224,8 @@ def infer_pulses(cap: Capture) -> Pulses:
     ws = cap.widths()
     if len(ws) < 8:
         raise ValueError("too few edges")
+    cap = cap.deglitched(sorted(ws)[len(ws) // 10] / 4)    # a quarter of the narrow pulses
+    ws = cap.widths()
     lv = [cap.level ^ (k + 1 & 1) for k in range(len(ws))]
     idle = lv[max(range(len(ws)), key=ws.__getitem__)]
     spaces = sorted({w for w, v in zip(ws, lv) if v == idle})
@@ -1215,6 +1249,7 @@ def infer_pulses(cap: Capture) -> Pulses:
             cur.append(w)
     if cur and lv[-1] != idle:                               # the line idle after the last edge
         frames.append(cur)
+    frames, gap = leaders_within(frames, gap)
     if len(frames) < 2:
         raise ValueError("fewer than two frames")
 
