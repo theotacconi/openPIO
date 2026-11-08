@@ -546,6 +546,18 @@ def midea_levels(data: list[int], glitch: int | None = None) -> list[tuple[int, 
     return out
 
 
+def ev1527_levels(code: int, repeats: int = 5) -> list[tuple[int, float]]:
+    """A 433 MHz remote's press (EV1527, PT2262 alike) at the receiver's output, idle low: the
+    24-bit code MSB first, a 1 a mark of 3 T and a space of 1 T, a 0 the complement (T =
+    350 us), then a sync bit: a mark of 1 T and a space of 31 T; `repeats` times, as long as
+    the button is held."""
+    word = []
+    for i in range(23, -1, -1):
+        word += [(1, 1050), (0, 350)] if code >> i & 1 else [(1, 350), (0, 1050)]
+    word += [(1, 350), (0, 10850)]
+    return (word * repeats)[:-1]
+
+
 def sirc_levels(command: int, address: int) -> list[tuple[int, float]]:
     """A Sony SIRC 12-bit frame at an IR receiver's output: the leader, then 7 command and 5
     address bits LSB first, a 1 a mark of 1200 us, a 0 of 600, 600 us spaces."""
@@ -671,19 +683,57 @@ class LearnPulses(unittest.TestCase):
         for _ in range(6):
             data = [0x85, rnd.randrange(256), rnd.randrange(256), 0xFF, 0xFF]
             keys.append(data + [-sum(data) & 0xFF])
-        script, end = pulse_script([midea_levels(k, 7 if i == 2 else None)
-                                    for i, k in enumerate(keys)], 0.2, 1, 40000)
+        presses = [midea_levels(k, 7 if i == 2 else None) for i, k in enumerate(keys)]
+        presses.insert(3, [(0, 3000)])                  # and a lone burst: not every frame leads
+        script, end = pulse_script(presses, 0.2, 1, 40000)
         bench = Bench()
         bench.add(script)
         bench.run(end)
         p = infer_pulses(Capture.from_levels(bench.trace, PIN))
-        self.assertEqual((p.carrier, p.idle, p.one, p.crc, p.ignored), ("space", 1, 1, None, 0))
+        self.assertEqual((p.carrier, p.idle, p.one, p.crc, p.ignored), ("space", 1, 1, None, 1))
         self.assertEqual([round(w) for w in p.leader], [880, 880])
         sent = [bits(f) for k in keys for f in (k, [b ^ 0xFF for b in k])]
         self.assertEqual(p.frames, sent)
 
         script, end = pulse_script([midea_levels(k) for k in keys[:2]], 0.22, 1, 40000)
         self.assertEqual(self.receive(p, script, end), [(f, 1) for f in sent[:4]])
+
+    def test_433_mhz_remote(self):
+        """EV1527 433 MHz remote presses, each its code repeated 5 times after a sync space of
+        31 T: frames apart by the sync space, not by the pauses between presses. Pulse width,
+        idle low, a long mark a 1; the sync bit's mark ends each frame."""
+        rnd = random.Random(30)
+        codes = [rnd.randrange(1 << 20) << 4 | key for key in (1, 2, 4, 8)]
+        script, end = pulse_script([ev1527_levels(c) for c in codes], 0.2, 0, 200000)
+        bench = Bench()
+        bench.add(script)
+        bench.run(end)
+        p = infer_pulses(Capture.from_levels(bench.trace, PIN))
+        self.assertEqual((p.carrier, p.idle, p.one, p.leader), ("mark", 0, 1, []))
+        want = [[c >> i & 1 for i in range(23, -1, -1)] + [0] for c in codes for _ in range(5)]
+        self.assertEqual(p.frames, want)
+        script, end = pulse_script([ev1527_levels(c, 2) for c in codes[:2]], 0.22, 0, 200000)
+        self.assertEqual(self.receive(p, script, end), [(w, 1) for w in want[0:2] + want[5:7]])
+
+    def test_nec_with_a_corrupted_frame_and_noise(self):
+        """Eight NEC keys, one with a mark the receiver missed (two spaces and the mark between
+        them one long space), and a lone burst: both left out, the check learned from the
+        other seven."""
+        rnd = random.Random(31)
+        keys = [(0x10, rnd.randrange(256)) for _ in range(8)]
+        levels = [nec_levels(k) for k in keys]
+        bad = levels[4]
+        k = 2 + 2 * 9 + 1                               # bit 9's space, bit 10's mark and space
+        bad[k:k + 3] = [(1, sum(us for _, us in bad[k:k + 3]))]
+        levels.insert(6, [(0, 3000)])
+        script, end = pulse_script(levels, 0.2, 1, 40000)
+        bench = Bench()
+        bench.add(script)
+        bench.run(end)
+        p = infer_pulses(Capture.from_levels(bench.trace, PIN))
+        self.assertEqual((p.carrier, p.ignored, p.crc.width, p.crc.poly), ("space", 2, 8, 0x01))
+        self.assertEqual(p.frames, [bits([a, a ^ 0xFF, c, c ^ 0xFF])
+                                    for a, c in keys[:4] + keys[5:]])
 
     def test_sirc(self):
         """Sony SIRC at an IR receiver's output: pulse width, idle high, the leader's mark."""

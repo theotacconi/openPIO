@@ -20,9 +20,11 @@ Four families so far:
 - clocked lines, a clock pin and data pins (SPI, SD card commands, PS/2 devices, ...): the
   clock, its mode (CPOL, CPHA), the select pin or the pauses that frame the data, sync bits,
   the CRC; an RX program through the PAU's external clock.
-- pulse-width codes, a mark and a space a bit (NEC and Sony infrared remotes, WS2812, 433 MHz
-  sensors, ...): the pulse whose width is the bit, its two widths, the leader, the CRC; an RX
-  program that times each pulse.
+- pulse-width codes, a mark and a space a bit (NEC, Sony and air conditioner infrared remotes,
+  WS2812, 433 MHz remotes and sensors, ...): the pulse whose width is the bit, its two widths,
+  the leader, the CRC; an RX program that times each pulse.
+
+Spikes shorter than a quarter of the narrow pulses (an IR receiver's) are merged first.
 
     python3 sim/learn/learn.py capture.json   # {"clock_hz": .., "level": 0|1, "edges": [t, ..]}
     python3 sim/learn/learn.py --frames capture.json
@@ -114,9 +116,15 @@ class Capture:
         """The edges after clock a and before b."""
         return Capture(self.level_at(a), [t for t in self.edges if a < t < b], self.span)
 
-    def deglitched(self, shortest: float) -> "Capture":
-        """Without pulses shorter than `shortest` clocks, each merged with its neighbours: an
-        IR receiver's output may break a mark with spikes of a microsecond."""
+    def despiked(self) -> "Capture":
+        """Without spikes, each merged with the pulses around it: a pulse shorter than a
+        quarter of the narrow ones (the tenth narrowest of every ten), as an IR receiver's
+        output may break a mark with spikes of a microsecond. Spikes are fewer than one pulse
+        in ten, or they are the narrow ones."""
+        ws = self.widths()
+        if not ws:
+            return self
+        shortest = sorted(ws)[len(ws) // 10] / 4
         out: list[int] = []
         for t in self.edges:
             if out and t - out[-1] < shortest:
@@ -259,11 +267,13 @@ def infer_async(cap: Capture) -> AsyncSerial:
     bits that never change wins (more likely stop bits), then fewer data bits (a parity bit
     explains a ninth bit better than data), then more stop bits (safe to send: the recording
     never had less idle). Characters a logic analyzer's recording may have cut are left out
-    first (a level held longer than a character's 12 bits, 9 data, parity and 2 stop, is idle);
+    first (a level held longer than a character's 12 bits, 9 data, parity and 2 stop, is idle),
+    after spikes (Capture.despiked);
     the whole recording is tried when nothing is left. A recording cut in the middle of
     characters back to back has no such pause: as a receiver does, the first characters may
     break the format until one is read from its start bit (in ASCII text that can take 7), then
     none may; up to 16 are left out, fewer than are left."""
+    cap = cap.despiked()
     bit = bit_time(cap.widths())
     cut = cap.span is not None and bool(cap.edges) and cap.edges[0] - cap.span[0] < 13 * bit
     for c, lead in ((cap.window(*cap.settled(13 * bit)), 0), (cap, 0), (cap, 16 if cut else 0)):
@@ -640,7 +650,8 @@ def infer_frames(cap: Capture, gap: float = 10) -> Frames:
     Bursts are apart by more than `gap` times the narrowest pulse; when no line code explains
     them so, by a shorter pause (pauses: from 2 narrowest pulses up), tried from the longest:
     DALI's next forward frame comes 6 half-bits after a backward frame. A burst the recording
-    may have cut is left out (Capture.settled)."""
+    may have cut is left out (Capture.settled). Spikes are merged first (Capture.despiked)."""
+    cap = cap.despiked()
     widths = cap.widths()
     if not widths:
         raise ValueError("no edges: nothing to learn")
@@ -1191,54 +1202,66 @@ def group_of(gs: list[tuple[float, float]], w: float) -> int:
 
 
 def leaders_within(frames: list[list[float]], gap: float) -> tuple[list[list[float]], float]:
-    """The frames split before each mark of the widest marks' width within them, when every
-    frame starts with one and they are a leader, under one mark in eight: a Midea air
-    conditioner remote sends each frame twice, 5 ms apart, a pause close to its leader's
-    space. The shortest pause between frames, those within with them."""
+    """Each frame that starts with a mark of the widest marks' width (a leader: under one mark
+    in eight) split before each such mark within it after a pause at least LEADER_MIN of its own
+    leader's space: a Midea air conditioner remote sends each frame twice, 5 ms apart, a pause
+    close to its leader's space, and an NEC remote's repeat code may come within the pause
+    taken. The shortest pause between frames, those within with them."""
     marks = groups(w for f in frames for w in f[0::2])
     if len(marks) < 2:
         return frames, gap
     lo, hi = marks[-1]
     lead = lambda w: lo <= w <= hi                                 # noqa: E731
-    count = sum(lead(w) for f in frames for w in f[0::2])
-    if not all(f and lead(f[0]) for f in frames) or 8 * count > sum(len(f[0::2]) for f in frames):
+    if 8 * sum(lead(w) for f in frames for w in f[0::2]) > sum(len(f[0::2]) for f in frames):
         return frames, gap
     out = []
     for f in frames:
-        cut = [0] + [k for k in range(2, len(f), 2) if lead(f[k])]
+        led = len(f) > 1 and lead(f[0])
+        cut = [0] + [k for k in range(2, len(f), 2)
+                     if led and lead(f[k]) and f[k - 1] >= LEADER_MIN * f[1]]
         gap = min([gap] + [f[k - 1] for k in cut[1:]])
-        out += [f[a:b - 1] if b < len(f) else f[a:] for a, b in zip(cut, cut[1:] + [len(f)])]
+        out += [f[a:b - 1] for a, b in zip(cut, cut[1:])] + [f[cut[-1]:]]
     return out, gap
 
 
 def infer_pulses(cap: Capture) -> Pulses:
     """The pulse-width code that explains the recording, or ValueError.
 
-    The idle level is the level of the longest pulse; frames are apart by the pauses past the
-    largest ratio between two widths of the idle level. Widths fall in groups (a mark's and a
-    space's apart); a group is the bits' when a frame holds two pulses of it, and the leader is
-    a frame's pulses before the first such, a mark and a space each. The frames of the leader
-    whose frames hold the most pulses
-    after it are the ones learned (not a remote's repeat codes, though more of them). Their marks or spaces have two widths, the others
-    one (or the complement: a long mark and a short space, a short mark and a long space)."""
+    Spikes are merged first (Capture.despiked). The idle level is the level of the longest
+    pulse; frames are apart by the pauses past a jump of the idle widths by 2 or more. Of each
+    such jump, from the longest, the one that explains the most frames, less the frames it
+    leaves out, is learned: a 433 MHz remote repeats its frame after a sync space, past which
+    the pauses between presses leave no frame of one kind; a pause shorter than the right one
+    cuts frames, and their leaders are frames of another kind (_pulses)."""
     ws = cap.widths()
     if len(ws) < 8:
         raise ValueError("too few edges")
-    cap = cap.deglitched(sorted(ws)[len(ws) // 10] / 4)    # a quarter of the narrow pulses
+    cap = cap.despiked()
     ws = cap.widths()
     lv = [cap.level ^ (k + 1 & 1) for k in range(len(ws))]
     idle = lv[max(range(len(ws)), key=ws.__getitem__)]
     spaces = sorted({w for w, v in zip(ws, lv) if v == idle})
     if len(spaces) < 2:
         raise ValueError("no pauses between frames")
-    ratio, k = max((b / a, k) for k, (a, b) in enumerate(zip(spaces, spaces[1:])))
-    if ratio < 2:
+    cuts = sorted(((b, a) for a, b in zip(spaces, spaces[1:]) if b >= 2 * a), reverse=True)
+    if not cuts:
         raise ValueError("no pauses between frames: no idle width far past the others")
-    gap = spaces[k + 1]
-    if cap.span:                    # not a frame the recording cut: idle longer than any space
-        cap = cap.window(*cap.settled((spaces[k] * gap) ** 0.5))   # in a frame is a pause
-        ws = cap.widths()
-        lv = [cap.level ^ (k + 1 & 1) for k in range(len(ws))]
+    found, errors = [], []
+    for gap, below in cuts:
+        try:
+            found.append(_pulses(cap, idle, gap, below))
+        except ValueError as e:
+            errors.append(e)
+    if not found:
+        raise errors[0]
+    return max(found, key=lambda p: len(p.frames) - p.ignored)    # the longest of the best
+
+
+def _split(cap: Capture, idle: int, gap: float) -> tuple[list[list[float]], float]:
+    """The frames between pauses of `gap` or more, a mark first, each its widths, and split
+    before a leader within (leaders_within); the shortest pause between them."""
+    ws = cap.widths()
+    lv = [cap.level ^ (k + 1 & 1) for k in range(len(ws))]
     frames, cur = [], [] if cap.level == idle else None
     for w, v in zip(ws, lv):
         if v == idle and w >= gap:
@@ -1249,7 +1272,27 @@ def infer_pulses(cap: Capture) -> Pulses:
             cur.append(w)
     if cur and lv[-1] != idle:                               # the line idle after the last edge
         frames.append(cur)
-    frames, gap = leaders_within(frames, gap)
+    return leaders_within(frames, gap)
+
+
+def _pulses(cap: Capture, idle: int, gap: float, below: float) -> Pulses:
+    """infer_pulses() with frames apart by pauses of `gap` or more, `below` the widest idle
+    width short of it. A leader within a frame starts another (leaders_within). Widths fall in
+    groups (a mark's and a space's apart); a group is the bits' when a frame holds two pulses
+    of it, and the leader is a frame's pulses before the first such, a mark and a space each.
+    The frames of the leader whose frames hold the most pulses after it are the ones learned
+    (not a remote's repeat codes, though more of them); of those, a frame with a width among
+    its bits that under half of them have is left out (a frame the line corrupted: a mark the
+    receiver missed makes a space as long as three). Their marks or spaces have two widths, the
+    others one (or the complement: a long mark and a short space, a short mark and a long
+    space)."""
+    frames, within = _split(cap, idle, gap)
+    if cap.span:                    # not a frame the recording cut: idle longer than any space
+        if within < gap:            # in a frame is a pause: the pauses between frames are
+            below = max((w for f in frames for w in f[1::2]), default=below)   # those within
+        cap = cap.window(*cap.settled((below * within) ** 0.5))
+        frames, within = _split(cap, idle, gap)
+    gap = within
     if len(frames) < 2:
         raise ValueError("fewer than two frames")
 
@@ -1263,9 +1306,14 @@ def infer_pulses(cap: Capture) -> Pulses:
     key, main = max(kinds.items(),                      # the most pulses past the leader
                     key=lambda kv: (sum(len(f) - len(kv[0]) for f in kv[1]), len(kv[1])))
     n = len(key)
+    main = [f for f in main if len(f) > n]             # not a lone leader
+    bgs = (groups(w for f in main for w in f[n::2]), groups(w for f in main for w in f[n + 1::2]))
+    of = lambda f: {(k & 1, group_of(bgs[k & 1], w)) for k, w in enumerate(f[n:])}  # noqa: E731
+    seen = Counter(c for f in main for c in of(f))
+    main = [f for f in main if all(2 * seen[c] >= len(main) for c in of(f))]
+    if len(main) < 2:
+        raise ValueError("fewer than two frames of one kind with bits after the leader")
     body = [f[n:] for f in main]
-    if not all(body):
-        raise ValueError("no bits after the leader")
     marks = [w for b in body for w in b[0::2]]
     gaps = [w for b in body for w in b[1::2]]
     mg, sg = groups(marks), groups(gaps)
