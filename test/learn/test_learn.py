@@ -723,7 +723,8 @@ class LearnPulses(unittest.TestCase):
         """A Midea remote sends each frame twice, the second inverted, 5.2 ms after the first's
         stop mark, a pause close to the 4.4 ms of its leader's space: the leader within a press
         starts another frame. A spike in a mark is merged with it. The last byte is a checksum
-        (0x100 minus the sum of the others), not a CRC: none is found."""
+        (0x100 minus the sum of the others), not a CRC: none is found. The receiver takes
+        only its leader: an NEC remote's frames, of the same bits, are not received."""
         rnd = random.Random(29)
         keys = []
         for _ in range(6):
@@ -743,6 +744,11 @@ class LearnPulses(unittest.TestCase):
 
         script, end = pulse_script([midea_levels(k) for k in keys[:2]], 0.22, 1, 40000)
         self.assertEqual(self.receive(p, script, end), [(f, 1) for f in sent[:4]])
+
+        # an NEC remote: the same bits, but its leader's mark of 9 ms is past this one's
+        script, end = pulse_script([nec_levels((0x00, c)) for c in (0x45, 0x46)] +
+                                   [midea_levels(keys[0])], 0.2, 1, 40000)
+        self.assertEqual(self.receive(p, script, end), [(f, 1) for f in sent[:2]])
 
     def test_433_mhz_remote(self):
         """EV1527 433 MHz remote presses, each its code repeated 5 times after a sync space of

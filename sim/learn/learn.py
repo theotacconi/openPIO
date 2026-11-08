@@ -1182,6 +1182,7 @@ class Pulses:
     sync: list[int]
     crc: Crc | None
     frames: list[list[int]]
+    leader_max: list[float] | None = None   # the longest recorded width of each leader pulse
 
     def __str__(self) -> str:
         kind = "pulse width" if self.carrier == "mark" else "pulse distance"
@@ -1350,7 +1351,7 @@ def _pulses(cap: Capture, idle: int, gap: float, below: float) -> Pulses:
     return Pulses(idle, carrier, sum(short) / len(short), sum(long_) / len(long_), one,
                   [min(f[k] for f in main) for k in range(n)], min(marks + gaps),
                   max(gaps, default=0), gap, len(frames) - len(main), fs[0][:common_prefix(fs)],
-                  crc, fs)
+                  crc, fs, [max(f[k] for f in main) for k in range(n)])
 
 
 def pulses_check(p: Pulses) -> int | None:
@@ -1362,20 +1363,25 @@ def pulses_check(p: Pulses) -> int | None:
     return agreed([list(crc_steps(f, p.crc))[-1] for f in p.frames], p.crc.spare)
 
 
-def pulses_timing(p: Pulses) -> tuple[int, list[tuple[int, int]], tuple[int, int], int]:
-    """(CLKDIV, (DLYMUL, TIMEOUT_VAL) of each leader pulse's least width, (DLYMUL, TIMEOUT_VAL)
-    of the threshold T between the carrier's widths, N): N times T without a mark ends a frame,
-    between the longest space among the bits and the shortest pause between frames (their
-    geometric mean, at most 32 T). A timed WAIT lasts up to 31 x 31 strobes."""
+def pulses_timing(p: Pulses) -> tuple[int, list[tuple[tuple[int, int], tuple[int, int]]],
+                                       tuple[int, int], int]:
+    """(CLKDIV, for each leader pulse the (DLYMUL, TIMEOUT_VAL) of its least width and of the
+    time it may last past that, (DLYMUL, TIMEOUT_VAL) of the threshold T between the carrier's
+    widths, N): N times T without a mark ends a frame, between the longest space among the bits
+    and the shortest pause between frames (their geometric mean, at most 32 T). A leader pulse
+    lasts from LEADER_MIN of its shortest recorded width to its longest over LEADER_MIN: another
+    remote's leader is not this one's (NEC's 9 ms mark is past a Midea remote's 4.4 ms, 5.9 ms
+    at most). A timed WAIT lasts up to 31 x 31 strobes."""
     t = (p.short + p.long) / 2
     lo = [w * LEADER_MIN for w in p.leader]
-    div = max(1, -(-int(max([t] + lo)) // 961))
+    hi = [w / LEADER_MIN for w in (p.leader_max or [w / LEADER_MIN ** 2 for w in p.leader])]
+    div = max(1, -(-int(max([t] + hi)) // 961))
     if min(p.narrowest, t - p.short, p.long - t) / div < 4:
         raise ValueError("pulses, or their widths' difference, under 4 strobes: too fast")
 
     def wait(clocks: float) -> tuple[int, int]:
         s = clocks / div
-        m = -(-int(s) // 31)
+        m = max(1, -(-int(s) // 31))
         return m, max(1, int(s / m))
 
     m, v = wait(t)
@@ -1383,15 +1389,19 @@ def pulses_timing(p: Pulses) -> tuple[int, list[tuple[int, int]], tuple[int, int
     n = min(-(-int((p.longest * p.gap) ** 0.5) // unit), 32)
     if not p.longest * 1.1 < n * unit < p.gap / 1.1:
         raise ValueError("no timeout tells the pauses between frames from the spaces in them")
-    return div, [wait(w) for w in lo], (m, v), n
+    leader = []
+    for a, b in zip(lo, hi):
+        least = wait(a)
+        leader.append((least, wait(b - least[0] * least[1] * div)))
+    return div, leader, (m, v), n
 
 
 def pulses_rx_program(p: Pulses, pin: int) -> str:
     """A receiver of the frames on `pin`. RX FIFO as frames_rx_program(): 8 bits a word in bits
     15:8, then an end word, 3 when the CRC is right.
 
-    A frame starts with a mark; each leader pulse must last its least width (else the program
-    waits for the next frame), then each carrier pulse is timed by a WAIT with the timeout T
+    A frame starts with a mark; each leader pulse must last its least width and end within the
+    time past it (else the program waits for the next frame), then each carrier pulse is timed by a WAIT with the timeout T
     between its widths: a timeout, a long one. N times T without a mark ends the frame; without
     a leader the program first waits for such a pause, not to start in a frame. The program
     feeds the CRC with each bit and checks it at the end (pulses_check)."""
@@ -1411,15 +1421,17 @@ def pulses_rx_program(p: Pulses, pin: int) -> str:
                           (w(a, "t"), ""), ("jmp !status timeout, sync", "a mark: not a pause"),
                           ("jmp y--, quiet", f"{n} T without a mark: between frames")]
     code += [("frame:", ""), (w(i), ""), (w(a), "a mark: a frame starts")]
-    for j, (lm, lv) in enumerate(leader):
+    for j, ((lm, lv), (xm, xv)) in enumerate(leader):
         level = (a, i)[j & 1]
-        if j == 0 or lm != leader[j - 1][0]:
-            code.append((f"set dlymul, {lm}", ""))
-        code += [(f"set timeout_val, {lv}", ""),
-                 (w(1 - level, "t"), f"leader {('mark', 'space')[j & 1]}: {lm * lv} strobes"),
-                 ("jmp !status timeout, frame", "shorter: not a frame")]
-        code += timing if j == len(leader) - 1 else []
-        code.append((w(1 - level), ""))
+        what = ("mark", "space")[j & 1]
+        code += [(f"set dlymul, {lm}", ""), (f"set timeout_val, {lv}", ""),
+                 (w(1 - level, "t"), f"leader {what}: {lm * lv} strobes"),
+                 ("jmp !status timeout, frame", "shorter: not a frame"),
+                 (f"set dlymul, {xm}", ""), (f"set timeout_val, {xv}", ""),
+                 (w(1 - level, "t"), f"and its end within {xm * xv} more"),
+                 (f"jmp !status timeout, led{j}", ""),
+                 ("jmp frame", "longer: another remote's leader"), (f"led{j}:", "")]
+    code += timing if leader else []
     feed = ([("pau crc_feed, 1", "the CRC takes the bit"), ("push iffull", "")]
             if res is not None else [])
     if p.carrier == "mark":
