@@ -26,6 +26,9 @@ host.push(0, b"hello")
   other (below).
 - `listen.py`: from a logic analyzer's recording to a receiver on the board (below).
 - `test_board.py`: the three on the model, without hardware.
+- `demo.py`: the demo, a step at a time: a comet on a WS2812 ring, an infrared remote recorded,
+  learned and received by the program the learner wrote (needs the ring on pin 1, an IR
+  receiver on pin 0 and a logic analyzer; `--recording` without one).
 - `captures/`: logic analyzer recordings of the Tang Nano build, what the learner finds in each
   (`test/learn/test_captures.py`).
 
