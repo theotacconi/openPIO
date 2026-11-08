@@ -14,7 +14,7 @@ Four families so far:
 - asynchronous serial characters (UART, RS-485, LIN, Modbus RTU, DMX, MIDI and the proprietary
   links built on them): bit time, polarity, data bits, parity, stop bits; RX and TX programs.
 - self-clocked frames, bursts of edges between idle times (USB, CAN, HDLC, DALI, 10BASE-T,
-  MFM, biphase mark, ...): the PAU's line code, polarity, half-bit, bit stuffing, the sync bits
+  MFM, biphase mark, RC-5 infrared remotes, ...): the PAU's line code, polarity, half-bit, bit stuffing, the sync bits
   every frame starts with and the CRC; an RX program that passes the frames on with the CRC's
   verdict.
 - clocked lines, a clock pin and data pins (SPI, SD card commands, PS/2 devices, ...): the
@@ -386,12 +386,18 @@ def word_value(p: AsyncSerial, word: int) -> int:
 #
 # A frame is a burst of edges between idle times. Every PAU line code is tried on the bursts at
 # both polarities, as the PAU decodes it (ISA.md, Line code): a code that leaves a bit of a
-# burst unexplained before its last 4 bits (an end mark) is out. Of the rest, the structure decides: a CRC
-# every frame ends with, then a transition code (a level code explains any line), stuffing,
-# the frame's first edge at a bit boundary, no inversion, the simpler code.
+# burst unexplained before its last 4 bits (an end mark) is out. Of the rest, the structure
+# decides: a CRC every frame ends with, then a transition code (a level code explains any line),
+# stuffing, frames that start from one level for a code whose bits are levels (NRZ, Manchester:
+# biphase mark ends a frame at either), the PAU's alignment for the code (Manchester's first
+# edge mid-bit, as RC-5's first half-bit is the idle level), the simpler code, no inversion.
+# Biphase mark is Manchester shifted by a half-bit: on one line, without a CRC, only these tell
+# them apart.
 
 CODES = ["nrz", "nrzi", "manchester", "bmc", "fm0", "diff_manchester", "miller"]
 LEVEL_CODES = ("nrz", "nrzi")
+MID_CODES = ("manchester", "diff_manchester")     # the PAU's alignment: the first edge mid-bit
+POLARITY_CODES = ("nrz", "manchester")            # a bit is a level: the line rests at one
 EVIDENCE = 40       # bits: a CRC of width w is believed from 40 / w + 1 frames, as a chance
                     # match of every frame is about 2^-(w (frames - 1)) per hypothesis tried
 
@@ -696,7 +702,8 @@ def _explained(bs: list[tuple[int, list[int]]], unit: float, spare: int = 0) -> 
                         break                            # end mark: USB SE0, 10BASE-T TP_IDL)
                     raw.append(bits)
                 else:
-                    found += _structure(h, name, inv, align, raw, spare)
+                    found += _structure(h, name, inv, align, raw, spare,
+                                        len({level for level, _ in bs}) == 1)
     return found
 
 
@@ -729,7 +736,7 @@ def rotation_class(bits: list[int]) -> tuple[int, ...] | int:
 
 
 def _structure(h: float, name: str, inv: int, align: int, raw: list[list[int]],
-               spare: int = 0) -> list[tuple]:
+               spare: int = 0, one_idle: bool = True) -> list[tuple]:
     """(score, Frames) for each stuffing rule no recorded bit breaks (and none), with the CRC
     its frames end with. Stuffing stops at the bits every frame ends with (a delimiter, an end
     flag); it starts after the bits every frame starts with when they break the rule (an HDLC
@@ -752,7 +759,8 @@ def _structure(h: float, name: str, inv: int, align: int, raw: list[list[int]],
         if rule and not crc and rule[2] < 8:
             continue
         score = (crc.rank if crc else (False, 0), name not in LEVEL_CODES, rule is not None,
-                 -align, -inv, -CODES.index(name))
+                 one_idle or name not in POLARITY_CODES, align == (name in MID_CODES),
+                 -CODES.index(name), -inv)
         out.append((score, Frames(h, name, inv, align, rule and rule[:2], frames[0][:sync], crc,
                                   frames, unstuffed=k)))
     return out

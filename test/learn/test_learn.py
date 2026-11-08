@@ -321,6 +321,31 @@ class LearnFrames(unittest.TestCase):
         got = self.receive(p, bench, tx.end + 100)
         self.check_received(got, frames, [1] * 3)       # no CRC: no verdict
 
+    def test_rc5_remote(self):
+        """Philips RC-5 at an IR receiver's output, a spike in one frame: Manchester, the first
+        edge mid-bit (the first half-bit is the idle level), not biphase mark, which explains
+        the same edges a half-bit later: every frame starts from the idle level. A Manchester
+        line's polarity is a convention: the bits come complemented (S1 S2 = 0 0)."""
+        rnd = random.Random(32)
+        keys = [(rnd.randrange(32), rnd.randrange(64)) for _ in range(8)]
+        script, end = pulse_script([rc5_levels(a, c, k & 1, 4 if k == 2 else None)
+                                    for k, (a, c) in enumerate(keys)], 0.2, 1, 40000)
+        bench = Bench()
+        bench.add(script)
+        bench.run(end)
+        p = self.learn(bench.trace)
+        self.check(p, "manchester", None, None, [0, 0])
+        self.assertEqual(p.align, 1)
+        def rc5(a, c, toggle):
+            return [1 - b for b in [1, 1, toggle] + bits([a << 3], False)[:5]
+                    + bits([c << 2], False)[:6]]
+        self.assertEqual(p.frames, [rc5(a, c, k & 1) for k, (a, c) in enumerate(keys)])
+        script, end = pulse_script([rc5_levels(a, c, 0) for a, c in keys[:3]], 0.21, 1, 40000)
+        bench = Bench()
+        bench.add(script)
+        self.check_received(self.receive(p, bench, end), [rc5(a, c, 0) for a, c in keys[:3]],
+                            [1] * 3)
+
     def test_ethernet_from_the_chip(self):
         """10BASE-T frames sent by programs/ethernet/eth_tx.asm on the chip: Manchester, the
         preamble and SFD, the FCS (CRC-32)."""
@@ -556,6 +581,27 @@ def ev1527_levels(code: int, repeats: int = 5) -> list[tuple[int, float]]:
         word += [(1, 1050), (0, 350)] if code >> i & 1 else [(1, 350), (0, 1050)]
     word += [(1, 350), (0, 10850)]
     return (word * repeats)[:-1]
+
+
+def rc5_levels(address: int, command: int, toggle: int,
+               spike: int | None = None) -> list[tuple[int, float]]:
+    """A Philips RC-5 frame at an IR receiver's output, idle high: S1 S2 = 1 1, the toggle,
+    5 address and 6 command bits MSB first, Manchester with half-bits of 889 us, a 1 high then
+    low (light off, then on); the first half-bit is the idle level. With `spike`, that pulse
+    broken by a spike of 1 us."""
+    data = [1, 1, toggle] + [address >> i & 1 for i in range(4, -1, -1)]
+    data += [command >> i & 1 for i in range(5, -1, -1)]
+    out: list[tuple[int, float]] = []
+    for lv in [h for b in data for h in ((1, 0) if b else (0, 1))]:
+        if out and out[-1][0] == lv:
+            out[-1] = (lv, out[-1][1] + 889)
+        else:
+            out.append((lv, 889))
+    out = out[1:] if out[0][0] == 1 else out
+    if spike is not None:
+        lv, us = out[spike]
+        out[spike:spike + 1] = [(lv, us / 2), (1 - lv, 1), (lv, us / 2 - 1)]
+    return out
 
 
 def sirc_levels(command: int, address: int) -> list[tuple[int, float]]:
