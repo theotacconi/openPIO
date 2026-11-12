@@ -466,9 +466,13 @@ order); while fewer are queued it does nothing and issues again every strobe.
 
 ## FIFOs
 
-Each SM has a TX FIFO (host to SM) and an RX FIFO (SM to host) of 133 words, kept in order
-along this path. The SM's data SRAM (256 x 16, one port: one read or write per clock, a read's
-word available a clock later) holds a 128-word ring for each FIFO.
+Each SM has a TX FIFO (host to SM) and an RX FIFO (SM to host), kept in order along this path.
+The SM's data SRAM (256 x 16, one port: one read or write per clock, a read's word available a
+clock later) holds a ring for each FIFO: the TX ring 8 n words (addresses 0 .. 8 n - 1), the RX
+ring the other 256 - 8 n, with n = FIFO_SPLIT (HOST.md; 1..31, 0 = 16) as it was at the SM's
+last CTRL.RESET (16 after a chip reset). The TX FIFO holds 8 n + 5 words, the RX FIFO
+261 - 8 n: 133 each by default, up to 253 one way (a long frame to send, or to receive at a rate
+the host cannot follow) with 13 the other.
 
 ```
 TX: host -> IN register -> SRAM ring -> front (4) -> PULL
@@ -476,7 +480,7 @@ RX: PUSH -> front (4) -> SRAM ring -> OUT register -> host
 ```
 
 - PULL, PUSH, autopull and autopush see the 4-word fronts only. The SM status bits and the host
-  registers count the whole FIFO.
+  registers count the whole FIFO; RX FIFO full is the RX FIFO holding 261 - 8 n words.
 - **The host's TX_PUSH** puts its word into the IN register if it is free (by the state at the
   start of its clock; the word lands at its end), else drops it.
 - **The host's RX_POP** takes the OUT register's word, before the SMs and the moves of its
@@ -572,6 +576,10 @@ the shift counts. A program carries all of it as assembler directives (`sim/mode
 
 Asked for by the user on 2026-11-12: 10BASE-T in both directions (`programs/ethernet/`).
 
+- The FIFO SRAM split is programmable: FIFO_SPLIT (HOST.md, SM register 0x32) gives the TX ring
+  8 n words and the RX ring 256 - 8 n, applied at CTRL.RESET (FIFOs). The default, 16, is the
+  128 / 128 split of before. A receiver whose line is faster than the host's SPI takes a
+  1518-byte Ethernet frame in a 253-word RX FIFO; a transmitter preloads 504 bytes.
 - Transition codes: a half-bit without an edge is taken (3H - 1) / 2 strobes after the edge
   instead of 1.5H, so an interval between edges counts as the nearest whole number of
   half-bits, a tie as the fewer. At H = 3 (10 Mbit/s Manchester from a 60 MHz clock) an edge

@@ -63,6 +63,7 @@ module openpio_sm (
     input  wire        in_val,
 
     output reg  [9:0]  irq_mask,      // IRQ_MASK
+    output reg  [4:0]  fifo_split,    // FIFO_SPLIT, for the FIFOs to take on RESET
     output reg  [7:0]  pc,
     output reg         stalled
 );
@@ -635,6 +636,7 @@ module openpio_sm (
             6'h1F: h_rdata = time_r;
             6'h30: h_rdata = p_code;
             6'h31: h_rdata = {9'd0, p_run, p_baud_rst};
+            6'h32: h_rdata = {11'd0, fifo_split};
             default: h_rdata = 16'd0;
         endcase
     end
@@ -660,6 +662,7 @@ module openpio_sm (
             {p_slen, p_sequal, p_cpha, p_cpol, p_ext, p_align, p_inv, p_pin2} <= 12'd0;
             p_code <= 16'h00FA;
             {p_run, p_baud_rst} <= 7'd0;
+            fifo_split <= 5'd0;
             crc_cfg <= 7'd0;  crc_poly <= 32'd0;  crc_res <= 32'd0;
             irq_mask <= 10'h0FF;
         end else if (hw) begin
@@ -681,6 +684,7 @@ module openpio_sm (
                 6'h1E: frac_cfg <= h_wdata[7:0];
                 6'h30: p_code <= h_wdata;
                 6'h31: {p_run, p_baud_rst} <= h_wdata[6:0];
+                6'h32: fifo_split <= h_wdata[4:0];
                 default: ;
             endcase
         end

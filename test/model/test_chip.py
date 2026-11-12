@@ -10,6 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "sim" / "model"))
 from asm import assemble                                             # noqa: E402
 from chip import (Chip, header, CTRL, GPIO, ID, IRQ, IRQ_MASK, PC, PINS, STATUS, WRAP, X, FIFO_LEVEL,  # noqa: E402
+                  FIFO_SPLIT,
                   COND_CFG01, COND_CFG23, CRC_HI, IRQ_SUM, PINBASE, PIN_MASK, MISC, CLKDIV, CLKDIV_FRAC,
                   SM_STATUS, PINS_IN, PINS_OE, PADS_BIDIR, PADS_IN, PADS_OUT,
                   OP_IMEM_RD, OP_IMEM_WR, OP_REG_RD, OP_REG_WR, OP_RX_POP, OP_TX_PUSH)
@@ -124,6 +125,36 @@ class HostInterface(unittest.TestCase):
             if (word := chip.sms[0].rx_read()) is not None:
                 out.append(word)
         self.assertEqual(out, list(range(133)), "order kept across front, SRAM and registers")
+
+    @staticmethod
+    def fill(chip) -> list[bool]:
+        """260 TX words, 4 clocks apart: the IN register empties within 4 clocks."""
+        out = []
+        for w in range(260):
+            out.append(chip.tx_push(0, w))
+            chip.step(4)
+        return out
+
+    def test_fifo_split(self):
+        """FIFO_SPLIT gives the TX ring 8 n of the SRAM's 256 words, the RX ring the rest, from
+        the next CTRL.RESET: TX 8 n + 5 words, RX 261 - 8 n; 0 is 16, 128 each."""
+        for n, tx, rx in ((1, 13, 253), (31, 253, 13), (0, 133, 133), (16, 133, 133)):
+            chip = Chip(2)
+            load(chip, 0, assemble("loop:\nin time, 16 auto\njmp loop"))
+            chip.reg_write(0, FIFO_SPLIT, n | 0xFFE0)
+            self.assertEqual(chip.reg_read(0, FIFO_SPLIT), n, "5 bits")
+            self.assertEqual(self.fill(chip), [True] * 133 + [False] * 127, "on RESET only")
+            chip.reg_write(0, CTRL, 1 << 4)                     # RESET: empty, then split
+            self.assertEqual(self.fill(chip), [True] * tx + [False] * (260 - tx), f"TX {n}")
+            chip.reg_write(0, CTRL, 1)
+            chip.step(4 * (rx + 20))
+            self.assertEqual(chip.sms[0].rx_level, rx, f"RX of FIFO_SPLIT {n}")
+            self.assertEqual(chip.reg_read(0, STATUS) >> 3 & 1, 1, "RX full")
+            self.assertEqual(chip.reg_read(0, FIFO_LEVEL), rx << 8 | tx)
+            chip.reg_write(0, CTRL, 0)
+            words = Host(chip).pop(0, rx)
+            self.assertEqual(words, sorted(words), "in order")
+            self.assertEqual(chip.sms[0].rx_level, 0)
 
     def test_random_traffic_keeps_order(self):
         """The host writes and reads SM 0 at random clocks, SM 0 adds 1 to every word: each

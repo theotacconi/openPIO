@@ -79,16 +79,18 @@ module openpio #(
     wire [N_SM-1:0]    strobe, stalled, peer_we, peer_val, tx_empty, tx_pop, rx_full, rx_push,
                        h_room;
     wire [N_SM-1:0]    irq_req;
+    wire [N_SM-1:0]    rx_fifo_full;     // the whole RX FIFO
     wire [3:0]         strobe4  = {{(4-N_SM){1'b0}}, strobe};
     wire [3:0]         stalled4 = {{(4-N_SM){1'b0}}, stalled};
     wire [3:0]         room4    = {{(4-N_SM){1'b0}}, h_room};
+    wire [3:0]         rxfull4  = {{(4-N_SM){1'b0}}, rx_fifo_full};
 
     genvar i;
     generate
         for (i = 0; i < N_SM; i = i + 1) begin : g_sm
             wire sel = h_valid & hsm == i;
             wire tx_fifo_empty = tx_level[8*i +: 8] == 8'd0;
-            wire rx_fifo_full  = rx_level[8*i +: 8] >= 8'd133;
+            wire [4:0] fifo_split;
 
             openpio_sm u_sm (
                 .clk           (clk),
@@ -119,7 +121,7 @@ module openpio #(
                 .rx_push       (rx_push[i]),
                 .rx_data       (rx_data[16*i +: 16]),
                 .tx_fifo_empty (tx_fifo_empty),
-                .rx_fifo_full  (rx_fifo_full),
+                .rx_fifo_full  (rx_fifo_full[i]),
                 .irq           (irq[8*i +: 8]),
                 .peer_irq      (irq[8*(i ^ 1) +: 8]),
                 .peer_we       (peer_we[i]),
@@ -129,6 +131,7 @@ module openpio #(
                 .in_idx        (peer_idx[3*(i ^ 1) +: 3]),
                 .in_val        (peer_val[i ^ 1]),
                 .irq_mask      (irq_mask[10*i +: 10]),
+                .fifo_split    (fifo_split),
                 .pc            (pc[8*i +: 8]),
                 .stalled       (stalled[i])
             );
@@ -145,6 +148,8 @@ module openpio #(
                 .rx_data   (rx_data[16*i +: 16]),
                 .tx_level  (tx_level[8*i +: 8]),
                 .rx_level  (rx_level[8*i +: 8]),
+                .rx_fifo_full (rx_fifo_full[i]),
+                .split     (fifo_split),
                 .h_push    (sel & h_op == OP_TX_PUSH),
                 .h_wdata   (h_wdata),
                 .h_room    (h_room[i]),
@@ -187,7 +192,7 @@ module openpio #(
     wire [7:0]  s_pc     = pc[8*hsm +: 8];
     wire [7:0]  s_txl    = tx_level[8*hsm +: 8];
     wire [7:0]  s_rxl    = rx_level[8*hsm +: 8];
-    assign h_status = {s_pc, 2'd0, en[hsm], stalled4[hsm], s_rxl >= 8'd133,
+    assign h_status = {s_pc, 2'd0, en[hsm], stalled4[hsm], rxfull4[hsm],
                        s_rxl == 8'd0, ~room4[hsm], s_txl == 8'd0};
 
     always @(*) begin

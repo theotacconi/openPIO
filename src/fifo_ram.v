@@ -1,4 +1,4 @@
-// fifo_ram.v - an SM's FIFO data memory, 256 x 16 (TX ring 0..127, RX ring 128..255): the
+// fifo_ram.v - an SM's FIFO data memory, 256 x 16 (TX ring 0..8n-1, RX ring 8n..255; fifo.v): the
 // flip-flop model of the IHP SRAM macro (fifo_ram_sram.v, same ports and timing).
 //
 // One port: a write stores wdata, a read gives the word at addr from the next clock; rdata holds

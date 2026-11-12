@@ -157,11 +157,11 @@ def architecture():
     g.add('<rect x="475" y="182" width="530" height="560" rx="12" class="sm"/>')
     g.text(495, 210, "State machine 0", "smtitle")
     g.text(985, 210, "runs one program, one instruction per step", "small", "end")
-    g.box(495, 232, 130, 76, "TX FIFO", ["data to send", "133 words"], cls="q", gap=18)
+    g.box(495, 232, 130, 76, "TX FIFO", ["data to send", "13 to 253 words"], cls="q", gap=18)
     g.box(665, 232, 130, 76, "OSR", ["shifts the bits", "out, one by one"], cls="q", gap=18)
     g.arrow([(452, 270), (493, 270)]); g.arrow([(625, 270), (663, 270)])
     g.arrow([(795, 270), (1028, 270)], "data", "OUT: bits to the pins", (910, 260))
-    g.box(495, 634, 130, 76, "RX FIFO", ["data received", "133 words"], cls="q", gap=18)
+    g.box(495, 634, 130, 76, "RX FIFO", ["data received", "13 to 253 words"], cls="q", gap=18)
     g.box(665, 634, 130, 76, "ISR", ["collects the bits", "in, one by one"], cls="q", gap=18)
     g.arrow([(1028, 682), (797, 682)], "data", "IN: bits from the pins", (912, 702))
     g.arrow([(663, 672), (627, 672)]); g.arrow([(493, 672), (452, 672)])
@@ -455,25 +455,26 @@ def isr():
 
 def fifo():
     g = Drawing(1240, 640, "TX and RX FIFOs",
-                "Each state machine has two queues of 133 words. Next to the machine, 4 fast words; behind "
-                "them, a 128-word ring in a memory block (SRAM) shared by the two queues, which moves one "
-                "word per clock; an IN or OUT register meets the host. Every word takes this one path.")
-    g.text(40, 36, "TX FIFO: words to send  (133 = 1 IN register + 128 in memory + 4 front)", "group")
+                "Each state machine has two queues, 133 words each by default. Next to the machine, 4 fast "
+                "words; behind them, a ring in a memory block (SRAM) shared by the two queues, which moves "
+                "one word per clock; an IN or OUT register meets the host. Every word takes this one path. "
+                "FIFO_SPLIT moves the line between the rings: TX 8 n words, RX 256 - 8 n.")
+    g.text(40, 36, "TX FIFO: words to send  (133 = 1 IN register + 128 in memory + 4 front; 8 n + 5)", "group")
     g.text(40, 110, "host (TX_PUSH)", "term")
     g.arrow([(190, 110), (258, 110)])
     g.box(260, 85, 100, 50, "IN register", [])
     g.box(470, 60, 260, 300, "", [])
     g.text(600, 90, "Data memory (SRAM)", "h", "middle")
     g.text(600, 110, "256 words, one access per clock", "small", "middle")
-    g.box(490, 125, 220, 60, "TX ring", ["128 words"], cls="q")
-    g.box(490, 235, 220, 60, "RX ring", ["128 words"], cls="q")
+    g.box(490, 125, 220, 60, "TX ring", ["128 words (8 n)"], cls="q")
+    g.box(490, 235, 220, 60, "RX ring", ["128 words (256 - 8 n)"], cls="q")
     g.text(600, 322, "one move per clock, taking turns:", "small", "middle")
     g.text(600, 338, "TX refill · TX store · RX store · RX fetch", "small", "middle")
     g.arrow([(360, 110), (488, 155)])
     g.arrow([(710, 155), (838, 110)])
     g.box(840, 85, 120, 50, "TX front", ["4 words"], cls="q")
     g.arrow([(960, 110), (1028, 110)]); g.text(1036, 105, "PULL, OUT … auto", "term"); g.text(1036, 123, "the machine", "small")
-    g.text(40, 400, "RX FIFO: words received  (133 = 4 front + 128 in memory + 1 OUT register)", "group")
+    g.text(40, 400, "RX FIFO: words received  (133 = 4 front + 128 in memory + 1 OUT register; 261 - 8 n)", "group")
     g.text(1036, 300, "PUSH, IN … auto", "term"); g.text(1036, 318, "the machine", "small")
     g.arrow([(1028, 305), (962, 305)])
     g.box(840, 280, 120, 50, "RX front", ["4 words"], cls="q")

@@ -35,7 +35,7 @@ The parts of each state machine ([ARCHITECTURE.md](ARCHITECTURE.md) explains eac
 | X, Y and the ALU | two 16-bit registers for counters and simple math (add, subtract, and, or, xor, reverse bits) |
 | Conditions | four tests a jump can use: a pin, a flag, a register bit, a FIFO or PAU status |
 | IRQ flags | 8 signals between the two SMs and to the host |
-| FIFOs | 133 words each way, so the host can send and read in bursts |
+| FIFOs | 133 words each way, so the host can send and read in bursts; the host can move the split, up to 253 one way (a long frame to send or to receive) |
 | Pin control | 16 pin positions shared by both SMs; each pin is an input, an output, or open drain (for buses like I2C) |
 
 The two SMs run side by side on the same pins, can start on the same clock, and signal each other through IRQ flags: one can transmit while the other receives, or one can generate a device's clock while the other talks to it.

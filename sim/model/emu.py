@@ -29,7 +29,7 @@ SEPARATOR = "-----+----+--------------------+-----+--------+--------+--------+--
 PAU_QUEUE_BITS = 16                 # each PAU queue holds one word
 PIN_BITS = 16                       # pin positions (ISA.md, Pins)
 PIN_ALL = (1 << PIN_BITS) - 1
-BUFFER_WORDS = 128                  # SRAM part of each FIFO (ISA.md, FIFOs)
+SRAM_WORDS = 256                    # the FIFO SRAM: both rings (ISA.md, FIFOs)
 SRAM_TX_REFILL, SRAM_TX_STORE, SRAM_RX_STORE, SRAM_RX_FETCH = range(4)   # SRAM port requests
 
 
@@ -191,6 +191,7 @@ class StateMachine:
         self.tx_flight: int | None = None                         # SRAM reads under way
         self.rx_flight: int | None = None
         self.sram_turn = 0                                        # request served first
+        self.fifo_split_cfg = 0                                   # FIFO_SPLIT, applied on RESET
         self.peer: StateMachine | None = None
         self.gpio_in = 0
         self.irq_flags = [False] * 8
@@ -309,6 +310,8 @@ class StateMachine:
         self.rx_back.clear()
         self.tx_in = self.rx_out = self.tx_flight = self.rx_flight = None
         self.sram_turn = 0
+        self.tx_ring = 8 * (self.fifo_split_cfg or 16)          # the rings' words (FIFO_SPLIT)
+        self.rx_ring = SRAM_WORDS - self.tx_ring
         self.prev_gpio_in = self.gpio_in
         self.timeout_val = self.timeout_counter = 0
         self.timeout_flag = False
@@ -357,9 +360,14 @@ class StateMachine:
     # ------------------------------------------------------------------ FIFOs (host side)
 
     @property
-    def capacity(self) -> int:
-        """Words a FIFO holds: the front, plus the SRAM ring and the IN / OUT register."""
-        return self.fifo_depth + (BUFFER_WORDS + 1 if self.buffer else 0)
+    def tx_capacity(self) -> int:
+        """Words the TX FIFO holds: the front, plus the SRAM ring and the IN register."""
+        return self.fifo_depth + (self.tx_ring + 1 if self.buffer else 0)
+
+    @property
+    def rx_capacity(self) -> int:
+        """Words the RX FIFO holds: the front, plus the SRAM ring and the OUT register."""
+        return self.fifo_depth + (self.rx_ring + 1 if self.buffer else 0)
 
     def tx_where(self) -> str | None:
         """Where a host's TX word goes, by the state at the clock start: the IN register if it
@@ -420,7 +428,7 @@ class StateMachine:
             self.tx_flight = None
         if self.rx_flight is not None:
             self.rx_out, self.rx_flight = self.rx_flight, None
-        ring_room = len(self.tx_back) < BUFFER_WORDS, len(self.rx_back) < BUFFER_WORDS
+        ring_room = len(self.tx_back) < self.tx_ring, len(self.rx_back) < self.rx_ring
         pending = [
             bool(self.tx_back) and len(self.tx_fifo) < self.fifo_depth,     # TX refill
             self.tx_in is not None and ring_room[0],                        # TX store
@@ -712,7 +720,7 @@ class StateMachine:
             self.x == 0, self.y == 0, self.x == self.y, self.timeout_flag,
             self.osr_count >= (self.pull_thresh or 16), self.isr_count >= (self.push_thresh or 16),
             self.tx_level == 0,
-            self.rx_level >= self.capacity,
+            self.rx_level >= self.rx_capacity,
             self.gpio_in != self.prev_gpio_in,          # a pin changed since the last strobe
         ][idx] if idx < 9 else 0)
 

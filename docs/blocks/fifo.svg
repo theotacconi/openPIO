@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 640" width="1240" height="640" role="img" aria-labelledby="t d">
 <title id="t">TX and RX FIFOs</title>
-<desc id="d">Each state machine has two queues of 133 words. Next to the machine, 4 fast words; behind them, a 128-word ring in a memory block (SRAM) shared by the two queues, which moves one word per clock; an IN or OUT register meets the host. Every word takes this one path.</desc>
+<desc id="d">Each state machine has two queues, 133 words each by default. Next to the machine, 4 fast words; behind them, a ring in a memory block (SRAM) shared by the two queues, which moves one word per clock; an IN or OUT register meets the host. Every word takes this one path. FIFO_SPLIT moves the line between the rings: TX 8 n words, RX 256 - 8 n.</desc>
 <style>
 .bg { fill: #ffffff; }
 text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; fill: #1f2933; }
@@ -32,7 +32,7 @@ text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 </style>
 <defs><marker id="data" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="ah-data"/></marker><marker id="datas" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M10,0 L0,5 L10,10 z" class="ah-data"/></marker><marker id="ctl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="ah-ctl"/></marker><marker id="ctls" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M10,0 L0,5 L10,10 z" class="ah-ctl"/></marker><marker id="dash" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" class="ah-dash"/></marker><marker id="dashs" viewBox="0 0 10 10" refX="1" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M10,0 L0,5 L10,10 z" class="ah-dash"/></marker></defs>
 <rect x="0" y="0" width="1240" height="640" rx="18" class="bg"/>
-<text x="40" y="36" class="group" text-anchor="start">TX FIFO: words to send  (133 = 1 IN register + 128 in memory + 4 front)</text>
+<text x="40" y="36" class="group" text-anchor="start">TX FIFO: words to send  (133 = 1 IN register + 128 in memory + 4 front; 8 n + 5)</text>
 <text x="40" y="110" class="term" text-anchor="start">host (TX_PUSH)</text>
 <polyline points="190,110 258,110" class="data" marker-end="url(#data)"/>
 <rect x="260" y="85" width="100" height="50" rx="8" class="b"/>
@@ -42,10 +42,10 @@ text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 <text x="600" y="110" class="small" text-anchor="middle">256 words, one access per clock</text>
 <rect x="490" y="125" width="220" height="60" rx="8" class="q"/>
 <text x="600.0" y="151.5" class="h" text-anchor="middle">TX ring</text>
-<text x="600.0" y="168.5" class="d" text-anchor="middle">128 words</text>
+<text x="600.0" y="168.5" class="d" text-anchor="middle">128 words (8 n)</text>
 <rect x="490" y="235" width="220" height="60" rx="8" class="q"/>
 <text x="600.0" y="261.5" class="h" text-anchor="middle">RX ring</text>
-<text x="600.0" y="278.5" class="d" text-anchor="middle">128 words</text>
+<text x="600.0" y="278.5" class="d" text-anchor="middle">128 words (256 - 8 n)</text>
 <text x="600" y="322" class="small" text-anchor="middle">one move per clock, taking turns:</text>
 <text x="600" y="338" class="small" text-anchor="middle">TX refill · TX store · RX store · RX fetch</text>
 <polyline points="360,110 488,155" class="data" marker-end="url(#data)"/>
@@ -56,7 +56,7 @@ text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Ar
 <polyline points="960,110 1028,110" class="data" marker-end="url(#data)"/>
 <text x="1036" y="105" class="term" text-anchor="start">PULL, OUT … auto</text>
 <text x="1036" y="123" class="small" text-anchor="start">the machine</text>
-<text x="40" y="400" class="group" text-anchor="start">RX FIFO: words received  (133 = 4 front + 128 in memory + 1 OUT register)</text>
+<text x="40" y="400" class="group" text-anchor="start">RX FIFO: words received  (133 = 4 front + 128 in memory + 1 OUT register; 261 - 8 n)</text>
 <text x="1036" y="300" class="term" text-anchor="start">PUSH, IN … auto</text>
 <text x="1036" y="318" class="small" text-anchor="start">the machine</text>
 <polyline points="1028,305 962,305" class="data" marker-end="url(#data)"/>

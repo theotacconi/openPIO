@@ -71,13 +71,14 @@ except RX_POP, which pops only its `Addr` words, so a burst never loses one.
 | 0x19 | CRC_LO | R | CRC [15:0] (MSB-aligned: ISA.md, PAU) |
 | 0x1A | CRC_HI | R | CRC [31:16] |
 | 0x1B | SM_STATUS | R | the STATUS operand (ISA.md): SM status [7:0], PAU status [15:8] |
-| 0x1C | FIFO_LEVEL | R | words in the TX FIFO [7:0], in the RX FIFO [15:8] (0..133; ISA.md, FIFOs) |
+| 0x1C | FIFO_LEVEL | R | words in the TX FIFO [7:0], in the RX FIFO [15:8] (0..253; ISA.md, FIFOs) |
 | 0x1D | IRQ_MASK | RW | what reaches HOST_IRQ: [7:0] these flags when set (0xFF), [8] RX FIFO not empty (0), [9] TX FIFO at most 64 words (0) |
 | 0x1E | CLKDIV_FRAC | RW | strobe divider, fraction [7:0] / 256 (0): a strobe every CLKDIV + CLKDIV_FRAC / 256 clocks on average; loaded on RESET |
 | 0x1F | TIME | R | IN TIME: strobes since RESET, 16 bits |
 | 0x30 | PAU_CODE | RW | the line code table (ISA.md, PAU) (0x00FA: NRZ) |
 | 0x31 | PAU_CFG | RW | [4:0] BAUD, [6:5] RUN (ISA.md, PAU) (0) |
-| 0x32..0x3F | - | - | reserved: read 0, writes ignored |
+| 0x32 | FIFO_SPLIT | RW | [4:0] n: the TX ring 8 n words, the RX ring 256 - 8 n (1..31; 0 = 16, 128 each); applied on RESET (ISA.md, FIFOs) (0) |
+| 0x33..0x3F | - | - | reserved: read 0, writes ignored |
 
 RW*: written only while the SM is stopped (CTRL EN = 0); writes while it runs are ignored.
 Bits outside the fields above read 0.

@@ -25,7 +25,7 @@ from vsim import VSim                                                   # noqa: 
 
 from asm import IMEM_WORDS, PAU_CODES, AssemblerError, assemble  # noqa: E402
 from chip import (CTRL, GPIO, IRQ, OP_IMEM_RD, OP_IMEM_WR, OP_REG_RD, OP_REG_WR, PAU_MODE_BITS,  # noqa: E402
-                  OP_RX_POP, OP_TX_PUSH, PADS_BIDIR, TT_PADS, Chip)
+                  OP_RX_POP, OP_TX_PUSH, PADS_BIDIR, TT_PADS, FIFO_SPLIT, PAU_CFG, PAU_CODE, Chip)
 from host import Host                                                   # noqa: E402
 
 SOURCES = ["pau.v", "openpio_sm.v", "fifo.v", "openpio.v"]
@@ -135,7 +135,7 @@ class LockstepChip(Chip):
 
     def compare_registers(self) -> None:
         for n in range(len(self.sms)):
-            for addr in range(0x20):
+            for addr in [*range(0x20), PAU_CODE, PAU_CFG, FIFO_SPLIT]:
                 self._check(f"SM {n} register {addr:#04x}", self.peek(n, addr), self.reg_read(n, addr))
         for addr in CHIP_REGS:
             self._check(f"chip register {addr:#04x}", self.peek(0, addr), self.reg_read(0, addr))
@@ -192,6 +192,7 @@ def random_load(chip: LockstepChip, host: Host, n: int, rng: random.Random) -> N
               pau_mode=rng.randrange(1 << 16) & PAU_MODE_BITS,
               pau_code=rng.choice([*PAU_CODES.values(), rng.randrange(1 << 16)]),
               pau_cfg=rng.randrange(1, 4) | rng.randrange(4) << 5,
+              fifo_split=rng.choice([0, 0, 1, 31, rng.randrange(32)]),
               crc_cfg=rng.randrange(128), crc_poly=rng.randrange(1 << 32),
               open_drain_mask=rng.randrange(256) & host.read(0, PADS_BIDIR)[0] if rng.random() < .3 else 0)
 

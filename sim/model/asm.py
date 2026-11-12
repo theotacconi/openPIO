@@ -12,6 +12,7 @@ Configuration directives (a field not set keeps its reset value, HOST.md):
     .open_drain <pin>, <pin> ...    GPIO open drain (chip-wide: the host adds these pins)
     .shift_in / .shift_out left|right, .push_thresh / .pull_thresh <1..16>       MISC
     .clkdiv <int> [<frac>]          CLKDIV
+    .fifo_split <1..31>             FIFO_SPLIT: TX ring 8 n words, RX ring 256 - 8 n (16: 128 each)
     .cond0 .. .cond3 <condition>    COND_CFG (other conditions get a free slot)
     .pau ..., .crc ...   PAU_MODE, PAU_CODE, PAU_CFG, CRC_CFG, CRC_POLY, CRC_RES
     .wrap_target, .wrap             WRAP
@@ -133,7 +134,8 @@ CONFIG_RESET = dict(
     side_set_pindirs=False, sideset_base=0, in_base=0, out_base=0, set_base=0, set_count=5,
     pin_mask=0xFFFF, shift_in_right=True, shift_out_right=True, push_thresh=0, pull_thresh=0,
     clkdiv_int=1, clkdiv_frac=0, cond_cfg=tuple(COND_RESET), pau_mode=0, pau_code=0x00FA,
-    pau_cfg=0, crc_cfg=0, crc_poly=0, crc_res=0, open_drain_mask=0, start=0, x=0, y=0)
+    pau_cfg=0, crc_cfg=0, crc_poly=0, crc_res=0, fifo_split=0, open_drain_mask=0, start=0, x=0,
+    y=0)
 
 
 class Program(list[int]):
@@ -413,6 +415,12 @@ def assemble(source_code: str) -> Program:
                     raise AssemblerError("CLKDIV integer part must be 1..65535", line_num, raw_line)
                 if len(parts) > 2:
                     cfg["clkdiv_frac"] = _parse_int(parts[2], line_num, raw_line) & 0xFF
+            elif directive == ".fifo_split":
+                n = _parse_int(parts[1], line_num, raw_line) if len(parts) == 2 else 0
+                if not 1 <= n <= 31:
+                    raise AssemblerError(".fifo_split takes 1..31 (the TX ring in 8 words)",
+                                         line_num, raw_line)
+                cfg["fifo_split"] = n
             elif directive in (".push_thresh", ".pull_thresh"):
                 n = _parse_int(parts[1], line_num, raw_line)
                 if not 1 <= n <= 16:

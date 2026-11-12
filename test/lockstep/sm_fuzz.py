@@ -23,14 +23,14 @@ from netlist import Core, Netlist, build
 
 import chip
 from chip import (CLKDIV, CLKDIV_FRAC, COND_CFG, CRC_CFG, CRC_POLY_HI, CRC_POLY_LO, CRC_RES_HI,
-                  CRC_RES_LO, FIFO_LEVEL, IRQ, IRQ_MASK, MISC, PAU_CFG, PAU_CODE, PAU_MODE, PIN_MASK,
+                  CRC_RES_LO, FIFO_LEVEL, FIFO_SPLIT, IRQ, IRQ_MASK, MISC, PAU_CFG, PAU_CODE, PAU_MODE, PIN_MASK,
                   PC, PINBASE, SIDESET, WRAP, sm_register)
 from asm import IMEM_WORDS, PAGE_WORDS, PAU_CODES, PAU_STATUS_NAMES, assemble
 from emu import StateMachine
 
 SOURCES = ["pau.v", "openpio_sm.v"]
 CONFIG_REGS = [WRAP, SIDESET, PINBASE, PIN_MASK, MISC, CLKDIV, CLKDIV_FRAC, PAU_MODE, CRC_CFG,
-               CRC_POLY_LO, CRC_POLY_HI, CRC_RES_LO, CRC_RES_HI, IRQ_MASK, PAU_CODE, PAU_CFG]
+               CRC_POLY_LO, CRC_POLY_HI, CRC_RES_LO, CRC_RES_HI, IRQ_MASK, PAU_CODE, PAU_CFG, FIFO_SPLIT]
 FIFO_DEPTH = 4
 
 
@@ -113,6 +113,7 @@ def random_sm(rng: random.Random) -> tuple[StateMachine, int]:
         sm.wrap_bottom = rng.randrange(n)
         sm.wrap_top = rng.randrange(sm.wrap_bottom, n)
     sm.shift_in_right, sm.shift_out_right = rng.random() < .5, rng.random() < .5
+    sm.fifo_split_cfg = rng.randrange(32)
     sm.reset(base if pau else rng.randrange(IMEM_WORDS))     # the host presets PC
     return sm, rng.choice([0xFF, rng.randrange(1 << 10)])
 
@@ -168,7 +169,7 @@ class Bench:
         c.set("tx_data", sm.tx_fifo[0] if sm.tx_fifo else 0)
         c.set("rx_full", len(sm.rx_fifo) >= FIFO_DEPTH)
         c.set("tx_fifo_empty", sm.tx_level == 0)
-        c.set("rx_fifo_full", sm.rx_level >= sm.capacity)
+        c.set("rx_fifo_full", sm.rx_level >= sm.rx_capacity)
         c.set("peer_irq", bits(sm.peer_irq_flags))
 
     def read(self, addr: int) -> int:

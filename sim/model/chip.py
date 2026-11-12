@@ -18,7 +18,7 @@ STATUS, WRAP, SIDESET, PINBASE, PIN_MASK, MISC, CLKDIV, COND_CFG = range(8)
 COND_CFG01, COND_CFG23, PAU_MODE, CRC_CFG, CRC_POLY_LO, CRC_POLY_HI, CRC_RES_LO, CRC_RES_HI = range(8, 16)
 (IRQ, PC, X, Y, ISR, OSR, COUNTS, COND01, COND23, CRC_LO, CRC_HI, SM_STATUS, FIFO_LEVEL, IRQ_MASK,
  CLKDIV_FRAC, TIME) = range(16, 32)
-PAU_CODE, PAU_CFG = 0x30, 0x31
+PAU_CODE, PAU_CFG, FIFO_SPLIT = 0x30, 0x31, 0x32
 # Chip registers
 CTRL, GPIO, PINS, PINS_OE, PINS_IN, IRQ_SUM, ID, PADS_OUT, PADS_IN, PADS_BIDIR = range(0x20, 0x2A)
 
@@ -52,6 +52,7 @@ def sm_register(sm: StateMachine, addr: int, irq_mask: int) -> int:
         PAU_MODE: lambda: sm.pau_mode,
         PAU_CODE: lambda: sm.pau_code,
         PAU_CFG: lambda: sm.pau_cfg,
+        FIFO_SPLIT: lambda: sm.fifo_split_cfg,
         CRC_CFG: lambda: sm.crc_cfg,
         CRC_POLY_LO: lambda: sm.crc_poly & 0xFFFF,
         CRC_POLY_HI: lambda: sm.crc_poly >> 16,
@@ -202,6 +203,8 @@ class Chip:
             sm.pau_code = val & 0xFFFF
         elif addr == PAU_CFG:
             sm.pau_cfg = val & PAU_CFG_BITS
+        elif addr == FIFO_SPLIT:
+            sm.fifo_split_cfg = val & 0x1F
         elif addr == CRC_CFG:
             sm.crc_cfg = val & CRC_CFG_BITS
         elif addr == CRC_POLY_LO:

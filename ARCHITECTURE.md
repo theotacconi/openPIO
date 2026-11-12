@@ -283,10 +283,12 @@ machine has two:
 - the **RX FIFO** carries words from the program to the host.
 
 Each holds up to **133 words**, so the host can send or collect data in bursts, and the program
-can keep running while the host is busy with something else.
+can keep running while the host is busy with something else. The two share one memory block,
+and the host can move the line between them: up to **253 words** one way and 13 the other, for
+an Ethernet frame to send, or to receive faster than the host can read it.
 
-Inside, each queue has three parts: a register on the host's side, a long ring of 128 words in
-a memory block (SRAM), and 4 fast words next to the program. The memory can do one thing per
+Inside, each queue has three parts: a register on the host's side, a long ring in a memory block
+(SRAM; 128 words each by default), and 4 fast words next to the program. The memory can do one thing per
 clock, so the four kinds of moves take turns. The program only ever touches the 4 fast words,
 so it never waits for the memory unless it moves more than about one word every two clocks.
 
