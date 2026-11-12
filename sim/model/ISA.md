@@ -432,8 +432,11 @@ below are in strobes; H = PAU_BAUD.
 - **Transition codes**: half-bits by edge timing. After RX on the decoder waits for an input
   edge: a bit boundary, or with ALIGN mid-bit (the half before it, at the line's level before
   the edge, is then the first bit's first half). Every edge starts a half-bit; with no edge, a
-  further half-bit at the same level is taken 1.5H, 2.5H, ... after the last edge's, each 2H
-  (H at the time) after the one before (an edge up to H / 2 late still starts its half on time). More than RUN + 2 half-bits at one level
+  further half-bit at the same level is taken (3H - 1) / 2 strobes after the last edge's, then
+  every H (H at the time): the time between two edges counts as the nearest whole number of
+  half-bits, a tie as the fewer (an edge up to H / 2 - 1/2 strobe late still starts its half on
+  time), so a line from an unsynchronized transmitter, its edges a strobe early or late, keeps
+  its half-bits. More than RUN + 2 half-bits at one level
   end the frame: the decoder drops a bit whose second half has not come and waits for an edge
   again. A bit is decoded when its second half starts.
 
@@ -564,6 +567,16 @@ the shift counts. A program carries all of it as assembler directives (`sim/mode
 - **PAU receiver timing needs H >= 2** for transition codes (half-bits taken H / 2 after their start).
 
 ## History
+
+### Changes for 10 Mbit/s Ethernet (2026-11-12)
+
+Asked for by the user on 2026-11-12: 10BASE-T in both directions (`programs/ethernet/`).
+
+- Transition codes: a half-bit without an edge is taken (3H - 1) / 2 strobes after the edge
+  instead of 1.5H, so an interval between edges counts as the nearest whole number of
+  half-bits, a tie as the fewer. At H = 3 (10 Mbit/s Manchester from a 60 MHz clock) an edge
+  of an unsynchronized source sampled a clock late made an interval of 5 strobes, read as one
+  half-bit instead of two; now edges up to +-0.48 clock off and +-100 ppm decode.
 
 ### Changes on 8x4 tiles
 

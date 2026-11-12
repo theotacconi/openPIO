@@ -662,7 +662,7 @@ class StateMachine:
             return
         if self.rx_armed:                               # transition codes: half-bits by edges
             if edge:
-                self.rx_armed, self.rx_since, self.rx_thr, self.rx_run = False, 0, 3 * h, 1
+                self.rx_armed, self.rx_since, self.rx_thr, self.rx_run = False, 0, 3 * h - 1, 1
                 self.rx_end = before
                 if self.pau_mode >> 3 & 1:              # ALIGN: the first edge is mid-bit
                     self.rx_h0 = before
@@ -672,10 +672,11 @@ class StateMachine:
             return
         self.rx_since += 1
         if edge:
-            self.rx_since, self.rx_thr, self.rx_run = 0, 3 * h, 1
+            self.rx_since, self.rx_thr, self.rx_run = 0, 3 * h - 1, 1
             self._rx_half(1 - self.rx_half, inp)
-        elif 2 * self.rx_since >= self.rx_thr:          # a half-bit without an edge, 1.5H,
-            self.rx_thr += 2 * h                        # 2.5H, ... after the edge (H as it was)
+        elif 2 * self.rx_since >= self.rx_thr:          # a half-bit without an edge, (3H-1)/2,
+            self.rx_thr += 2 * h                        # then every H after the edge (H as it
+                                                        # was): the nearest whole half-bits
             self.rx_run += 1
             if self.rx_run > (self.pau_cfg >> 5 & 3) + 2:     # longer than the code's run
                 self.rx_armed = True                    # the frame ends

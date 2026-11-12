@@ -164,6 +164,45 @@ class Loopback(unittest.TestCase):
         self.check("miller", [0x00, 0x5A], 0x5A)
 
 
+class HalfBits(unittest.TestCase):
+    """Transition codes: the time between two edges is taken as the nearest whole number of
+    half-bits, a tie as the fewer (ISA.md, Receiver): with H = 3, up to 4 strobes is one, 5 to
+    7 two. A line from another clock (10BASE-T at 60 MHz) has edges a clock early or late."""
+
+    RX = """
+        .pau code=manchester baud=3
+        .push_thresh 8
+            set pau_ctl, rx
+        .wrap_target
+            in pins, 1 auto
+        .wrap
+    """
+
+    def received(self, gaps: list[int]) -> list[int]:
+        """The bits decoded from edges `gaps` strobes apart, the first mid-bit."""
+        rx = StateMachine(assemble(self.RX))
+        level, t, edges = 0, 10, [10]
+        for g in gaps:
+            t += g
+            edges.append(t)
+        bits = []
+        for k in range(t + 40):
+            if k in edges:
+                level ^= 1
+            rx.gpio_in = level
+            rx.step()
+            while rx.rx_fifo:
+                w = rx.rx_fifo.popleft() >> 8
+                bits += [w >> i & 1 for i in range(8)]
+        return bits + [rx.isr >> 16 - rx.isr_count + i & 1 for i in range(rx.isr_count)]
+
+    def test_nearest_whole_half_bits(self):
+        # Manchester 1 1 0 0 1 0 from an idle low line: edges 3 3 6 3 3 6 6 strobes apart
+        self.assertEqual(self.received([3, 3, 6, 3, 3, 6, 6]), [1, 1, 0, 0, 1, 0])
+        for early_late in ([4, 2, 5, 4, 2, 7, 5], [2, 4, 7, 2, 4, 5, 7]):
+            self.assertEqual(self.received(early_late), [1, 1, 0, 0, 1, 0], early_late)
+
+
 class BitClock(unittest.TestCase):
     """A PAU transmitter with the bit clock on PIN2 into a PAU receiver on that external
     clock, in the four SPI modes; the receiver answers on its own pin, clocked the same way."""

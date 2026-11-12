@@ -265,6 +265,9 @@ module pau (
     wire       edge_in = rx_in != r_prev;
     wire [7:0] s1      = r_since + 8'd1;
     wire [8:0] t2      = {s1, 1'b0};
+    // the first half-bit without an edge comes when 2 x since >= 3H - 1, (3H - 1) / 2 strobes after
+    // the edge rounded up: an interval is the nearest whole number of halves, a tie the fewer
+    wire [8:0] thr0    = {2'd0, h, 1'b0} + {3'd0, h} - 9'd1;
     // the halves the code gives bit b after the previous bit, which ended at end_b (at the
     // first edge after arming, the line before it: an ALIGN start decodes a bit at once)
     wire       end_b   = r_armed ? r_prev : r_end;
@@ -307,7 +310,7 @@ module pau (
                 if (edge_in) begin
                     r_armed_s = 1'b0;
                     r_since_s = 8'd0;
-                    r_thr_s   = {2'd0, h, 1'b0} + {3'd0, h};       // 3H
+                    r_thr_s   = thr0;
                     r_run_s   = 3'd1;
                     r_end_s   = r_prev;
                     r_h0_s    = r_prev;
@@ -318,7 +321,7 @@ module pau (
                 r_since_s = s1;
                 if (edge_in) begin
                     r_since_s = 8'd0;
-                    r_thr_s   = {2'd0, h, 1'b0} + {3'd0, h};
+                    r_thr_s   = thr0;
                     r_run_s   = 3'd1;
                     hv        = 1'b1;
                     r_half_s  = ~r_half;
