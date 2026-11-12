@@ -124,3 +124,7 @@ cd test
 ```
 
 On the chip the memories are IHP SRAM macros (`src/imem_sram.v`, `src/fifo_ram_sram.v`); `src/imem.v` and `src/fifo_ram.v` are flip-flop models of them, used by the default tests and the FPGA build. `IMEM=sram` and `GATES=yes` need the IHP-Open-PDK models under `<pdk dir>`, inside the repository so the container sees them; `GATES=yes` also needs `test/gate_level_netlist.v`, from the `tt_submission` artifact of a `gds` run.
+
+## License
+
+MIT: see [LICENSE](LICENSE).
