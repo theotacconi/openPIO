@@ -123,8 +123,9 @@ playing the recording
 
 Each line is a frame: the address, its complement, the command, its complement.
 
-- `--kind` picks the family (pulses, frames, async, clocked); by default the first of pulses,
-  frames and async that explains the recording. A clocked line needs `--clock-channel` (and
+- `--kind` picks the family (pulses, frames, async, clocked); by default, of pulses and
+  frames, the one that explains the recording with fewer frames, else async. `--kind async`
+  also takes a line with breaks (LIN, DMX). A clocked line needs `--clock-channel` (and
   `--select-channel` / `--select-pin` if it has a select); its clock goes to pin `--pin` + 1.
 - `--lsb` prints each byte's first bit as its LSB (UART, NEC, HDLC); the default is MSB first
   (SPI, CAN, DALI).

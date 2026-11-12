@@ -66,12 +66,12 @@ bit:
 
 [sim/learn/learn.py](sim/learn/learn.py) goes the other way: from a one-way recording of a line it finds the line's settings and writes an openPIO receiver for them. It knows four families of line formats:
 
-- asynchronous serial: bit time, parity, stop bits; it also writes the transmitter;
+- asynchronous serial: bit time, parity, stop bits, and on request the breaks LIN and DMX frames start with; it also writes the transmitter;
 - self-clocked frames: the line code, bit stuffing, sync bits and the CRC, whose polynomial it computes from the frames instead of looking it up in a table. The receiver hands each frame to the host with one extra word saying whether its CRC is right;
 - lines with a clock pin: the clock, its SPI mode, the select pin and the CRC;
 - pulse-width codes: which pulse carries the bits, their two widths and the leader.
 
-It is tested on UART, USB, CAN, HDLC, DALI, MFM, SPI, SD card commands, PS/2, NEC infrared and WS2812B: it learns each from a recording, and its receiver takes new frames. For 10BASE-T it learns the frames, but the line is too fast for its receiver. It learns the line, not the conversation: request-and-answer protocols on a shared wire (I2C, SWD, 1-Wire, ISO 7816) and the formats outside the four families (I2S, SENT, MIL-STD-1553B, 4B5B) need the hand-written programs above.
+It is tested on UART, LIN, USB, CAN, HDLC, DALI, MFM, biphase mark, SPI, SD card commands, PS/2, WS2812B, and on infrared and 433 MHz codes (NEC, Philips RC-5, Sony SIRC, an air conditioner remote, EV1527, a weather sensor): it learns each from a recording, and its receiver takes new frames. For 10BASE-T it learns the frames; its receiver takes them, and checks the FCS, from a half-bit of 3 clocks up (a 60 MHz clock: at 50 MHz the line is too fast for it). It learns the line, not the conversation: request-and-answer protocols on a shared wire (I2C, SWD, 1-Wire, ISO 7816) and the formats outside the four families (I2S, SENT, MIL-STD-1553B, 4B5B) need the hand-written programs above.
 
 ## The chip
 

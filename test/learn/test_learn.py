@@ -17,6 +17,7 @@ import random
 import sys
 import tempfile
 import unittest
+import zlib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -24,10 +25,12 @@ sys.path[:0] = [str(ROOT / "sim" / "learn"), str(ROOT / "sim" / "model"), str(RO
 from bench import Bench, Device, Script                  # noqa: E402
 from chip import IRQ                                     # noqa: E402
 from asm import assemble                                 # noqa: E402
-from devices import (BmcTx, CanNode, DaliBus, DaliGear, NecRemote, Ps2Device,  # noqa: E402
-                     SpiMaster, UartRx, UartTx, UsbTx, WiredAndBus, can_bits, can_crc15, crc7_sd,
-                     crc16_usb, crc16_x25, mfm_halves, mfm_sector, nec_levels, ps2_bits)
-from learn import (Capture, bursts, clocked_rx_program, clocked_timing, decode,  # noqa: E402
+from devices import (BmcTx, CanNode, DaliBus, DaliGear, LinSlave, NecRemote,  # noqa: E402
+                     Ps2Device, SpiMaster, UartRx, UartTx, UsbTx, WiredAndBus, can_bits,
+                     can_crc15, crc7_sd, crc16_usb, crc16_x25, lin_checksum, lin_pid, mfm_halves,
+                     mfm_sector, nec_levels, ps2_bits)
+from learn import (Capture, bursts, clocked_rx_program, clocked_timing, crc_check,  # noqa: E402
+                   decode,
                    write_sigrok, rx_frames as frames_received,
                    frame_timing, frames_rx_program, infer_async, infer_clocked, infer_frames,
                    infer_pulses,
@@ -141,6 +144,69 @@ class Learn(unittest.TestCase):
                 bench.start(1)
                 bench.run(round(len(data) * p.length * fmt[4]) + 500)
                 self.assertEqual((rx.frames, rx.errors), (data, []))
+
+
+    def test_pauses_not_whole_bits(self):
+        """Characters half a bit apart, as a sender that takes its time between them leaves
+        them: the bit time comes from the pulses at the active level, whole bits each (with
+        the idle ones too it was 4.5 % short, and the format 8N2)."""
+        fmt, data = (8, None, 1, 1, 40), values((8,), 21, 80)
+        bench = Bench(pullups=1 << PIN)
+        tx = bench.add(UartTx(PIN, 40, data, start=200, gap=0.5))
+        bench.run(tx.end + 50)
+        cap = Capture.from_levels(bench.trace, PIN)
+        p = infer_async(cap)
+        self.check(p, fmt)
+        self.assertAlmostEqual(p.bit, 40, delta=0.1)
+        self.assertEqual(decode(cap, p), data)
+
+    def lin(self, frames: list[list[int]]) -> list[int]:
+        """The bus of programs/lin/lin_master.asm sending each frame's data to a reference
+        slave (ID 0x21 + its index), 8 clocks a bit: a level a clock on pin 1."""
+        ids = [0x21 + k for k in range(len(frames))]
+        slave = LinSlave(8, subscribe={i: len(d) for i, d in zip(ids, frames)})
+        bench = Bench(pullups=0b11)
+        bench.load(0, (ROOT / "programs/lin/lin_master.asm").read_text())
+        bench.add(WiredAndBus([0], [1], [slave]))
+        for i, d in zip(ids, frames):
+            pid = lin_pid(i)
+            bench.send(0, [pid | len(d) + 1 << 8 | 1 << 15] + d + [lin_checksum(pid, d)])
+        bench.start(1)
+        bench.run(400, until=lambda: len(slave.frames) == len(frames))
+        bench.run(sum(34 + 10 * (len(d) + 1) for d in frames) * 8 + 400,
+                  until=lambda: len(slave.frames) == len(frames))
+        bench.run(200)
+        self.assertEqual((bench.errors(), slave.frames), ([], [(i, d, True) for i, d in zip(ids, frames)]))
+        return [lv >> 1 & 1 for lv in bench.trace]
+
+    def test_lin_breaks(self):
+        """A LIN bus recorded from the chip's master: characters once the breaks, 13 bits low
+        before each frame, are left out (asked for: a break fits no format); 8N2, as this
+        master leaves two bit times after every character. The learned receiver gives each
+        break as a word of zeros with a framing error, then the frame's characters from the
+        sync byte on, not characters read from the break's middle."""
+        rnd = random.Random(22)
+        frames = [[rnd.randrange(256) for _ in range(n)] for n in (2, 4, 1, 3, 2, 4)]
+        cap = Capture.from_levels(self.lin(frames))
+        self.assertRaises(ValueError, infer_async, cap)
+        p = infer_async(cap, breaks=True)
+        self.check(p, (8, None, 2, 1, 8))
+        self.assertEqual(p.breaks, len(frames))
+        want = lambda fs: [[0x55, lin_pid(0x21 + k), *d, lin_checksum(lin_pid(0x21 + k), d)]  # noqa: E731
+                           for k, d in enumerate(fs)]
+        self.assertEqual(decode(cap, p), sum(want(frames), []))
+
+        frames = [[rnd.randrange(256) for _ in range(n)] for n in (3, 1, 4)]
+        levels = self.lin(frames)
+        h, div, frac = timing(p)
+        bench = Bench(pullups=1)
+        bench.load(0, rx_program(p, 0), clkdiv_int=div, clkdiv_frac=frac)
+        bench.add(played(levels, [0]))
+        bench.start(1)
+        bench.run(len(levels) + 100)
+        self.assertEqual([word_value(p, w) for w in bench.received[0]],
+                         sum(([0] + f for f in want(frames)), []))
+        self.assertTrue(bench.chip.sms[0].irq_flags[0], "a break is a framing error")
 
 
 def bits(data: list[int], lsb_first: bool = True) -> list[int]:
@@ -365,6 +431,49 @@ class LearnFrames(unittest.TestCase):
         self.assertIn(".crc width=32 poly=0x4C11DB7 init=ones xorout=1", pau_directives(p)[0])
         with self.assertRaisesRegex(ValueError, "too fast"):
             frames_rx_program(p, 0)                      # 2 clocks a half-bit
+
+    def ethernet(self, sizes, seed: int, baud: int) -> tuple[list[list[int]], list[int]]:
+        """(the frames' bytes after the SFD, the line a clock) of eth_tx.asm sending random
+        frames of these sizes (the FCS's 4 bytes too), `baud` clocks a half-bit."""
+        rnd = random.Random(seed)
+        bench = Bench()
+        bench.load(0, (ROOT / "programs/ethernet/eth_tx.asm").read_text()
+                   .replace("baud=2", f"baud={baud}"))
+        bench.start(1)
+        frames = []
+        for n in sizes:
+            f = [rnd.randrange(256) for _ in range(n - 4)]
+            frames.append(f + list(zlib.crc32(bytes(f)).to_bytes(4, "little")))
+            bench.send(0, [len(f) // 2] + [f[i] | f[i + 1] << 8 for i in range(0, len(f), 2)])
+            bench.run(200 * n, until=lambda: not bench.to_send[0])
+            bench.write(0, IRQ, 1 << 8)
+            bench.run((n + 30) * 16 * baud)
+        return frames, [lv & 1 for lv in bench.trace]
+
+    def test_ethernet_received_at_three_clocks(self):
+        """10BASE-T with a half-bit of 3 clocks, a 60 MHz clock: the least the generated
+        receiver takes, a bit every 6 strobes. TP_IDL, the end mark, is 8 or 11 clocks, not
+        whole half-bits, and the decoder takes one bit more at its falling edge: the CRC is
+        right one bit before the end. A frame of 250 bytes, and one with a bit inverted."""
+        _, trace = self.ethernet((20, 26, 20, 32), 5, 3)
+        p = self.learn(trace, 0)
+        self.check(p, "manchester", None, (32, 0x04C11DB7, 1, 1), bits([0x55] * 7 + [0xD5]))
+        self.assertEqual((frame_timing(p), crc_check(p)), ((3, 1, 0), (0xC704DD7B, 1)))
+
+        frames, trace = self.ethernet((64, 20, 250, 40), 6, 3)
+        edges = bursts(Capture.from_levels(trace), 60)[1][1]
+        t = edges[0] - 3 + 6 * 100                       # the second frame's bit 100 (the
+        trace[t:t + 6] = [lv ^ 1 for lv in trace[t:t + 6]]   # first edge is mid-bit) inverted
+        bench = Bench()
+        bench.add(played([lv << PIN for lv in trace], [PIN]))
+        bench.load(0, frames_rx_program(p, PIN), clkdiv_int=1)
+        bench.run(4)
+        bench.start(1)
+        bench.run(len(trace) + 200)
+        got = frames_received(bench.received[0])
+        sent = [bits([0x55] * 7 + [0xD5] + f) for f in frames]
+        sent[1][100] ^= 1
+        self.check_received(got, sent, [3, 1, 3, 3])
 
     def test_hdlc_from_the_chip(self):
         """programs/hdlc/hdlc_tx.asm, the line idle between frames: NRZI, a 0 after five 1s,
@@ -805,6 +914,20 @@ class LearnPulses(unittest.TestCase):
         script, end = pulse_script([sirc_levels(*f) for f in frames], 0.22, 1, 30000)
         got = self.receive(p, script, end)
         self.assertEqual(got, [(bits([c | a << 7, a >> 1])[:12], 1) for c, a in frames])
+
+    def test_sirc_one_remote(self):
+        """A Sony remote as it is recorded: one address, each key sent three times while it is
+        held. Frames equal where a CRC would be are no evidence for one: before, a CRC-8
+        that every frame of these four keys fits (and with one key, a CRC-10)."""
+        for keys in ([21, 18, 19, 16], [21]):
+            frames = [(c, 1) for c in keys for _ in range(3)]
+            script, end = pulse_script([sirc_levels(*f) for f in frames], 0.2, 1, 25000)
+            bench = Bench()
+            bench.add(script)
+            bench.run(end)
+            p = infer_pulses(Capture.from_levels(bench.trace, PIN))
+            self.assertEqual((p.carrier, p.crc), ("mark", None), keys)
+            self.assertEqual(p.frames, [bits([c | a << 7, a >> 1])[:12] for c, a in frames])
 
     def test_433_mhz_sensor(self):
         """Fine Offset WH2 frames: pulse width, a short mark a 1, found by the CRC-8 0x31 after

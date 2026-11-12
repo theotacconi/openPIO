@@ -5,6 +5,7 @@ an openPIO receiver for it, and this loads it on state machine 0 and prints what
 
     python3 board/listen.py remote.sr --channel D0 --pin 0          # the Pico on /dev/ttyACM0
     python3 board/listen.py bus.sr --channel D2 --pin 3 --kind frames
+    python3 board/listen.py lin.sr --channel D0 --kind async        # LIN, DMX: with breaks
     python3 board/listen.py spi.sr --channel D1 --clock-channel D0 --pin 2   # clock on pin 3
     python3 board/listen.py remote.sr --channel D0 --model          # the recording played on
                                                                     # the Python model instead
@@ -46,8 +47,8 @@ def learn(kind: str, caps: dict[str, Capture], channel: str, args) -> tuple:
         p = infer_frames(cap)
         _, div, frac = frame_timing(p)
         return p, frames_rx_program(p, args.pin), div, frac, crc_check(p) is not None
-    if kind == "async":
-        p = infer_async(cap)
+    if kind == "async":                                  # breaks (LIN, DMX) only when asked for
+        p = infer_async(cap, breaks=getattr(args, "kind", None) == "async")
         _, div, frac = timing(p)
         return p, rx_program(p, args.pin), div, frac, False
     pins = {name: caps[name] for name in (channel, args.clock_channel, args.select_channel) if name}
@@ -56,6 +57,26 @@ def learn(kind: str, caps: dict[str, Capture], channel: str, args) -> tuple:
         raise ValueError(f"{channel} is not data on the clock")
     src = clocked_rx_program(p, args.pin, args.select_pin)
     return p, src, clocked_timing(p)[0], 0, clocked_check(p) is not None
+
+
+def learn_auto(caps: dict[str, Capture], channel: str, args) -> tuple:
+    """(the kind, then as learn()) of the family that explains the recording. Of pulses and
+    frames, the one that finds fewer frames, pulses when equal: the wrong family cuts a frame
+    at the pauses within it (biphase mark read as pulse widths ends a frame at every long
+    space, and keeps half its bits). An asynchronous line when neither explains it.
+    ValueError with each family's reason when none does."""
+    found, errors = [], []
+    for kind in ("pulses", "frames"):
+        try:
+            found.append((kind, *learn(kind, caps, channel, args)))
+        except ValueError as e:
+            errors.append(f"{kind}: {e}")
+    if found:
+        return min(found, key=lambda f: len(f[1].frames))
+    try:
+        return ("async", *learn("async", caps, channel, args))
+    except ValueError as e:
+        raise ValueError("\n  ".join(errors + [f"async: {e}"])) from None
 
 
 def hexbits(b: list[int], lsb: bool) -> str:
@@ -95,16 +116,14 @@ def main() -> int:
         ap.error(f"no channel {args.channel}: {', '.join(caps)}")
     if args.clock_channel:
         args.kind = "clocked"
-    kinds = ("pulses", "frames", "async") if args.kind == "auto" else (args.kind,)
-    errors = []
-    for kind in kinds:
-        try:
+    try:
+        if args.kind == "auto":
+            kind, p, src, div, frac, crc = learn_auto(caps, args.channel, args)
+        else:
+            kind = args.kind
             p, src, div, frac, crc = learn(kind, caps, args.channel, args)
-            break
-        except ValueError as e:
-            errors.append(f"{kind}: {e}")
-    else:
-        print("nothing learned:\n  " + "\n  ".join(errors))
+    except ValueError as e:
+        print(f"nothing learned:\n  {e}")
         return 1
     print(f"learned {kind}: {p}")
     print(f"receiver on pin {args.pin}, CLKDIV {div} + {frac}/256 at {args.clock_hz / 1e6:g} MHz")

@@ -12,7 +12,8 @@ is one point in it. Learning is a search of that space against a recording:
 Four families so far:
 
 - asynchronous serial characters (UART, RS-485, LIN, Modbus RTU, DMX, MIDI and the proprietary
-  links built on them): bit time, polarity, data bits, parity, stop bits; RX and TX programs.
+  links built on them): bit time, polarity, data bits, parity, stop bits, breaks; RX and TX
+  programs.
 - self-clocked frames, bursts of edges between idle times (USB, CAN, HDLC, DALI, 10BASE-T,
   MFM, biphase mark, RC-5 infrared remotes, ...): the PAU's line code, polarity, half-bit, bit stuffing, the sync bits
   every frame starts with and the CRC; an RX program that passes the frames on with the CRC's
@@ -200,6 +201,7 @@ class AsyncSerial:
     data_bits: int
     parity: str | None      # "even", "odd" or None
     stop_bits: int
+    breaks: int = 0         # breaks in the recording (the line active a whole character)
 
     @property
     def length(self) -> int:
@@ -209,14 +211,15 @@ class AsyncSerial:
     def __str__(self) -> str:
         p = {None: "N", "even": "E", "odd": "O"}[self.parity]
         return (f"async serial {self.data_bits}{p}{self.stop_bits}, {self.bit:.2f} clocks a bit, "
-                f"{'idle high' if self.idle else 'idle low (inverted)'}")
+                f"{'idle high' if self.idle else 'idle low (inverted)'}"
+                + (f", {self.breaks} breaks" if self.breaks else ""))
 
 
 # ---------------------------------------------------------------------------------- infer
 
 def bit_time(widths: list[int]) -> float:
-    """The bit time: every pulse lasts a whole number of bits. The narrowest pulses are one
-    bit; the estimate is then refined over every pulse of up to 16 bits."""
+    """The bit time of pulses that each last a whole number of bits. The narrowest pulses are
+    one bit; the estimate is then refined over every pulse of up to 16 bits."""
     if not widths:
         raise ValueError("no edges: nothing to learn")
     shortest = sorted(widths)[:max(1, len(widths) // 10)]
@@ -258,46 +261,69 @@ def errors(chars: list[list[int]], p: AsyncSerial) -> int:
     return sum(broken(bits, p) for bits in chars)
 
 
-def infer_async(cap: Capture) -> AsyncSerial:
+def infer_async(cap: Capture, breaks: bool = False) -> AsyncSerial:
     """The asynchronous format that explains every character of the recording, or ValueError.
 
-    The bit time comes from the pulse widths. Every format, at either idle level, is tried on
-    every character: one with a framing or parity error is out (a stop bit too many lands on
-    the next start bit where characters are back to back). Of the rest, the one with fewer data
-    bits that never change wins (more likely stop bits), then fewer data bits (a parity bit
-    explains a ninth bit better than data), then more stop bits (safe to send: the recording
-    never had less idle). Characters a logic analyzer's recording may have cut are left out
-    first (a level held longer than a character's 12 bits, 9 data, parity and 2 stop, is idle),
-    after spikes (Capture.despiked);
+    The bit time comes from the widths of the pulses at the active level (not the idle one):
+    a start bit and the data bits after it are whole bits, while a pulse at the idle level may
+    hold the pause between two characters, of any length (half a bit between the characters
+    of a slow sender took the bit time 4.5 % short). Every format, at either idle level, is
+    tried on every character: one with a framing or parity error is out (a stop bit too many
+    lands on the next start bit where characters are back to back). With `breaks`, when no
+    format explains every character, they are tried again without the breaks, counted: a
+    break, the line active for a whole character and its stop bits, is no character (LIN's
+    and DMX's frames start with one). Only then, as an idle line is a break at the other idle
+    level; and only on a line known to be asynchronous: an NEC remote's marks and spaces, 1
+    and 3 bits, read as 8N1 characters, its leader as a break. Of the formats left, the one
+    with fewer data bits that never change wins (more likely stop bits), then fewer data bits
+    (a parity bit explains a ninth bit better than data), then more stop bits (safe to send:
+    the recording never had less idle). Characters a logic analyzer's recording may have cut
+    are left out first (a level held longer than a character's 12 bits, 9 data, parity and 2
+    stop, is idle), after spikes (Capture.despiked);
     the whole recording is tried when nothing is left. A recording cut in the middle of
     characters back to back has no such pause: as a receiver does, the first characters may
     break the format until one is read from its start bit (in ASCII text that can take 7), then
     none may; up to 16 are left out, fewer than are left."""
     cap = cap.despiked()
-    bit = bit_time(cap.widths())
-    cut = cap.span is not None and bool(cap.edges) and cap.edges[0] - cap.span[0] < 13 * bit
-    for c, lead in ((cap.window(*cap.settled(13 * bit)), 0), (cap, 0), (cap, 16 if cut else 0)):
+    ws = cap.widths()
+    bits = {}                                            # the bit time for each idle level
+    for idle in (0, 1):
+        active = ws[0::2] if cap.level == idle else ws[1::2]
+        if active:
+            bits[idle] = bit_time(active)
+    if not bits:
+        raise ValueError("no edges: nothing to learn")
+    for breaks, stage in itertools.product((False, True) if breaks else (False,), range(3)):
         best = None
-        for idle, data_bits, parity, stop_bits in itertools.product(
-                (0, 1), range(5, 10), (None, "even", "odd"), (1, 2)):
-            p = AsyncSerial(bit, idle, data_bits, parity, stop_bits)
-            chars = characters(c, p)
-            out = max((k + 1 for k in range(min(lead, len(chars))) if broken(chars[k], p)), default=0)
-            chars = chars[out:]
-            if len(chars) <= out or errors(chars, p):
-                continue
-            constant = sum(len({x[1 + k] for x in chars}) == 1 for k in range(data_bits))
-            score = (constant, data_bits, -stop_bits)
-            if best is None or score < best[0]:
-                best = (score, p)
+        for idle, bit in bits.items():
+            cut = cap.span is not None and cap.edges[0] - cap.span[0] < 13 * bit
+            c = cap.window(*cap.settled(13 * bit)) if stage == 0 else cap
+            lead = 16 if stage == 2 and cut else 0
+            for data_bits, parity, stop_bits in itertools.product(
+                    range(5, 10), (None, "even", "odd"), (1, 2)):
+                p = AsyncSerial(bit, idle, data_bits, parity, stop_bits)
+                every = characters(c, p)
+                chars = [x for x in every if any(x)] if breaks else every
+                p.breaks = len(every) - len(chars)
+                out = max((k + 1 for k in range(min(lead, len(chars))) if broken(chars[k], p)),
+                          default=0)
+                chars = chars[out:]
+                if len(chars) <= out or errors(chars, p):
+                    continue
+                constant = sum(len({x[1 + k] for x in chars}) == 1 for k in range(data_bits))
+                score = (constant, data_bits, -stop_bits)
+                if best is None or score < best[0]:
+                    best = (score, p)
         if best is not None:
             return best[1]
-    raise ValueError(f"no asynchronous format explains the recording (bit {bit:.2f} clocks)")
+    raise ValueError("no asynchronous format explains the recording (bit "
+                     + " or ".join(f"{b:.2f}" for b in bits.values()) + " clocks)")
 
 
 def decode(cap: Capture, p: AsyncSerial) -> list[int]:
-    """The data values of the recording's characters."""
-    return [sum(b << k for k, b in enumerate(bits[1:1 + p.data_bits])) for bits in characters(cap, p)]
+    """The data values of the recording's characters (not its breaks)."""
+    return [sum(b << k for k, b in enumerate(bits[1:1 + p.data_bits]))
+            for bits in characters(cap, p) if any(bits)]
 
 
 # ---------------------------------------------------------------------------------- generate
@@ -319,7 +345,9 @@ def _header(name: str, p: AsyncSerial, h: int) -> str:
 def rx_program(p: AsyncSerial, pin: int) -> str:
     """A receiver through the PAU (NRZ; INV for an idle-low line). RX FIFO: a word a character,
     the data in bits 15:16-n with the parity bit above it; IRQ 0 framing error, IRQ 1 parity
-    error. The parity is a 1-bit CRC fed from the ISR (ISA.md, PAU)."""
+    error. The parity is a 1-bit CRC fed from the ISR (ISA.md, PAU). After a framing error the
+    next start bit is looked for once the line is back at rest: a break (LIN, DMX) is one word
+    of zeros with IRQ 0, not characters read from its middle."""
     h, _, _ = timing(p)
     n = p.data_bits
     parity = f"""    in pins, 1              ; the parity bit
@@ -343,6 +371,10 @@ idle:
     mov x, isr
     jmp x 15, idle
     irq 0                   ; framing error
+rest:
+    in pins, 1              ; a break lasts: wait for the line at rest
+    mov x, isr
+    jmp !x 15, rest
 .wrap
 """
 
@@ -481,13 +513,15 @@ def bursts(cap: Capture, gap: float) -> list[tuple[int, list[int]]]:
 def halves(level: int, edges: list[int], h: float, align: int,
            tail: int = 2) -> list[int] | None:
     """The line in each half-bit of a burst from its first edge (with align from the half
-    before it), `tail` halves from its last; None when an edge is off the half-bit grid."""
+    before it), `tail` halves from its last; None when an edge is off the half-bit grid before
+    the burst's last 8 half-bits. There a pulse is an end mark, as long as it likes (10BASE-T's
+    TP_IDL is not timed in half-bits): it counts the nearest whole half-bits."""
     out = [level] if align else []
     for a, b in zip(edges, edges[1:]):
         n = (b - a) / h
-        if round(n) < 1 or abs(n - round(n)) > 0.3:
+        if (round(n) < 1 or abs(n - round(n)) > 0.3) and edges[-1] - a > 8 * h:
             return None
-        out += [level ^ 1] * round(n)
+        out += [level ^ 1] * max(1, round(n))
         level ^= 1
     return out + [level ^ 1] * tail
 
@@ -504,6 +538,40 @@ def decode_halves(hs: list[int], code: int, level: int) -> tuple[list[int], int]
         bits.append(fit[0])
         level, p = hs[i + 1], fit[0]
     return bits, len(hs)
+
+
+def receiver_bits(hs: list[int], code: int, level: int, align: int, run: int) -> list[int]:
+    """The bits the PAU's decoder takes of the halves of a burst (ISA.md, Receiver), the line
+    at `level` before it: as decode_halves() up to the first halves that are no bit's, or a
+    level held more than `run` halves; there the decoder waits for the next edge and decodes
+    from it again (with `align`, as a first edge mid-bit). So an end mark gives bits of its
+    own: 10BASE-T's TP_IDL, high after the last bit, is one bit more at its falling edge."""
+    bits, p, armed, half, h0, end, held, prev = [], 0, True, 0, level, level, 0, level
+    for cur in hs[1:] if align else hs:
+        edge, prev, before = cur != prev, cur, prev
+        if armed and not edge:
+            continue
+        held = 1 if edge else held + 1
+        if armed:                                        # the edge that starts a frame
+            armed, end, h0, half = False, before, before if align else cur, align
+            if not align:
+                continue
+        elif held > run:
+            armed = True
+            continue
+        else:
+            half ^= 1
+            if not half:
+                h0 = cur
+                continue
+        fit = [b for b in (1, 0)
+               if act(code, 0, b, p, end) == h0 and act(code, 1, b, p, h0) == cur]
+        if fit:
+            bits.append(fit[0])
+            end, p = cur, fit[0]
+        else:
+            armed = True
+    return bits
 
 
 def destuff(bits: list[int], mode: int, n: int) -> tuple[list[int], list[tuple[int, bool]]]:
@@ -611,7 +679,12 @@ def gcds(polys: list[int], spare: int, low: int | None = None) -> list[int]:
 
 def find_crc(frames: list[list[int]], starts, tails, spare: int = 0) -> Crc | None:
     """The widest CRC every frame ends with, `tail` bits before its end, over its bits from
-    `start`; with `spare` 1, every frame but one.
+    `start`, that the frames are evidence for; with `spare` 1, every frame but one.
+
+    A CRC of width w is believed from EVIDENCE / w + 1 frames that differ in the bits it
+    covers: a frame equal to another there fits whatever the other fits (a key pressed
+    twice, a Sony remote's address, the same in every frame), and so does a rotation of
+    another (rotation_class). A CRC narrower than they can prove is not looked for.
 
     A frame's bits from `start` to the end of its CRC, as a polynomial B of length L, make
     B + I x^(L - w) + X a multiple of the polynomial P (I, X: the initial value and the final
@@ -625,15 +698,20 @@ def find_crc(frames: list[list[int]], starts, tails, spare: int = 0) -> Crc | No
         return out + [pgcd(v ^ vs[1] for v in vs[2:])] if spare else out
 
     best = None
+    whole = len({rotation_class(f) for f in frames})
     for tail in tails:
         for s in starts:
             bs = [(to_int(f[s:len(f) - tail]), len(f) - tail - s) for f in frames]
             n = max(k for _, k in bs)
-            if min(k for _, k in bs) < 2:
+            others = min(whole, len(set(bs))) - 1 - spare    # frames that are evidence
+            if min(k for _, k in bs) < 2 or others < 1:
+                continue
+            least = -(-EVIDENCE // others)                   # the narrowest CRC they prove
+            if least > 32:
                 continue
             by_end = differences([v for v, _ in bs])
             by_start = differences([v << n - k for v, k in bs])
-            for w in range(32, best.width if best else 0, -1):
+            for w in range(32, max(best.width if best else 0, least - 1), -1):
                 ones = (1 << w) - 1
                 for init, xo in ((0, 0), (0, 1), (1, 0), (1, 1)):
                     ds = [v ^ (ones << k - w if init and k > w else 0) ^ (ones if xo else 0)
@@ -709,28 +787,26 @@ def _explained(bs: list[tuple[int, list[int]]], unit: float, spare: int = 0) -> 
 
 def frames_crc(frames: list[list[int]], spares=(0, 1)) -> Crc | None:
     """The CRC the frames end with, from up to 16 bits before the bits they all start with to
-    24 after, ending up to 3 bits before the bits they all end with; believed from EVIDENCE.
-    When none is, a CRC all of them but one end with, believed from the others: a frame the
-    line corrupted (a reflection, a key half pressed) does not hide the CRC of the rest.
-    `spares`: the frames left out to try, in order. A frame of 32 bits or more that is a
-    rotation of another (the same, or a pattern going round a LED ring) is no evidence: a
-    polynomial that divides x^n + 1 divides every rotation of a frame of n bits it divides,
-    and random frames that long are rotations of each other about once in 2^27. Shorter
-    frames are, by chance (an 11-bit PS/2 byte), and each is counted."""
+    24 after, ending up to 3 bits before the bits they all end with; believed from EVIDENCE
+    (find_crc). When none is, a CRC all of them but one end with, believed from the others: a
+    frame the line corrupted (a reflection, a key half pressed) does not hide the CRC of the
+    rest. `spares`: the frames left out to try, in order."""
     sync, end = common_prefix(frames), common_suffix(frames)
-    kinds = len({rotation_class(f) for f in frames})
     for spare in spares if len(frames) > 2 else (0,):
         crc = find_crc(frames, range(max(0, sync - 16), sync + 25), range(end + 4), spare)
-        if crc and crc.width * (kinds - 1 - spare) >= EVIDENCE:
+        if crc:
             return crc
     return None
 
 
-def rotation_class(bits: list[int]) -> tuple[int, ...] | int:
-    """The least of the rotations of 32 bits or more: the same for a frame and its rotations;
-    a shorter frame is a class of its own."""
+def rotation_class(bits: list[int]) -> tuple[int, ...]:
+    """The same for frames that are no evidence apart: a frame of 32 bits or more and its
+    rotations (the least of them: a pattern going round a LED ring), as a polynomial that
+    divides x^n + 1 divides every rotation of a frame of n bits it divides, and random frames
+    that long are rotations of each other about once in 2^27; a shorter frame only itself, as
+    short frames are rotations by chance (an 11-bit PS/2 byte)."""
     if len(bits) < 32:
-        return id(bits)
+        return tuple(bits)
     s = "".join(map(str, bits))
     return tuple(map(int, min(s[k:] + s[:k] for k in range(len(s)))))
 
@@ -777,10 +853,10 @@ def crc_steps(bits: list[int], c: Crc):
 
 def _received(p: Frames, bs: list[tuple[int, list[int]]]) -> list[list[int]] | None:
     """The bits a receiver takes of every burst, destuffed after the unstuffed ones, to the end
-    it sees: with a transition code the decoder's last bit (its run, then RX idle); with a
-    level code the first stuff error, where the idle line or an end mark breaks the rule. None
-    when a frame's end does not show (a level code without stuffing, or idle that keeps the
-    rule)."""
+    it sees: with a transition code the decoder's last bit before RX idle (receiver_bits: the
+    bits of an end mark too); with a level code the first stuff error, where the idle line or
+    an end mark breaks the rule. None when a frame's end does not show (a level code without
+    stuffing, or idle that keeps the rule)."""
     level = p.code in LEVEL_CODES
     if level and not p.stuff:
         return None
@@ -789,7 +865,8 @@ def _received(p: Frames, bs: list[tuple[int, list[int]]]) -> list[list[int]] | N
     out = []
     for lv, edges in bs:
         hs = halves(lv ^ p.inv, edges, p.half, p.align, 2 * p.stuff[1] + 4 if level else run)
-        bits = decode_halves(hs, PAU_CODES[p.code], lv ^ p.inv)[0]
+        bits = (decode_halves(hs, PAU_CODES[p.code], lv ^ p.inv)[0] if level else
+                receiver_bits(hs, PAU_CODES[p.code], lv ^ p.inv, p.align, run))
         if not p.stuff:
             out.append(bits)
             continue
@@ -826,8 +903,9 @@ def crc_check(p: Frames) -> tuple[int, int] | None:
 
 def frame_timing(p: Frames) -> tuple[int, int, int]:
     """(PAU half-bit H, CLKDIV integer, fraction / 256): H = 4 strobes a half-bit when it lasts
-    4 clocks or more, fewer for faster lines."""
-    h = max(1, min(4, int(p.half)))
+    4 clocks or more, fewer for faster lines (a half-bit measured as 2.9999 clocks is 3
+    strobes: CLKDIV rounds to 1)."""
+    h = max(1, min(4, int(p.half * 513 / 512)))
     div = round(p.half / h * 256)
     return h, div >> 8, div & 0xFF
 
@@ -1508,7 +1586,7 @@ def main() -> None:
         except ValueError as e:
             print(f"no RX program: {e}\n{pau_directives(p)[0]}")
         return
-    p = infer_async(cap)
+    p = infer_async(cap, breaks=True)
     h, div, frac = timing(p)
     print(f"{p}: {rec.get('clock_hz', 50e6) / p.bit:.0f} baud; CLKDIV {div} + {frac}/256")
     print(rx_program(p, args.pin))

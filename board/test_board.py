@@ -83,6 +83,18 @@ class Listen(unittest.TestCase):
         self.assertEqual(out[3:], [f"  32 bits  {a:02x} {a ^ 255:02x} {c:02x} {c ^ 255:02x}"
                                    for a, c in frames])
 
+    def test_biphase_mark_is_not_pulse_widths(self):
+        """Biphase mark has two pulse widths, and the pulses family explains it too, with a
+        frame at every long space: the family that finds fewer frames is the one learned."""
+        rnd = random.Random(4)
+        frames = [[rnd.randrange(2) for _ in range(rnd.randrange(40, 120))] for _ in range(5)]
+        bench = T.Bench()
+        tx = bench.add(T.BmcTx(0, 40, frames, start=100, gap=20))
+        bench.run(tx.end + 100)
+        out = self.listen(bench.trace)
+        self.assertIn("learned frames: bmc", out[0])
+        self.assertEqual([int(line.split()[0]) for line in out[3:]], [len(f) for f in frames])
+
     def test_uart(self):
         text = b"openPIO, from a recording"
         bench = T.Bench(pullups=1)
@@ -135,7 +147,7 @@ class Listen(unittest.TestCase):
 
     def test_ps2_keyboard_with_its_parity(self):
         rnd = random.Random(3)
-        keys = [rnd.randrange(256) for _ in range(44)]
+        keys = [rnd.randrange(256) for _ in range(56)]  # 41 different ones prove a parity
         bench = T.Bench(pullups=3)
         bench.add(T.Ps2Device(1, 0, keys))
         bench.run(50 + 1080 * len(keys) + 300)
