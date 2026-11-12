@@ -1,6 +1,6 @@
 # Captures
 
-Logic analyzer recordings of the Tang Nano 20K build, 8x4 RTL (c2798d7), recorded on
+Logic analyzer recordings of the Tang Nano 20K build, 8x4 RTL (79add21), recorded on
 2026-11-07 with `sigrok-cli` and a Saleae Logic clone (`fx2lafw`, 8 channels). Each one is a
 sigrok session file, as PulseView saves it. `test/learn/test_captures.py` checks what the
 learner finds in each one, without a board.
