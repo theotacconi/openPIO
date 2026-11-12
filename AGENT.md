@@ -4,7 +4,7 @@
 
 ## Goals
 
-* Entry for the protocol emulator ASIC competition (`COMPETITION.md`), due **2027-01-18**: public repository with RTL, tests, a passing Tiny Tapeout GDS and precheck, the architecture and ISA documentation, the assembler with example programs, a write-up of the verification and of how AI was used.
+* Entry for the protocol emulator ASIC competition (`COMPETITION.md`: local only, never committed), due **2027-01-18**: public repository with RTL, tests, a passing Tiny Tapeout GDS and precheck, the architecture and ISA documentation, the assembler with example programs, a write-up of the verification and of how AI was used.
 * Judging: flexibility first (the chip runs protocols it was not designed for), then the protocols shown, what the architecture makes possible, and how it was designed and verified.
 * Beyond the competition: a protocol emulator useful in the real world (robotics, automation, debugging), on silicon and on FPGA. The measure is flexibility: ideally any existing serial protocol can be written for it, and the more protocols the programs prove, the better.
 * Priorities, in order: correctness and timing determinism, closing timing and area, features. Every instruction takes a known number of clocks: no unmodeled latency or branch penalty.
