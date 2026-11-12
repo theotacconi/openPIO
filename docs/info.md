@@ -50,7 +50,7 @@ The instruction set has 16 pin positions; pin k is `uio[k]`, pin 8 + k is `uo_ou
 
 ### Clock
 
-`clk` runs at up to 50 MHz, signed off in the typical corner (1.2 V, 25 C), with 3.8 ns of setup slack. In the slow corner (1.08 V, 125 C) it closes at 39 MHz. Hold is met in all corners.
+`clk` runs at up to 50 MHz, signed off in the typical corner (1.2 V, 25 C), with 5.0 ns of setup slack. In the slow corner (1.08 V, 125 C) it closes at 42 MHz. Hold is met in all corners.
 
 ## How to test
 

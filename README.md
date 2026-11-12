@@ -77,12 +77,12 @@ It is tested on UART, LIN, USB, CAN, HDLC, DALI, MFM, biphase mark, SPI, SD card
 
 | | |
 |---|---|
-| Process | IHP 130 nm CMOS5L, Tiny Tapeout, 6 x 4 tiles (1.29 x 0.71 mm) |
+| Process | IHP 130 nm CMOS5L, Tiny Tapeout, 8 x 4 tiles (1.72 x 0.71 mm) |
 | State machines | 2, each with its own program memory (an SRAM) and FIFO memory (an SRAM) |
 | Pins | 14 usable: 8 bidirectional, 6 input + output on separate pads |
 | Host interface | SPI, plus an interrupt line |
-| Clock | 50 MHz at typical conditions (1.2 V, 25 C); 39 MHz in the worst case (1.08 V, 125 C) |
-| Size | 33k standard cells and 4 SRAMs, 10 mW |
+| Clock | 50 MHz at typical conditions (1.2 V, 25 C); 42 MHz in the worst case (1.08 V, 125 C) |
+| Size | 32k standard cells and 4 SRAMs, 11 mW |
 
 ## Documentation
 
