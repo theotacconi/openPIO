@@ -14,7 +14,7 @@ openPIO is a programmable I/O co-processor: two state machines (SMs), each a tin
 - **FIFOs:** TX (host to SM) and RX (SM to host) FIFOs per SM in one SRAM: 133 words each, or split up to 253 / 13 either way.
 - **Two SMs** share the pins (per-SM pin mask), start on the same clock, and signal each other through IRQ flags.
 
-Example programs (UART, Modbus RTU, SPI, I2C, USB low speed, USB Power Delivery BMC, 10BASE-T TX, CAN, LIN, DALI, HDLC, JTAG, SWD, 1-Wire, PS/2, I2S, WS2812B, NEC infrared, SENT, ISO 7816 smart cards, MIL-STD-1553B, SD card commands, an MFM disk controller, quadrature encoder, a logic analyzer, ...) are in `programs/`; `sim/model/asm.py` assembles them.
+Example programs (UART, Modbus RTU, SPI, I2C, USB low speed, USB Power Delivery BMC, 10BASE-T TX and RX, CAN, LIN, DALI, HDLC, JTAG, SWD, 1-Wire, PS/2, I2S, WS2812B, NEC infrared, SENT, ISO 7816 smart cards, MIL-STD-1553B, SD card commands, an MFM disk controller, quadrature encoder, a logic analyzer, ...) are in `programs/`; `sim/model/asm.py` assembles them.
 
 ### SPI host interface
 
@@ -50,7 +50,7 @@ The instruction set has 16 pin positions; pin k is `uio[k]`, pin 8 + k is `uo_ou
 
 ### Clock
 
-`clk` runs at up to 50 MHz, signed off in the typical corner (1.2 V, 25 C), with 5.0 ns of setup slack. In the slow corner (1.08 V, 125 C) it closes at 42 MHz. Hold is met in all corners.
+`clk` runs at up to 50 MHz, signed off in the typical corner (1.2 V, 25 C), with 5.0 ns of setup slack. In the slow corner (1.08 V, 125 C) it closes at 42 MHz. Hold is met in all corners. The 10BASE-T receiver needs 60 MHz (3 clocks a half-bit), about 1.7 ns of slack in the typical corner only: try it on a bench, it is not signed off.
 
 ## How to test
 

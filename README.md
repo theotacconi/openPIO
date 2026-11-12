@@ -62,7 +62,7 @@ bit:
 
 ## What it runs
 
-24 protocols and a logic analyzer, each tested on its pins against a reference device written from the protocol's specification: CAN, LIN, I2C, SPI, UART, USB low speed, USB Power Delivery, 10BASE-T Ethernet (transmit), HDLC, Modbus, DALI, JTAG, SWD, 1-Wire, PS/2, I2S, WS2812B, NEC infrared, SENT, ISO 7816 smart cards, MIL-STD-1553B, SD cards, an MFM disk controller and a quadrature encoder. Several of them were written after the instruction set was frozen, without changing the hardware. See [programs/README.md](programs/README.md).
+24 protocols and a logic analyzer, each tested on its pins against a reference device written from the protocol's specification: CAN, LIN, I2C, SPI, UART, USB low speed, USB Power Delivery, 10BASE-T Ethernet (transmit and receive), HDLC, Modbus, DALI, JTAG, SWD, 1-Wire, PS/2, I2S, WS2812B, NEC infrared, SENT, ISO 7816 smart cards, MIL-STD-1553B, SD cards, an MFM disk controller and a quadrature encoder. Several of them were written after the instruction set was frozen, without changing the hardware. See [programs/README.md](programs/README.md).
 
 [sim/learn/learn.py](sim/learn/learn.py) goes the other way: from a one-way recording of a line it finds the line's settings and writes an openPIO receiver for them. It knows four families of line formats:
 
@@ -81,7 +81,7 @@ It is tested on UART, LIN, USB, CAN, HDLC, DALI, MFM, biphase mark, SPI, SD card
 | State machines | 2, each with its own program memory (an SRAM) and FIFO memory (an SRAM) |
 | Pins | 14 usable: 8 bidirectional, 6 input + output on separate pads |
 | Host interface | SPI, plus an interrupt line |
-| Clock | 50 MHz at typical conditions (1.2 V, 25 C); 42 MHz in the worst case (1.08 V, 125 C) |
+| Clock | 50 MHz at typical conditions (1.2 V, 25 C); 42 MHz in the worst case (1.08 V, 125 C). Receiving 10BASE-T needs 60 MHz, which closes only at typical conditions (about 1.7 ns of slack): a bench experiment, not a signed-off rate |
 | Size | 32k standard cells and 4 SRAMs, 11 mW |
 
 ## Documentation

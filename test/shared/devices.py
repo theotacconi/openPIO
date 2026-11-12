@@ -6,6 +6,8 @@ hold around clock edges, line idle levels, framing) and lists violations in `err
 """
 from __future__ import annotations
 
+import random
+
 from bench import Device
 
 
@@ -488,6 +490,44 @@ class ManchesterRx(Device):
                 else:
                     self._bits.append(lv)
         self._prev = lv
+
+
+class ManchesterTx(Device):
+    """IEEE 802.3 Manchester transmitter (a bit's first half ~b, its second b), idle low: sends
+    the `frames` (bit lists) from clock `start`, `gap` bit times apart, each followed by TP_IDL
+    (high for `tp_idl` bit times). `bit` may be fractional (a fast or slow transmitter); `jitter`
+    moves each edge by a uniform random time within +- jitter clocks (`seed`): an unsynchronized
+    source, its edges where the chip's clock samples them."""
+
+    def __init__(self, pin: int, bit: float, frames: list[list[int]], start: int = 0,
+                 gap: float = 12, tp_idl: float = 2, jitter: float = 0, seed: int = 0) -> None:
+        super().__init__()
+        rng = random.Random(seed)
+        self.pin = pin
+        self.schedule: list[tuple[int, int]] = []
+        t, level = float(start), 0
+
+        def put(at: float, lv: int) -> None:
+            nonlocal level
+            if lv != level:
+                self.schedule.append((round(at + rng.uniform(-jitter, jitter)), lv))
+                level = lv
+
+        for bits in frames:
+            for b in bits:
+                put(t, 1 - b)
+                put(t + bit / 2, b)
+                t += bit
+            put(t, 1)
+            t += tp_idl * bit
+            put(t, 0)
+            t += gap * bit
+        self.end = round(t)
+        self.drive = {pin: 0}
+
+    def tick(self, t: int, levels: int) -> None:
+        while self.schedule and self.schedule[0][0] <= t + 1:
+            self.drive = {self.pin: self.schedule.pop(0)[1]}
 
 
 def bits_to_bytes(bits: list[int]) -> list[int]:
