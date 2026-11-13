@@ -80,8 +80,11 @@ transmitter on SM 0 and its receiver (or peer) on SM 1, on the same pads, and th
 what comes back: UART at 3.375 Mbaud and 115200, autobaud, full duplex on both SMs crossed,
 HDLC with its FCS, USB low speed with its CRC16, CAN on one open-drain pad (a wired-AND bus of
 two nodes, the pad's pull-up recessive, each frame acknowledged), 4b5b on BMC, SPI master to
-target, SD commands with their CRC-7, I2S in lockstep, and edge timestamps of a UART read back
-as the learner reads a recording. A logic analyzer on the pio pins sees every line.
+target, SD commands with their CRC-7, I2S in lockstep, edge timestamps of a UART read back
+as the learner reads a recording, and 10BASE-T framing with its FCS on pins 2 and 3 (4.5 Mbit/s
+on the 27 MHz board: frames up to 450 bytes, which fit only with the programs' FIFO_SPLIT). A
+logic analyzer on the pio pins sees every line. The checks on pins 0 and 1 fail while the demo's
+infrared receiver (it drives pin 0) and ring are wired.
 
 ```
 $ python3 board/loopback.py

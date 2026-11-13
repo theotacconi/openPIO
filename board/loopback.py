@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import random
 import sys
+import zlib
 from pathlib import Path
 
 from board import Board, Model, Serial
@@ -298,8 +299,65 @@ def check_edges(host: Host) -> str | None:
     return differ("bytes", data, [sum(b << k for k, b in enumerate(c[1:9])) for c in chars])
 
 
+def eth_frames(words: list[int]) -> list[tuple[list[int], int]]:
+    """[(bits, verdict)] from eth_rx's RX words: data words of 15 bits in [15:1], an end word
+    (bit 0 = 1: the bits left under a marker 1), then the FCS verdict."""
+    out, bits, k = [], [], 0
+    while k < len(words):
+        w = words[k]
+        if w & 1:
+            if k + 1 >= len(words) or w >> 1 == 0:
+                break
+            top = max(i for i in range(1, 16) if w >> i & 1)
+            out.append((bits + [w >> i & 1 for i in range(1, top)], words[k + 1]))
+            bits, k = [], k + 2
+        else:
+            bits += [w >> i & 1 for i in range(1, 16)]
+            k += 1
+    return out
+
+
+def check_ethernet(host: Host) -> str | None:
+    """eth_tx (TD+ pin 2, TD- pin 3) into eth_rx reading pin 2, both at 3 strobes a half-bit:
+    10BASE-T framing at 4.5 Mbit/s on the board's 27 MHz (10 Mbit/s at 60 MHz). Frames of 64 to
+    450 bytes, each loaded whole into eth_tx's TX FIFO and received whole into eth_rx's RX FIFO:
+    450 bytes take 229 TX words and 245 RX words, more than the default split's 133, so the
+    programs' FIFO_SPLIT (31 and 1) is checked too. eth_rx checks the FCS (verdict 1)."""
+    host.load(0, program("ethernet/eth_tx.asm"), pau_cfg=3, out_base=2, set_base=2)
+    host.load(1, program("ethernet/eth_rx.asm"), in_base=2)
+    host.start(0b11)
+    rnd = random.Random(13)
+    for k, size in enumerate((64, 100, 300, 450)):
+        frame = bytes(rnd.randrange(256) for _ in range(size))
+        words = [size // 2] + [frame[i] | frame[i + 1] << 8 for i in range(0, size, 2)]
+        for i in range(0, len(words), 64):
+            host.push(0, words[i:i + 64])
+        if host.read(0, FIFO_LEVEL)[0] & 0xFF != len(words):
+            return f"frame {k}: {host.read(0, FIFO_LEVEL)[0] & 0xFF} words in the TX FIFO, not {len(words)}"
+        host.write(0, IRQ, 1 << 8)                         # flag 0: the frame is in the FIFO
+        if not wait(host, lambda: flags(host, 0) & 2):
+            return f"frame {k}: eth_tx never set flag 1"
+        clear_flags(host, 0)
+        least = 8 * (size + 4) // 15 + 2
+        if not wait_rx(host, 1, least):
+            return f"frame {k}: {rx_level(host, 1)} RX words, not {least} or more"
+        wait(host, lambda: False, 5)
+        got = eth_frames(host.pop(1, rx_level(host, 1)))
+        if len(got) != 1:
+            return f"frame {k}: {len(got)} frames received"
+        bits, verdict = got[0]
+        data = bytes(sum(b << j for j, b in enumerate(bits[i:i + 8]))
+                     for i in range(0, 8 * (size + 4), 8))
+        error = differ(f"frame {k} bytes", list(frame), list(data[:size]))
+        if error:
+            return error
+        if data[size:] != zlib.crc32(frame).to_bytes(4, "little") or verdict != 1:
+            return f"frame {k}: FCS {data[size:].hex()}, verdict {verdict}"
+    return None
+
+
 CHECKS = [check_uart, check_autobaud, check_duplex, check_hdlc, check_usb, check_can,
-          check_fourb5b, check_spi, check_sd, check_i2s, check_edges]
+          check_fourb5b, check_spi, check_sd, check_i2s, check_edges, check_ethernet]
 
 
 def main() -> int:
