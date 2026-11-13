@@ -195,7 +195,7 @@ def check_can(host: Host) -> str | None:
               open_drain_mask=1 << 2)
     host.start(0b11)
     rnd = random.Random(8)
-    frames = [(rnd.randrange(2048), [rnd.randrange(256) for _ in range(rnd.randrange(9))]) for _ in range(12)]
+    frames = [(rnd.randrange(0x7F0), [rnd.randrange(256) for _ in range(rnd.randrange(9))]) for _ in range(12)]
     frames[1] = (0x7EF, [0xFF, 0xFF])                     # long recessive runs (0x7F0 up: not legal)
     for k, (ident, data) in enumerate(frames):
         host.push(0, frame_words(ident, data))

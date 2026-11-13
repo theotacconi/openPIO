@@ -334,7 +334,7 @@ class LearnFrames(unittest.TestCase):
         """CAN 2.0A on a wired-AND bus, a second node acknowledging: NRZ, the complement after
         five equal bits, CRC-15 from the start of frame."""
         rnd = random.Random(2)
-        frames = [(rnd.randrange(2048), [rnd.randrange(256) for _ in range(n)])
+        frames = [(rnd.randrange(0x7F0), [rnd.randrange(256) for _ in range(n)])
                   for n in (1, 3, 3, 8, 0, 5)]
         bench = can_bench(frames)
         bus = bench.devices[0]
@@ -345,7 +345,7 @@ class LearnFrames(unittest.TestCase):
         p = self.learn(bench.trace)
         self.check(p, "nrz", (1, 5), (15, 0x4599, 0, 0), [0])
 
-        frames = [(rnd.randrange(2048), [rnd.randrange(256) for _ in range(n)])
+        frames = [(rnd.randrange(0x7F0), [rnd.randrange(256) for _ in range(n)])
                   for n in (2, 7, 0, 4)]
         got = self.receive(p, can_bench(frames), sum(170 + 8 * len(d) for _, d in frames) * 50)
         sent = [b + [can_crc15(b) >> i & 1 for i in range(14, -1, -1)]

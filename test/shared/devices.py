@@ -583,7 +583,8 @@ class CanNode:
     frames (id, data) after 11 idle bits, or joins another node's SOF (hard sync) with a frame
     pending, and stops at a lost arbitration; `sent` gets (id, acked). Bits are sampled in their
     middle, counted from the SOF edge; every bus edge of a frame must fall within a clock of a
-    bit boundary (a transmitter's loop delay through its transceiver and input synchronizer).
+    bit boundary (a transmitter's loop delay through its transceiver and input synchronizer); an
+    identifier with bits 10..4 all recessive (0x7F0 up) is an error (ISO 11898-1).
     idle: recessive clocks already seen at start."""
 
     def __init__(self, bit: int, send: list[tuple[int, list[int]]] = (), ack: bool = True,
@@ -670,8 +671,10 @@ class CanNode:
             b = self._bits
             data = [sum(x << (7 - i) for i, x in enumerate(b[19 + 8 * j:27 + 8 * j]))
                     for j in range((len(b) - 34) // 8)]
-            self.frames.append({"id": sum(x << (10 - i) for i, x in enumerate(b[1:12])),
-                                "data": data, "crc_ok": self._crc_ok})
+            ident = sum(x << (10 - i) for i, x in enumerate(b[1:12]))
+            if ident >> 4 == 0x7F:
+                self.errors.append(f"t={t}: identifier {ident:#x}: bits 10..4 all recessive")
+            self.frames.append({"id": ident, "data": data, "crc_ok": self._crc_ok})
             self._t0, self._idle = None, 0
 
 
