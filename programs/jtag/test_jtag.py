@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """JTAG cycle engine driving a reference IEEE 1149.1 TAP: IDCODE after reset, IR and DR scans,
-a USER register written and read back, BYPASS."""
+a USER register written and read back, BYPASS. sigrok's JTAG decoder follows the TAP states
+from TMS by itself and reads the same scans on TDI and TDO; every IR capture ends in 01, as
+IEEE 1149.1 requires."""
 import sys
 import unittest
 from pathlib import Path
@@ -10,6 +12,7 @@ sys.path.insert(0, str(HERE.parents[1] / "test" / "shared"))
 sys.path.insert(0, str(HERE.parents[1] / "sim" / "model"))
 from bench import Bench                                  # noqa: E402
 from devices import JtagTap                              # noqa: E402
+from sigrok import jtag as sigrok_jtag                   # noqa: E402
 
 TDI, TMS, TCK, TDO = 0, 1, 2, 3
 IDCODE = 0x4BA00477
@@ -51,6 +54,7 @@ class Jtag(unittest.TestCase):
         bench, tap, tdo = run(cycles)
         self.assertEqual(bench.errors(), [])
         self.assertEqual(bits_at(tdo, len(reset()) + 3, 32), IDCODE)
+        self.assertEqual(sigrok_jtag(bench, TDI, TMS, TCK, TDO), [("DR", 0, IDCODE, 32)], "sigrok")
 
     def test_user_register_write_and_read(self):
         pre = reset() + scan(JtagTap.IR_USER, 4, ir=True) + scan(0xBEEF, 16)
@@ -58,11 +62,19 @@ class Jtag(unittest.TestCase):
         self.assertEqual(bench.errors(), [])
         self.assertEqual((tap.ir, tap.user), (JtagTap.IR_USER, 0x1234))
         self.assertEqual(bits_at(tdo, len(pre) + 3, 16), 0xBEEF, "the previous value shifts out")
+        scans = sigrok_jtag(bench, TDI, TMS, TCK, TDO)
+        self.assertEqual([s[:2] + s[3:] for s in scans],
+                         [("IR", JtagTap.IR_USER, 4), ("DR", 0xBEEF, 16), ("DR", 0x1234, 16)], "sigrok")
+        self.assertEqual(scans[0][2] & 3, 1, "sigrok: the IR capture ends in 01")
+        self.assertEqual(scans[2][2], 0xBEEF, "sigrok: the previous value shifts out")
 
     def test_bypass_is_one_bit(self):
         pre = reset() + scan(JtagTap.IR_BYPASS, 4, ir=True)
         bench, tap, tdo = run(pre + scan(0b1011001, 8))
         self.assertEqual(bits_at(tdo, len(pre) + 3, 8), 0b1011001 << 1 & 0xFF)
+        scans = sigrok_jtag(bench, TDI, TMS, TCK, TDO)
+        self.assertEqual(scans[1:], [("DR", 0b1011001, 0b1011001 << 1 & 0xFF, 8)], "sigrok")
+        self.assertEqual(scans[0][1:2] + scans[0][3:], (JtagTap.IR_BYPASS, 4), "sigrok")
 
 
 if __name__ == "__main__":

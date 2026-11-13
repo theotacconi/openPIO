@@ -2,7 +2,7 @@
 """I2S master on both SMs, judged by the reference I2S codec: SM 0 sends stereo samples to the
 codec's DAC (16 bits a word, MSB one BCLK after LRCLK, data stable before BCLK rises), SM 1, in
 lockstep from the same CTRL write, reads the codec's ADC samples; an empty TX FIFO sends silence
-without stopping BCLK."""
+without stopping BCLK. sigrok's I2S decoder reads the same samples both ways."""
 import random
 import sys
 import unittest
@@ -13,6 +13,7 @@ sys.path.insert(0, str(HERE.parents[1] / "test" / "shared"))
 sys.path.insert(0, str(HERE.parents[1] / "sim" / "model"))
 from bench import Bench                                  # noqa: E402
 from devices import I2sCodec                             # noqa: E402
+from sigrok import i2s as sigrok_i2s                     # noqa: E402
 
 SDOUT, BCLK, LRCLK, SDIN = 0, 1, 2, 3                    # pins as in the programs
 CLKDIV = 4
@@ -36,6 +37,8 @@ class I2s(unittest.TestCase):
         self.assertEqual(codec.received[8:11], [(0, 0)] * 3, "silence, BCLK running")
         got = bench.received[1]
         self.assertEqual(list(zip(got[0:16:2], got[1:16:2])), adc, "ADC")
+        self.assertEqual(sigrok_i2s(bench, BCLK, LRCLK, SDOUT)[:11], dac + [(0, 0)] * 3, "sigrok, DAC")
+        self.assertEqual(sigrok_i2s(bench, BCLK, LRCLK, SDIN)[:8], adc, "sigrok, ADC")
 
 
 if __name__ == "__main__":

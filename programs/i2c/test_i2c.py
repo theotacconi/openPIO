@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """I2C controller judged by the reference I2C target (open drain, pull-ups): writes, reads with
-a repeated START, NACK from an absent target, clock stretching and lost arbitration."""
+a repeated START, NACK from an absent target, clock stretching and lost arbitration. sigrok's
+I2C decoder reads the same conditions, addresses, bytes and acknowledges."""
 import random
 import sys
 import unittest
@@ -11,6 +12,7 @@ sys.path.insert(0, str(HERE.parents[1] / "test" / "shared"))
 sys.path.insert(0, str(HERE.parents[1] / "sim" / "model"))
 from bench import Bench, Device                          # noqa: E402
 from devices import I2cTarget                            # noqa: E402
+from sigrok import i2c as sigrok_i2c                     # noqa: E402
 
 SCL, SDA = 2, 3  # pins as in the program
 
@@ -50,6 +52,12 @@ class I2cController(unittest.TestCase):
         self.assertEqual(results[:7], [(0x50 << 1) << 1] + [b << 1 for b in wdata], "bytes seen, ACK 0")
         self.assertEqual(results[8:], [b << 1 for b in rdata[:-1]] + [rdata[-1] << 1 | 1], "reads, NACK last")
         self.assertEqual(bench.wave(SCL)[-1] + bench.wave(SDA)[-1], "11", "bus idle after STOP")
+        self.assertEqual(sigrok_i2c(bench, SCL, SDA),
+                         ["Start", "Address write: 50", "ACK"]
+                         + [x for b in wdata for x in (f"Data write: {b:02X}", "ACK")]
+                         + ["Start repeat", "Address read: 50", "ACK"]
+                         + [x for b in rdata[:-1] for x in (f"Data read: {b:02X}", "ACK")]
+                         + [f"Data read: {rdata[-1]:02X}", "NACK", "Stop"], "sigrok")
 
     def test_absent_target_nacks(self):
         bench = setup(I2cTarget(SCL, SDA, 0x50))
@@ -57,6 +65,8 @@ class I2cController(unittest.TestCase):
         bench.run(400)
         self.assertEqual(bench.received[0], [(0x51 << 1) << 1 | 1])
         self.assertEqual(bench.errors(), [])
+        self.assertEqual(sigrok_i2c(bench, SCL, SDA), ["Start", "Address write: 51", "NACK", "Stop"],
+                         "sigrok")
 
     def test_clock_stretching(self):
         target = I2cTarget(SCL, SDA, 0x50, stretch=40)
@@ -67,6 +77,8 @@ class I2cController(unittest.TestCase):
         self.assertEqual(target.transactions[0]["data"], [0xA5])
         lows = [n for lv, n in bench.runs(SCL) if lv == 0]
         self.assertGreaterEqual(max(lows), 40, "SCL held low by the target")
+        self.assertEqual(sigrok_i2c(bench, SCL, SDA),
+                         ["Start", "Address write: 50", "ACK", "Data write: A5", "ACK", "Stop"], "sigrok")
 
     def test_lost_arbitration(self):
         class Rival(Device):                    # another controller sending 0x00 to the same bus

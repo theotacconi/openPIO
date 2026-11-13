@@ -4,7 +4,9 @@
 of 1.5 characters inside a frame; CRC-16/MODBUS checked on the chip (good and corrupted frames);
 a transmitter 2 % fast or slow; a framing error. A slave on two SMs: the receiver releases the
 transmitter on the peer SM through its IRQ (irq clear peer), so a reply the host queued before the
-request arrived goes out after the request's 3.5 characters of silence, with DE around it."""
+request arrived goes out after the request's 3.5 characters of silence, with DE around it.
+sigrok's UART decoder reads the same characters on every line, and its Modbus decoder the
+slave's requests and replies, each with a CRC it finds correct."""
 import random
 import sys
 import unittest
@@ -14,6 +16,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[1] / "test" / "shared"))
 from bench import Bench                                  # noqa: E402
 from devices import UartRx, UartTx, crc16_modbus         # noqa: E402
+from sigrok import modbus as sigrok_modbus, uart as sigrok_uart   # noqa: E402
 
 RX, TX, DE = 0, 1, 2       # RS-485 transceiver: RO, DI, DE
 CHAR = 11 * 32              # clocks a character at CLKDIV 4
@@ -44,6 +47,9 @@ def run(frames, clkdiv=(4, 0), bit=None, inner_gap=0.0, stop_low=frozenset()):
     tx = bench.add(UartTx(RX, bit, data, start=round(20 * div), gap=gaps, stop_bits=2, stop_low=stop_low))
     bench.start(1)
     bench.run(tx.end + round(8 * div))
+    k = min(stop_low, default=len(data) - 1) + 1     # past a low stop bit no receiver keeps step
+    assert sigrok_uart(bench, RX, bit, stop_bits="2.0")[:k] == data[:k], "sigrok: the characters"
+    assert bool(sigrok_uart(bench, RX, bit, warnings=True, stop_bits="2.0")) == bool(stop_low)
     return bench, bench.received[0]
 
 
@@ -119,6 +125,11 @@ class ModbusSlave(unittest.TestCase):
         self.assertLess(on, start)
         self.assertGreaterEqual(off, start + len(answer) * CHAR)
         self.assertLess(off, start + len(answer) * CHAR + 32)
+        self.assertEqual(sigrok_modbus(bench, RX, TX, 32), [
+            "Slave ID: 17", "Function 3: Read Holding Registers", "Start at address 0x6B / 30108",
+            "Read 1 units of data", "CRC correct",
+            "Slave ID: 17", "Function 3: Read Holding Registers", "Byte count: 2", "0x1234 / 4660",
+            "CRC correct"], "sigrok")
 
     def test_no_reply_then_reply(self):
         other = adu(0x22, 0x03, 0x00, 0x00, 0x00, 0x01)    # for another slave: N = 0
@@ -130,6 +141,10 @@ class ModbusSlave(unittest.TestCase):
         start = next(t for t, lv in bench.edges(TX) if lv == 0)
         self.assertGreaterEqual(start - ends[1], 3.5 * CHAR)
         self.assertEqual([lv for lv, _ in bench.runs(DE)], [0, 1, 0])
+        rows = sigrok_modbus(bench, RX, TX, 32)
+        self.assertEqual([r for r in rows if r.startswith(("Slave ID", "CRC"))],
+                         ["Slave ID: 34", "CRC correct", "Slave ID: 17", "CRC correct",
+                          "Slave ID: 17", "CRC correct"], "sigrok: two requests, one reply")
 
 
 if __name__ == "__main__":

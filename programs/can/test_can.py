@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """CAN transmitter and receiver against reference CAN nodes on a wired-AND bus: frames, ACK,
-arbitration lost at the exact bit, CRC errors."""
+arbitration lost at the exact bit, CRC errors. sigrok's CAN decoder reads the same frames on the
+bus (identifier, data, stuffing, ACK) with no warning."""
 import random
 import sys
 import unittest
@@ -10,8 +11,16 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[1] / "test" / "shared"))
 from bench import Bench                                  # noqa: E402
 from devices import WiredAndBus, CanNode, can_bits            # noqa: E402
+from sigrok import can as sigrok_can                     # noqa: E402
 
 TX, RX, BIT = 0, 1, 8  # pins as in the program
+
+
+def sigrok_frames(bench):
+    """[(id, data, acknowledged)] as sigrok reads the bus; no warning."""
+    frames, warnings = sigrok_can(bench, RX, BIT)
+    assert warnings == [], warnings
+    return [(f["id"], f["data"], f["ack"]) for f in frames]
 
 
 def frame_words(ident, data):
@@ -50,11 +59,14 @@ class CanTx(unittest.TestCase):
         self.assertEqual([(f["id"], f["data"]) for f in listener.frames], frames)
         self.assertTrue(all(f["crc_ok"] for f in listener.frames))
         self.assertEqual(irqs, [1] * len(frames), "IRQ 0: acknowledged")
+        self.assertEqual(sigrok_frames(bench), [(i, d, True) for i, d in frames], "sigrok")
 
     def test_no_ack(self):
         bench, _ = tx_bench([CanNode(BIT, ack=False)], [(0x100, [1, 2])])
         bench.run(2000, until=lambda: any(bench.chip.sms[0].irq_flags))
         self.assertTrue(bench.chip.sms[0].irq_flags[1])
+        bench.run(100)                                         # to the end of the ACK slot
+        self.assertEqual(sigrok_frames(bench)[0], (0x100, [1, 2], False), "sigrok: no ACK")
 
     def test_lost_arbitration(self):
         rival = CanNode(BIT, send=[(0x0F0, [0xAB])], idle=0)   # lower ID; joins our SOF
@@ -67,6 +79,7 @@ class CanTx(unittest.TestCase):
         self.assertEqual(listener.frames[0], {"id": 0x0F0, "data": [0xAB], "crc_ok": True},
                          "the winner's frame is intact")
         self.assertEqual(rival.sent, [(0x0F0, True)])
+        self.assertEqual(sigrok_frames(bench), [(0x0F0, [0xAB], True)], "sigrok: the winner's frame")
 
 
 class CanRx(unittest.TestCase):
@@ -93,6 +106,7 @@ class CanRx(unittest.TestCase):
             head, dlc = words.pop(0), words.pop(0) & 0xF
             got.append((head >> 3 & 0x7FF, [words.pop(0) & 0xFF for _ in range(dlc)]))
         self.assertEqual(got, frames)
+        self.assertEqual(sigrok_frames(bench), [(i, d, True) for i, d in frames], "sigrok")
 
 
 if __name__ == "__main__":

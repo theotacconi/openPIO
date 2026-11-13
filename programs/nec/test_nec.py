@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """NEC infrared remote receiver judged against the reference remote (the IR receiver module's
 output): frames with random address and command, the repeat code, a lone 3 ms burst ignored,
-at the nominal timing and with every time 10 % longer or shorter."""
+at the nominal timing and with every time 10 % longer or shorter. At the nominal timing sigrok's
+NEC decoder reads the same keys and the repeat code (it takes no frame 10 % off)."""
 import random
 import sys
 import unittest
@@ -13,6 +14,7 @@ sys.path.insert(0, str(HERE.parents[1] / "sim" / "model"))
 from bench import Bench                                  # noqa: E402
 from chip import IRQ                                     # noqa: E402
 from devices import NecRemote                            # noqa: E402
+from sigrok import ir_nec as sigrok_nec                  # noqa: E402
 
 IR = 0                                                   # pin as in the program
 
@@ -39,6 +41,12 @@ class Nec(unittest.TestCase):
                 self.assertEqual(bench.received[0], [w for a, c in keys for w in (a | (a ^ 0xFF) << 8,
                                                                                    c | (c ^ 0xFF) << 8)])
                 self.assertEqual(repeats, 1)
+                if scale == 1.0:                         # 1 clock = 1 us
+                    def key(a, c):
+                        return [f"Address: 0x{a:02X}", f"Address#: 0x{a ^ 0xFF:02X}",
+                                f"Command: 0x{c:02X}", f"Command#: 0x{c ^ 0xFF:02X}"]
+                    self.assertEqual(sigrok_nec(bench, IR, 1e6),
+                                     key(*keys[0]) + ["Repeat code"] + key(*keys[1]), "sigrok")
 
 
 if __name__ == "__main__":

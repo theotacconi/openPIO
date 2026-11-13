@@ -4,7 +4,8 @@ CS_N around each word, SCK idle level, MOSI setup and hold around every sampling
 MISO arrives through the input synchronizer with the least margin. SPI target driven by the
 reference SPI master at clk / 28: random words both ways in transfers of several words, the
 answer 0xFF when the host has none, MISO released while CS_N is high, a word cut by CS_N rising
-dropped, IRQ 0 when the RX FIFO overflows, 12-bit words by the push threshold alone."""
+dropped, IRQ 0 when the RX FIFO overflows, 12-bit words by the push threshold alone. sigrok's
+SPI decoder reads the same words both ways."""
 import random
 import sys
 import unittest
@@ -15,6 +16,7 @@ sys.path.insert(0, str(HERE.parents[1] / "test" / "shared"))
 sys.path.insert(0, str(HERE.parents[1] / "sim" / "model"))
 from bench import Bench                                  # noqa: E402
 from devices import SpiMaster, SpiSlave                  # noqa: E402
+from sigrok import spi as sigrok_spi                     # noqa: E402
 
 MOSI, SCK, CS, MISO = 0, 1, 2, 3
 
@@ -40,6 +42,7 @@ class SpiMasterTest(unittest.TestCase):
                 self.assertEqual(bench.wave(SCK)[-1], str(mode >> 1), "SCK back at CPOL")
                 cs_low = [n for lv, n in bench.runs(CS) if lv == 0]
                 self.assertEqual(len(cs_low), len(sent), "CS_N low once per word")
+                self.assertEqual(sigrok_spi(bench, MOSI, SCK, CS, MISO, mode), (sent, reply), "sigrok")
 
 
 class SpiTargetTest(unittest.TestCase):
@@ -65,12 +68,16 @@ class SpiTargetTest(unittest.TestCase):
         self.assertEqual(sum(master.received, []), answers + [0xFF] * 2, "MISO; 0xFF once out")
         released = [bench.chip.pins[1] >> self.MISO & 1 for _ in range(1)]
         self.assertEqual(released, [0], "MISO released after the transfer")
+        self.assertEqual(sigrok_spi(bench, self.MOSI, self.SCK, self.CS, self.MISO),
+                         (sum(transfers, []), answers + [0xFF] * 2), "sigrok")
 
     def test_12_bit_words(self):
         bench, master = self.run_target([[0xABC, 0x123], [0xFED]], [0x5A5, 0x0F0, 0x777], bits=12)
         self.assertEqual(bench.received[0], [0xABC, 0x123, 0xFED])
         self.assertEqual(master.received, [[0x5A5, 0x0F0], [0x777]])
         self.assertEqual(bench.errors(), [])
+        self.assertEqual(sigrok_spi(bench, self.MOSI, self.SCK, self.CS, self.MISO, bits=12),
+                         ([0xABC, 0x123, 0xFED], [0x5A5, 0x0F0, 0x777]), "sigrok")
 
     def test_word_cut_by_cs(self):
         bench, master = self.run_target([[0x12, (0x34, 5)], [0x56]], [0xA1, 0xA2, 0xA3])

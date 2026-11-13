@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """USB low-speed transmitter and receiver judged by the reference USB devices: NRZI, stuffing
 in its own bit time, CRC16 against CRC-16/USB, EOP timing, CRC errors, a packet broken by SE1
-(an illegal line state) dropped and the next one received."""
+(an illegal line state) dropped and the next one received. sigrok's USB decoders read the
+same packets, and check their CRC16 themselves."""
 import random
 import sys
 import unittest
@@ -13,6 +14,7 @@ sys.path.insert(0, str(HERE.parents[1] / "sim" / "model"))
 from bench import Bench                                  # noqa: E402
 from chip import IRQ                                     # noqa: E402
 from devices import SE1, UsbRx, UsbTx, crc16_usb, usb_states   # noqa: E402
+from sigrok import usb as sigrok_usb                     # noqa: E402
 
 DM, DP, BIT = 0, 1, 8
 DATA0, DATA1 = 0xC3, 0x4B
@@ -38,6 +40,9 @@ class UsbTxTest(unittest.TestCase):
         self.assertEqual(rx.skew, 0)
         self.assertEqual([p["data"][:-2] for p in rx.packets], sent)
         self.assertTrue(all(p["crc_ok"] and p["sync"] == 0x80 for p in rx.packets))
+        self.assertEqual(sigrok_usb(bench, DP, DM, BIT),
+                         [{"sync": True, "pid": "DATA1" if i % 2 else "DATA0", "data": p, "crc_ok": True}
+                          for i, p in enumerate(sent)], "sigrok")
 
 
 class UsbRxTest(unittest.TestCase):
@@ -63,6 +68,9 @@ class UsbRxTest(unittest.TestCase):
             expected = [0x80, pid] + p + [crc & 0xFF, crc >> 8]
             self.assertEqual(words[n:n + len(expected)], expected)
             n += len(expected)
+        self.assertEqual(sigrok_usb(bench, DP, DM, BIT),
+                         [{"sync": True, "pid": "DATA0", "data": p, "crc_ok": not crc}
+                          for _, p, *crc in packets], "sigrok: the CRC errors are the same")
 
     def test_se1(self):
         broken = usb_states(DATA0, [0x12, 0x34, 0x56])

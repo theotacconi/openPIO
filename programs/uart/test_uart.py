@@ -3,7 +3,8 @@
 back; TX at integer and fractional dividers (bit edges on time), RX with a transmitter 3 % fast
 or slow and with framing errors. Full duplex on one SM through the PAU: both directions at
 once, bit edges on time, a framing error. Autobaud: the rate learned from a leading 0x55, then
-random bytes back to back, at bit times from 12 to 61 clocks that are not whole strobes."""
+random bytes back to back, at bit times from 12 to 61 clocks that are not whole strobes. Every
+line, sent or received, is read by sigrok's UART decoder as well: the same bytes."""
 import random
 import sys
 import unittest
@@ -13,6 +14,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[1] / "test" / "shared"))
 from bench import Bench                                  # noqa: E402
 from devices import UartRx, UartTx                       # noqa: E402
+from sigrok import uart as sigrok_bytes                  # noqa: E402
 
 
 class UartTxTest(unittest.TestCase):
@@ -29,6 +31,7 @@ class UartTxTest(unittest.TestCase):
         self.assertEqual(rx.frames, data)
         self.assertEqual(bench.errors(), [])
         self.assertLessEqual(rx.skew, max_skew)
+        self.assertEqual(sigrok_bytes(bench, 0, bit), data, "sigrok")
         first, last = bench.edges(0)[0][0], bench.edges(0)[-1][0]
         self.assertAlmostEqual((last - first) / bit, 10 * len(data) - 1, delta=1,
                                msg="back to back: exactly 10 bits a byte")
@@ -48,6 +51,10 @@ class UartRxTest(unittest.TestCase):
         tx = bench.add(UartTx(3, tx_bit or 8 * clkdiv, data, start=20, gap=gap, stop_low=stop_low))
         bench.start(1)
         bench.run(tx.end + 40)
+        bit = tx_bit or 8 * clkdiv
+        self.assertEqual(sigrok_bytes(bench, 3, bit), data, "sigrok")
+        self.assertEqual(len(sigrok_bytes(bench, 3, bit, warnings=True)), len(stop_low),
+                         "sigrok: a framing error for each low stop bit")
         return bench, [w >> 8 for w in bench.received[0]]
 
     def test_back_to_back(self):
@@ -95,6 +102,8 @@ class UartDuplexTest(unittest.TestCase):
         self.assertEqual([w >> 8 for w in bench.received[0]], into)
         self.assertEqual(bench.errors(), [])
         self.assertFalse(bench.chip.sms[0].irq_flags[0])
+        self.assertEqual(sigrok_bytes(bench, 0, 16), out, "sigrok, the chip's TX")
+        self.assertEqual(sigrok_bytes(bench, 1, 16), into, "sigrok, the chip's RX")
 
     def test_framing_error(self):
         bench, rx = self.run_duplex([0x55], [0x11, 0x22, 0x33], stop_low={1})
@@ -116,6 +125,7 @@ class UartAutobaudTest(unittest.TestCase):
                 words = bench.received[0]
                 self.assertLessEqual(abs(words[0] - 8 * bit), 2, "8 bit times measured")
                 self.assertEqual([w >> 8 for w in words[1:]], data)
+                self.assertEqual(sigrok_bytes(bench, 0, bit), [0x55] + data, "sigrok")
                 self.assertFalse(bench.chip.sms[0].irq_flags[0])
 
 

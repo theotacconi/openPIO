@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """WS2812B LED chain driven by the program and judged by the reference chain: every high and low
 time within the datasheet's +-150 ns, at 48 MHz (CLKDIV 6) and 50 MHz (fractional CLKDIV 6.25);
-two frames latched by the 50 us low gap when the FIFO runs empty."""
+two frames latched by the 50 us low gap when the FIFO runs empty. sigrok's WS281x decoder reads
+the same colours and the two latches."""
 import random
 import sys
 import unittest
@@ -12,6 +13,7 @@ sys.path.insert(0, str(HERE.parents[1] / "test" / "shared"))
 sys.path.insert(0, str(HERE.parents[1] / "sim" / "model"))
 from bench import Bench                                  # noqa: E402
 from devices import Ws2812Chain                          # noqa: E402
+from sigrok import ws2812 as sigrok_ws2812               # noqa: E402
 
 DIN, LEDS = 0, 4                                         # pin as in the program
 
@@ -40,6 +42,7 @@ class Ws2812(unittest.TestCase):
                 bench.run(9000)
                 self.assertEqual(bench.errors(), [])
                 self.assertEqual(chain.frames, frames)
+                self.assertEqual(sigrok_ws2812(bench, DIN, mhz * 1e6), frames, "sigrok")
 
 
 if __name__ == "__main__":

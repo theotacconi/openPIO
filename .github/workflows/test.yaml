@@ -72,7 +72,7 @@ jobs:
       - name: Install Verilator and Yosys
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y verilator g++ make
+          sudo apt-get install -y verilator g++ make sigrok-cli
           pip install yowasp-yosys
 
       - name: One SM against emu.py (netlist)

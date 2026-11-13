@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """LIN master against a reference LIN slave on a wired-AND bus: break of 13 bits, sync 0x55,
 protected ID parity, a response from the slave (data and checksum read back) and one from the
-master (checksum checked by the slave)."""
+master (checksum checked by the slave). sigrok's LIN decoder reads the same break, sync, IDs
+with their parity, data and checksums on the bus."""
 import sys
 import unittest
 from pathlib import Path
@@ -10,6 +11,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[1] / "test" / "shared"))
 from bench import Bench                                        # noqa: E402
 from devices import LinSlave, WiredAndBus, lin_checksum, lin_pid  # noqa: E402
+from sigrok import lin as sigrok_lin                           # noqa: E402
 
 TX, RX, BIT = 0, 1, 8  # pins as in the program
 
@@ -30,6 +32,13 @@ class LinMaster(unittest.TestCase):
         got = [w >> 8 for w in bench.received[0]]
         self.assertEqual(got, [0x11, 0x22, 0x33, lin_checksum(lin_pid(0x10), [0x11, 0x22, 0x33])])
         self.assertEqual(slave.frames, [(0x10, [0x11, 0x22, 0x33], True), (0x21, data, True)])
+
+        def frame(ident, data):
+            return (["Break condition", "Sync", f"ID: {ident:02X} Parity: {lin_pid(ident) >> 6} (ok)"]
+                    + [f"Data: 0x{d:02X}" for d in data]
+                    + [f"Checksum: 0x{lin_checksum(lin_pid(ident), data):02X}"])
+        self.assertEqual(sigrok_lin(bench, RX, BIT), frame(0x10, [0x11, 0x22, 0x33]) + frame(0x21, data),
+                         "sigrok")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """1-Wire master judged by a reference 1-Wire device: reset and presence, written bytes, read
-bytes (a ROM with its CRC8), slot timing."""
+bytes (a ROM with its CRC8), slot timing. sigrok's 1-Wire decoders read the same reset,
+presence, commands and bytes, with every slot and pulse within the standard's times (one clock
+is 1 us: CLKDIV 1 is the program's 1 MHz)."""
 import sys
 import unittest
 from pathlib import Path
@@ -10,6 +12,7 @@ sys.path.insert(0, str(HERE.parents[1] / "test" / "shared"))
 sys.path.insert(0, str(HERE.parents[1] / "sim" / "model"))
 from bench import Bench                                  # noqa: E402
 from devices import OneWireDevice, crc8_maxim            # noqa: E402
+from sigrok import onewire as sigrok_onewire             # noqa: E402
 
 DQ, RESET, CRC_RESET = 4, 0x8000, 0x4000
 ROM = [0x28, 0xFF, 0x4C, 0x21, 0x93, 0x16, 0x04]
@@ -38,6 +41,10 @@ class OneWire(unittest.TestCase):
         self.assertEqual((dev.resets, dev.written), (1, [0x33]))
         self.assertEqual(got[1:], [0x33] + ROM)
         self.assertEqual([w & 1 for w in words[2:]], [0] * 7 + [1], "CRC8 right after the 8th byte")
+        rom = sum(b << 8 * k for k, b in enumerate(ROM))
+        self.assertEqual(sigrok_onewire(bench, DQ, 1e6),
+                         (["Reset/presence: true", "ROM command: 0x33 'Read ROM'", f"ROM: {rom:#018x}"], []),
+                         "sigrok")
 
     def test_bad_crc(self):
         dev = OneWireDevice(DQ, replies={0x33: ROM[:-1] + [ROM[-1] ^ 0x01]})
@@ -47,12 +54,16 @@ class OneWire(unittest.TestCase):
     def test_no_device(self):
         bench, words = run(None, [RESET])
         self.assertEqual(words[0] >> 15, 1, "no presence pulse")
+        self.assertEqual(sigrok_onewire(bench, DQ, 1e6), (["Reset/presence: false"], []), "sigrok")
 
     def test_write_bytes(self):
         dev = OneWireDevice(DQ)
         bench, got = run(dev, [RESET, 0xCC, 0x44, 0xA5, 0x00])
         self.assertEqual(bench.errors(), [])
         self.assertEqual(dev.written, [0xCC, 0x44, 0xA5, 0x00])
+        self.assertEqual(sigrok_onewire(bench, DQ, 1e6),
+                         (["Reset/presence: true", "ROM command: 0xcc 'Skip ROM'", "Data: 0x44",
+                           "Data: 0xa5", "Data: 0x00"], []), "sigrok")
 
 
 if __name__ == "__main__":

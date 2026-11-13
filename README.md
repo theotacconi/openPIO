@@ -106,7 +106,7 @@ scripts/dev.sh                                    # shell inside the container
 scripts/dev.sh python3 test/lockstep/sm_fuzz.py      # run one command
 ```
 
-The model and the programs run in plain Python, in seconds:
+The model and the programs run in plain Python, in seconds; the program tests also need `sigrok-cli` (the `sigrok-cli` package on Fedora and Ubuntu), whose protocol decoders read the pins as an independent judge:
 
 ```
 for t in test/model/test_*.py; do python3 "$t"; done   # instruction set, assembler, chip model

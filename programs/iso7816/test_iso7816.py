@@ -5,8 +5,11 @@ or more), the answer to reset, then a T = 0 command header and the card's answer
 byte, data, 90 00), every bit sampled by the card at 0.2, 0.5 and 0.8 ETU, guard times of 12
 ETU between characters and 16 between directions. Error signalling both ways: a card character
 with the wrong parity, signalled by the reader at 10.5 ETU and repeated by the card; a reader
-character the card signals, repeated by the reader. A protocol written after the ISA was frozen
-(2026-10-28), without changing the hardware."""
+character the card signals, repeated by the reader. sigrok's UART decoder (8 bits, even parity;
+sigrok has no ISO 7816 decoder, and takes an error signal for a character) reads the answer to
+reset up to the bad character, finds its parity error by itself, and reads the card's answer to
+the command. A protocol written after the ISA was frozen (2026-10-28), without changing the
+hardware."""
 import sys
 import unittest
 from pathlib import Path
@@ -16,6 +19,7 @@ sys.path.insert(0, str(HERE.parents[1] / "test" / "shared"))
 sys.path.insert(0, str(HERE.parents[1] / "sim" / "model"))
 from bench import Bench                                  # noqa: E402
 from devices import IsoCard                              # noqa: E402
+from sigrok import uart_stream as sigrok_uart            # noqa: E402
 
 IO, CLK, RST = 0, 1, 2                                   # pins as in the programs
 ATR = [0x3B, 0x02, 0x14, 0x50]                           # T = 0, two historical bytes
@@ -48,6 +52,9 @@ class Iso7816(unittest.TestCase):
                          [b | (bin(b).count("1") & 1) << 8 for b in answer], "data and parity")
         self.assertEqual((card.reader_signals, card.card_signals), (1, 1))
         self.assertEqual(bench.errors(), [])
+        line = sigrok_uart(bench, IO, 3720, parity="even")    # an ETU: 372 card clocks of 10
+        self.assertEqual(line[:4], ["3B", "02", "14", "Parity error"], "sigrok: the ATR's bad parity")
+        self.assertEqual(line[-len(answer):], [f"{b:02X}" for b in answer], "sigrok: the answer")
 
 
 if __name__ == "__main__":

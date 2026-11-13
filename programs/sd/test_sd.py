@@ -2,7 +2,8 @@
 """SD card commands in SPI mode, judged by the reference SPI slave in each of the four modes:
 the PAU's bit clock on SCK (at CPOL between commands, MOSI set up before every sampling edge,
 held after it), CS_N around each command, and the CRC-7 the PAU appends checked against
-CRC-7/SD (CMD0 ends in 0x95, CMD8 with 0x1AA in 0x87). A protocol written after the ISA v3
+CRC-7/SD (CMD0 ends in 0x95, CMD8 with 0x1AA in 0x87, the values the SD specification gives).
+sigrok's SPI decoder reads the same bytes in each mode. A protocol written after the ISA v3
 revision."""
 import sys
 import unittest
@@ -14,6 +15,7 @@ sys.path.insert(0, str(HERE.parents[1] / "sim" / "model"))
 from asm import assemble                                 # noqa: E402
 from bench import Bench                                  # noqa: E402
 from devices import SpiSlave, crc7_sd                    # noqa: E402
+from sigrok import spi as sigrok_spi                     # noqa: E402
 
 MOSI, SCK, CS, MISO = 0, 1, 2, 3
 COMMANDS = [(0, 0), (8, 0x1AA), (55, 0), (41, 0x40000000), (17, 0x00012345)]
@@ -39,6 +41,8 @@ class SdCommands(unittest.TestCase):
                     bench.run(8 * 6 * 8 + 40)
                 self.assertEqual(slave.words, [b for c in COMMANDS for b in command_bytes(*c)])
                 self.assertEqual(slave.words[5], 0x95, "CMD0")
+                self.assertEqual(slave.words[11], 0x87, "CMD8 with 0x1AA")
+                self.assertEqual(sigrok_spi(bench, MOSI, SCK, CS, MISO, mode)[0], slave.words, "sigrok")
                 self.assertEqual(bench.errors(), [])
                 idle = {s for s, c in zip(bench.wave(SCK, 10), bench.wave(CS, 10)) if c == "1"}
                 self.assertEqual(idle, {str(mode >> 1)}, "SCK at CPOL while CS_N is high")

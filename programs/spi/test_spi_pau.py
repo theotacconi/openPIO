@@ -2,7 +2,7 @@
 """SPI target through the PAU's external bit clock, against the reference SPI master: transfers
 of several bytes both ways, answers from the TX FIFO and 0xFF when it is empty, MISO set up
 before every rising SCK edge (checked by the master), a byte cut by CS_N dropped. A program
-written after the ISA v3 revision."""
+written after the ISA v3 revision. sigrok's SPI decoder reads the same bytes both ways."""
 import random
 import sys
 import unittest
@@ -13,6 +13,7 @@ sys.path.insert(0, str(HERE.parents[1] / "test" / "shared"))
 sys.path.insert(0, str(HERE.parents[1] / "sim" / "model"))
 from bench import Bench                                  # noqa: E402
 from devices import SpiMaster                            # noqa: E402
+from sigrok import spi as sigrok_spi                     # noqa: E402
 
 MOSI, SCK, CS, MISO = 0, 1, 2, 3
 
@@ -37,6 +38,8 @@ class SpiPauTarget(unittest.TestCase):
         self.assertEqual(bench.errors(), [])
         self.assertEqual([w & 0xFF for w in bench.received[0]], sum(transfers, []), "MOSI")
         self.assertEqual(sum(master.received, []), answers + [0xFF] * 2, "MISO; 0xFF once out")
+        self.assertEqual(sigrok_spi(bench, MOSI, SCK, CS, MISO),
+                         (sum(transfers, []), answers + [0xFF] * 2), "sigrok")
 
     def test_a_byte_cut_by_cs(self):
         bench, master = self.run_target([[0x12, (0xA0, 5)], [0x34]], [0x55, 0x66, 0x77])

@@ -2,7 +2,8 @@
 """DALI master against reference control gear on a DALI bus behind an inverting transceiver:
 forward frames at 1200 baud from a 50 MHz clock (CLKDIV 2604 + 43 / 256), Manchester on the
 PAU with INV; backward frames received by the PAU 5.5 ms and 10.5 ms after the forward frame
-(the settling window of IEC 62386-101), no answer, and two gear answering at once."""
+(the settling window of IEC 62386-101), no answer, and two gear answering at once. sigrok's DALI
+decoder reads the same forward and backward frames on the bus."""
 import sys
 import unittest
 from pathlib import Path
@@ -11,6 +12,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[1] / "test" / "shared"))
 from bench import Bench                                  # noqa: E402
 from devices import DaliBus, DaliGear                    # noqa: E402
+from sigrok import dali as sigrok_dali                   # noqa: E402
 
 TX, RX = 0, 1
 MS = 1200 / 500                                          # half-bits (Te) a millisecond
@@ -35,6 +37,9 @@ class DaliMaster(unittest.TestCase):
         bench, gear = run([0xFF90], [({0xFF90: 0x04}, 5.5 * MS)], clkdiv=(2604, 43))
         self.assertEqual((gear[0].frames, bench.received[0]), ([0xFF90], [0x0104]))
         self.assertEqual(bench.errors(), [])
+        bench.run(1000)
+        self.assertEqual(sigrok_dali(bench, RX, 8 * (2604 + 43 / 256)),
+                         [("forward", 0xFF90), ("backward", 0x04)], "sigrok")
 
     def test_answers_and_silence(self):
         """A command (no answer), queries answered early and late in the window, a query no gear
@@ -44,6 +49,9 @@ class DaliMaster(unittest.TestCase):
         self.assertEqual(gear[0].frames, frames)
         self.assertEqual(bench.received[0], [0, 0x01A5, 0x015A, 0])
         self.assertEqual(bench.errors(), [])
+        self.assertEqual(sigrok_dali(bench, RX, 24),
+                         [("forward", 0x0105), ("forward", 0x0190), ("backward", 0xA5),
+                          ("forward", 0x03A0), ("backward", 0x5A), ("forward", 0x05A1)], "sigrok")
         self.assertFalse(bench.chip.sms[0].irq_flags[0])
 
     def test_two_gear_answer_at_once(self):

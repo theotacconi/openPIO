@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """SWD host against a reference ADIv5 target: DP / AP reads and writes, ACK, read parity, write
-parity computed on the chip, no contention on SWDIO around the turnarounds."""
+parity computed on the chip, no contention on SWDIO around the turnarounds. sigrok's SWD decoder
+reads the same requests, ACKs and data, with no parity error."""
 import sys
 import unittest
 from pathlib import Path
@@ -10,6 +11,7 @@ sys.path.insert(0, str(HERE.parents[1] / "test" / "shared"))
 sys.path.insert(0, str(HERE.parents[1] / "sim" / "model"))
 from bench import Bench                                  # noqa: E402
 from devices import SwdTarget                            # noqa: E402
+from sigrok import swd as sigrok_swd                     # noqa: E402
 
 CLK, DIO = 0, 1  # pins as in the program
 DPIDR = 0x0BC11477
@@ -32,19 +34,24 @@ class Swd(unittest.TestCase):
         bench.load(0, (HERE / "swd.asm").read_text())
         target = bench.add(SwdTarget(CLK, DIO, {(0, 0x0): DPIDR}))
         bench.send(0, [request(0, 1, 0x0)] + write(1, 0x4, 0xCAFE1234) + [request(1, 1, 0x4)]
-                   + write(0, 0x8, 0x00000001) + [request(0, 1, 0x8)])
+                   + write(0, 0x4, 0x50000000) + [request(0, 1, 0x4)])
         bench.start(1)
         bench.run(1500)
         self.assertEqual(bench.errors(), [])
         self.assertEqual(target.log, [("r", 0, 0x0, DPIDR), ("w", 1, 0x4, 0xCAFE1234),
-                                      ("r", 1, 0x4, 0xCAFE1234), ("w", 0, 0x8, 1), ("r", 0, 0x8, 1)])
+                                      ("r", 1, 0x4, 0xCAFE1234), ("w", 0, 0x4, 0x50000000),
+                                      ("r", 0, 0x4, 0x50000000)])
         words = bench.received[0]
         reads = [words[0:4], words[5:9], words[10:14]]   # ACK, data lo, data hi, parity
-        for (ack, lo, hi, par), value in zip(reads, [DPIDR, 0xCAFE1234, 1]):
+        for (ack, lo, hi, par), value in zip(reads, [DPIDR, 0xCAFE1234, 0x50000000]):
             self.assertEqual(ack >> 13, 0b001, "ACK OK")
             self.assertEqual(lo | hi << 16, value)
             self.assertEqual(par >> 15, bin(value).count("1") % 2)
         self.assertEqual([words[4] >> 13, words[9] >> 13], [1, 1], "write ACKs")
+        self.assertEqual(sigrok_swd(bench, CLK, DIO),
+                         ["IDCODE", "OK", "0x0bc11477", "W AP4", "OK", "0xcafe1234", "R AP4", "OK",
+                          "0xcafe1234", "W CTRL/STAT", "OK", "0x50000000", "R CTRL/STAT", "OK",
+                          "0x50000000"], "sigrok")
 
 
 if __name__ == "__main__":

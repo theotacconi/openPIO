@@ -27,6 +27,12 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Install sigrok-cli
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y sigrok-cli
+          sigrok-cli --version | head -1
+
       - name: Model tests
         run: |
           for t in test/model/test_*.py; do python3 "$t"; done

@@ -11,9 +11,10 @@ ARG OSS_CAD_SUITE=2026-10-01
 
 # g++/make: verilator compiles its models with the host C++ toolchain
 # libpython3-dev: cocotb loads libpython into the simulator (test/Makefile)
+# sigrok-cli: the protocol decoders that judge the programs (test/shared/sigrok.py)
 RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        ca-certificates curl git make g++ python3 python3-venv libpython3-dev \
+        ca-certificates curl git make g++ python3 python3-venv libpython3-dev sigrok-cli \
  && rm -rf /var/lib/apt/lists/*
 
 RUN d=$(echo "$OSS_CAD_SUITE" | tr -d -) \

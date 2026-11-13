@@ -845,9 +845,10 @@ class SwdTarget(Device):
     """ARM SWD target (ADIv5): request sampled on SWCLK rising edges (start, APnDP, RnW, A[2:3],
     parity, stop, park), turnaround, ACK OK, then 32 data bits + even parity: sent for reads (the
     target changes SWDIO one clock after a rising edge), sampled on rising edges for writes, then
-    turnaround. Zeros between requests are idle cycles. `regs` maps (APnDP, A[3:2]) to values;
-    `log` lists (read / write, APnDP, addr, value). Checks request parity, start / stop / park,
-    write parity."""
+    turnaround. Zeros between requests are idle cycles. `regs` maps (APnDP, A[3:2]) to values:
+    a plain register file, the link layer only (what the registers mean, such as posted AP reads
+    or DP RESEND at 0x8, is the host's); `log` lists (read / write, APnDP, addr, value). Checks
+    request parity, start / stop / park, write parity."""
 
     def __init__(self, clk: int, dio: int, regs: dict | None = None) -> None:
         super().__init__()
@@ -941,10 +942,13 @@ class BmcRx(Device):
 class BmcTx(Device):
     """Biphase mark transmitter: sends the `frames` (bit lists) from clock `start`, `gap` bit
     times apart: a transition at every bit boundary, one more in the middle of a 1; between
-    frames the line holds its level. `bit` may be fractional (a fast or slow transmitter)."""
+    frames the line holds its level. `bit` may be fractional (a fast or slow transmitter).
+    end_edge: one more transition after each frame's last bit, which ends it, as USB PD ends a
+    frame after its EOP (a receiver that ends a frame at a missing boundary transition reads
+    it as one more 0)."""
 
     def __init__(self, pin: int, bit: float, frames: list[list[int]], start: int = 0,
-                 gap: float = 8) -> None:
+                 gap: float = 8, end_edge: bool = False) -> None:
         super().__init__()
         self.pin = pin
         self.schedule: list[tuple[int, int]] = []
@@ -957,6 +961,9 @@ class BmcTx(Device):
                     level ^= 1
                     self.schedule.append((round(t + bit / 2), level))
                 t += bit
+            if end_edge:                           # the edge that ends the last bit
+                level ^= 1
+                self.schedule.append((round(t), level))
             t += gap * bit
         self.end = round(t)
         self.drive = {pin: 0}
