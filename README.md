@@ -81,8 +81,8 @@ It is tested on UART, LIN, USB, CAN, HDLC, DALI, MFM, biphase mark, SPI, SD card
 | State machines | 2, each with its own program memory (an SRAM) and FIFO memory (an SRAM) |
 | Pins | 14 usable: 8 bidirectional, 6 input + output on separate pads |
 | Host interface | SPI, plus an interrupt line |
-| Clock | 50 MHz at typical conditions (1.2 V, 25 C); 42 MHz in the worst case (1.08 V, 125 C). Receiving 10BASE-T needs 60 MHz, which closes only at typical conditions (about 1.7 ns of slack): a bench experiment, not a signed-off rate |
-| Size | 32k standard cells and 4 SRAMs, 11 mW |
+| Clock | 50 MHz at typical conditions (1.2 V, 25 C); 42 MHz in the worst case (1.08 V, 125 C). Receiving 10BASE-T needs 60 MHz, which closes only at typical conditions (about 1.4 ns of slack): a bench experiment, not a signed-off rate |
+| Size | 33k standard cells and 4 SRAMs, 10 mW |
 
 ## Documentation
 
