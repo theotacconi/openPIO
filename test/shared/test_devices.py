@@ -9,8 +9,8 @@ import unittest
 
 from bench import Bench, Script
 from devices import (BmcRx, BmcTx, DaliBus, DaliGear, WiredAndBus, CanNode, HdlcRx, I2cTarget,
-                     I2sCodec, SpiMaster, SpiSlave, UartRx, UartTx, Ws2812Chain, can_crc15, crc16_modbus,
-                     crc16_x25)
+                     I2sCodec, SpiMaster, SpiSlave, UartRx, UartTx, Ws2812Chain, can_crc15, crc7_sd,
+                     crc8_maxim, crc16_ccitt, crc16_modbus, crc16_usb, crc16_x25)
 
 
 def spi_master(mode, words, half=3, sck=0, mosi=1, bits=8, start=5):
@@ -291,6 +291,20 @@ class Dali(unittest.TestCase):
         halves = [bus.wave[t0 + te // 2 + k * te] for k in range(18)]
         self.assertEqual(halves, [v for b in [1, 0, 1, 0, 1, 1, 0, 1, 0] for v in (1 - b, b)])
         self.assertEqual([bench.trace[t] >> 1 & 1 for t in (5, t0 + te // 2)], [0, 1], "RX inverted")
+
+
+class CrcCatalogue(unittest.TestCase):
+    """The CRCs the reference devices compute, against the check values of the CRC catalogue
+    (Greg Cook, reveng.sourceforge.io/crc-catalogue): the CRC of the ASCII string "123456789"."""
+
+    def test_check_values(self):
+        check = list(b"123456789")
+        self.assertEqual(crc16_usb(check), 0xB4C8, "CRC-16/USB")
+        self.assertEqual(crc8_maxim(check), 0xA1, "CRC-8/MAXIM-DOW (1-Wire)")
+        self.assertEqual(crc16_ccitt(check), 0x29B1, "CRC-16/IBM-3740 (CCITT-FALSE, MFM)")
+        self.assertEqual(crc7_sd(check), 0x75, "CRC-7/MMC (SD commands)")
+        self.assertEqual(crc16_modbus(check), 0x4B37, "CRC-16/MODBUS")
+        self.assertEqual(crc16_x25(check), 0x906E, "CRC-16/IBM-SDLC (X.25, HDLC)")
 
 
 if __name__ == "__main__":
