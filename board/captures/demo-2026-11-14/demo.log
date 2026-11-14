@@ -1,0 +1,384 @@
+16:49:12.877  openPIO demo, 2026-11-14, repository v3-candidate-73-g6b9961d-dirty, log demo-video/2026-11-14/demo.log
+16:49:12.878  the chip on /dev/ttyACM0: ID 0x3250, its clock 27 MHz
+
+16:49:12.900  1. The chip is alive
+16:49:12.900  A comet on the ring: ws2812.asm, 5 instructions on state machine 1, pin 1.
+16:49:12.901  The PC only sends colours, 18 words of 16 bits every 40 ms.
+16:49:12.901  SM 1's program, read back from the chip:
+16:49:12.901      00: e021 6251 1284 1301 83c6
+16:49:12.901  (Enter)
+
+16:49:19.395  2. It does not know the remote
+16:49:19.395  SM 0's program memory, erased and read back from the chip: 64 words, all 0000.
+16:49:19.395  SM 0 is stopped. Pin 0 is the infrared receiver's output: press keys, the chip
+16:49:19.395  sees the line move, and nothing on it understands it.
+16:49:19.395  (Enter)
+16:49:38.550  pin 0 changed 68 times while polled; frames understood: 0
+
+16:49:38.551  3. It listens
+16:49:38.551  The logic analyzer records pin 0 for 20 s.
+16:49:38.551  Press about ten different keys, short presses, a second apart.
+16:49:38.551  (Enter to start)
+16:49:43.387  recording started, 20 s at 1 MHz
+16:50:03.447  demo-video/2026-11-14/remote.sr: 267754 bytes, sha256 75995974e44fe3c6, written 16:50:03
+
+16:50:03.448  4. It learns
+16:50:03.448  sim/learn/learn.py on demo-video/2026-11-14/remote.sr, now; every step it takes:
+16:50:03.930  [+ 0.483 s] read demo-video/2026-11-14/remote.sr: 20.00 s, 2000 edges on D0, times in clocks of 27 MHz
+16:50:05.034  [+ 1.587 s] learned: pulses
+16:50:05.036  [+ 1.588 s] the line rests high (its longest pulse): a mark is low, a space high
+16:50:05.036  [+ 1.588 s] marks (low), measured:
+16:50:05.037  [+ 1.589 s]         555 µs x980   (523 µs .. 583 µs)
+16:50:05.037  [+ 1.589 s]        4430 µs x20    (4402 µs .. 4471 µs)
+16:50:05.037  [+ 1.589 s] spaces (high), measured:
+16:50:05.038  [+ 1.590 s]         519 µs x480   (492 µs .. 550 µs)
+16:50:05.038  [+ 1.590 s]        1591 µs x480   (1565 µs .. 1602 µs)
+16:50:05.038  [+ 1.590 s]        4338 µs x20    (4335 µs .. 4365 µs)
+16:50:05.038  [+ 1.590 s]         pauses x19    (5150 µs .. 2.54 s): between frames
+16:50:05.038  [+ 1.590 s] a frame ends at 3136 µs at rest after its leader
+16:50:05.038  [+ 1.590 s] leader, what every frame of the main kind starts with: mark 4402 µs + space 4335 µs
+16:50:05.038  [+ 1.590 s] after it the marks have one width and the spaces two, 520 µs and 1590 µs: the space carries the bit, a long one is a 1 (threshold 1055 µs)
+16:50:05.039  [+ 1.591 s] the first frame, as measured (3.79 s into the recording):
+16:50:05.039  [+ 1.592 s]     M4471 S4337  (leader)
+16:50:05.039  [+ 1.592 s]     M581 S1565->1  M582 S517->0  M556 S1590->1  M556 S517->0  M556 S517->0  M556 S517->0  M556 S517->0  M556 S1590->1
+16:50:05.039  [+ 1.592 s]     M556 S1590->1  M556 S517->0  M556 S517->0  M556 S517->0  M557 S516->0  M556 S517->0  M556 S517->0  M556 S1590->1
+16:50:05.039  [+ 1.592 s]     ...
+16:50:05.039  [+ 1.592 s] every burst in the recording, decoded by what was learned:
+16:50:05.040  [+ 1.592 s]       3.79 s   48 bits   85 81 92 ff ff 6a
+16:50:05.040  [+ 1.592 s]       3.89 s   48 bits   7a 7e 6d 00 00 95
+16:50:05.040  [+ 1.592 s]       4.04 s   48 bits   85 80 92 ff ff 6b
+16:50:05.040  [+ 1.592 s]       4.14 s   48 bits   7a 7f 6d 00 00 94
+16:50:05.040  [+ 1.592 s]       5.16 s   48 bits   85 81 92 ff ff 6a
+16:50:05.040  [+ 1.592 s]       5.25 s   48 bits   7a 7e 6d 00 00 95
+16:50:05.040  [+ 1.592 s]       7.88 s   48 bits   85 29 7a ff ff da
+16:50:05.040  [+ 1.593 s]       7.98 s   48 bits   7a d6 85 00 00 25
+16:50:05.040  [+ 1.593 s]       9.19 s   48 bits   85 09 92 ff ff e2
+16:50:05.040  [+ 1.593 s]       9.28 s   48 bits   7a f6 6d 00 00 1d
+16:50:05.040  [+ 1.593 s]      10.57 s   48 bits   85 09 12 ff ff 62
+16:50:05.040  [+ 1.593 s]      10.67 s   48 bits   7a f6 ed 00 00 9d
+16:50:05.041  [+ 1.593 s]      11.69 s   48 bits   85 09 92 ff ff e2
+16:50:05.041  [+ 1.593 s]      11.79 s   48 bits   7a f6 6d 00 00 1d
+16:50:05.041  [+ 1.593 s]      12.81 s   48 bits   85 19 92 ff ff d2
+16:50:05.041  [+ 1.593 s]      12.90 s   48 bits   7a e6 6d 00 00 2d
+16:50:05.041  [+ 1.593 s]      13.86 s   48 bits   85 05 92 ff ff e6
+16:50:05.041  [+ 1.593 s]      13.96 s   48 bits   7a fa 6d 00 00 19
+16:50:05.041  [+ 1.593 s]      15.02 s   48 bits   85 09 92 ff ff e2
+16:50:05.041  [+ 1.593 s]      15.12 s   48 bits   7a f6 6d 00 00 1d
+16:50:05.041  [+ 1.594 s]     ············██··█········█···█···██··█··██··█···█···············  0 .. 20.00 s
+16:50:05.041  [+ 1.594 s] 14 different codes in 20 frames
+16:50:05.042  [+ 1.594 s] no CRC found: no polynomial of width 1..32 (with init and final XOR 0 or all ones, from any start) divides every frame; the receiver passes the bits on unchecked
+16:50:05.042  [+ 1.594 s] for the chip: CLKDIV 168, a strobe every 6.22 µs; the program times each pulse with WAIT ... TIMEOUT:
+16:50:05.042  [+ 1.594 s]     leader mark: at least 522 strobes (3248 µs), ending within 435 more (2707 µs): another remote's leader is refused
+16:50:05.042  [+ 1.594 s]     leader space: at least 510 strobes (3173 µs), ending within 420 more (2613 µs): another remote's leader is refused
+16:50:05.042  [+ 1.594 s]     a space past T = 168 strobes (1045 µs) is long; 3 T without a mark (3.1 ms) end a frame
+16:50:05.042  [+ 1.594 s] CLKDIV 168 + 0/256 at 27 MHz
+16:50:05.043  [+ 1.595 s] the receiver: 42 instructions of 16 bits, machine code (sha256 ae0cf081fe93062a):
+16:50:05.043  [+ 1.595 s]     00: e041 c0a2 c082 e092 e0bd c0aa 0081 e08f e0bd c0aa 008c 0001
+16:50:05.043  [+ 1.595 s]     0c: e091 e0be c08a 0081 e08e e0be c08a 0095 0001 e086 e0bc c0a2
+16:50:05.043  [+ 1.595 s]     18: e061 c08a 2081 c08a 009f 007b 2003 4051 2002 40d1 0017 4041
+16:50:05.043  [+ 1.595 s]     24: 20a7 40c1 2004 809a c050 0001
+16:50:05.043  [+ 1.595 s] the receiver's source, as learn.py wrote it:
+16:50:05.043  .program learned_pulses_rx
+16:50:05.043  ; Generated by sim/learn/learn.py: pulse distance, idle high, spaces of 14043.9 / 42940.7 clocks (a long one is a 1), leader 118854 117045, sync -, no CRC.
+16:50:05.043  ; CLKDIV 168.
+16:50:05.043  ; RX FIFO: a frame's bits, 8 a word in bits 15:8 (the first in bit 8); then an end
+16:50:05.043  ; word: the last 0..7 bits in bits 15:8 under a 1, bits 7:0 = 1, or 3 when the CRC
+16:50:05.043  ; is right.
+16:50:05.043  .in_pins 0
+16:50:05.043  .shift_in right
+16:50:05.043  .push_thresh 8
+
+16:50:05.043      set x, 1                ; X = 1: a 1 bit
+16:50:05.043  frame:
+16:50:05.043      wait 1 in_base 0
+16:50:05.043      wait 0 in_base 0        ; a mark: a frame starts
+16:50:05.043      set dlymul, 18
+16:50:05.043      set timeout_val, 29
+16:50:05.043      wait 1 in_base 0 timeout ; leader mark: 522 strobes
+16:50:05.043      jmp !status timeout, frame ; shorter: not a frame
+16:50:05.043      set dlymul, 15
+16:50:05.043      set timeout_val, 29
+16:50:05.043      wait 1 in_base 0 timeout ; and its end within 435 more
+16:50:05.043      jmp !status timeout, led0
+16:50:05.043      jmp frame               ; longer: another remote's leader
+16:50:05.043  led0:
+16:50:05.043      set dlymul, 17
+16:50:05.043      set timeout_val, 30
+16:50:05.043      wait 0 in_base 0 timeout ; leader space: 510 strobes
+16:50:05.043      jmp !status timeout, frame ; shorter: not a frame
+16:50:05.043      set dlymul, 14
+16:50:05.043      set timeout_val, 30
+16:50:05.043      wait 0 in_base 0 timeout ; and its end within 420 more
+16:50:05.043      jmp !status timeout, led1
+16:50:05.043      jmp frame               ; longer: another remote's leader
+16:50:05.043  led1:
+16:50:05.043      set dlymul, 6
+16:50:05.043      set timeout_val, 28     ; T = 168 strobes: a long pulse lasts past it
+16:50:05.043  bit:
+16:50:05.043      wait 1 in_base 0        ; the mark ends: a space
+16:50:05.043      set y, 1
+16:50:05.043      wait 0 in_base 0 timeout ; the next mark, or the space lasts past T
+16:50:05.043      jmp !status timeout, short
+16:50:05.043  gap:
+16:50:05.043      wait 0 in_base 0 timeout
+16:50:05.043      jmp !status timeout, long ; a long space
+16:50:05.043      jmp y--, gap
+16:50:05.043      jmp end                 ; the mark before was the stop mark
+16:50:05.043  long:
+16:50:05.043      in x, 1 auto
+16:50:05.043      jmp next
+16:50:05.043  short:
+16:50:05.043      in null, 1 auto
+16:50:05.043  next:
+16:50:05.043      jmp bit
+16:50:05.043  end:
+16:50:05.043      in x, 1                 ; 3 T without a mark: a 1 past the last bits
+16:50:05.043  fill:
+16:50:05.043      jmp status isr_full, done
+16:50:05.043      in null, 1
+16:50:05.043      jmp fill
+16:50:05.043  done:
+16:50:05.043  last:
+16:50:05.043      or isr, x               ; bits 7:0: 1
+16:50:05.043      push
+16:50:05.043      jmp frame
+
+16:50:05.044  [+ 1.596 s] learned in 1.60 s, from the recording alone: pulse distance, spaces of 520 / 1590 µs (a long one is a 1), idle high, leader 4402 + 4335 µs, 48 bits a frame, no CRC
+16:50:05.044  (Enter)
+
+16:50:14.697  5. It understands
+16:50:14.697  The program it wrote, on state machine 0. Press keys: each frame is printed
+16:50:14.697  as the chip pushes it, and the comet takes its colour. Keys never recorded
+16:50:14.697  too, then a remote nobody chose.
+16:50:14.730  SM 0's program, read back from the chip: 42 words, the same as written (sha256 ae0cf081fe93062a)
+16:50:14.730  CLKDIV 168 + 0/256; SM 0 and SM 1 running
+16:50:14.732  (Enter: go on; r and Enter: learn another remote)
+16:50:18.317    +  3.59 s  SM 0 RX FIFO: 8500 0900 5200 ff00 ff00 2200 0101
+16:50:18.317    48 bits  85 09 52 ff ff 22  NEW: not in the recording
+16:50:18.408    +  3.68 s  SM 0 RX FIFO: 7a00 f600 ad00 0000 0000 dd00 0101
+16:50:18.408    48 bits  7a f6 ad 00 00 dd  NEW: not in the recording
+16:50:19.980    +  5.25 s  SM 0 RX FIFO: 8500 0900 d200 ff00 ff00 a200 0101
+16:50:19.980    48 bits  85 09 d2 ff ff a2  NEW: not in the recording
+16:50:20.063    +  5.33 s  SM 0 RX FIFO: 7a00 f600 2d00 0000 0000 5d00 0101
+16:50:20.064    48 bits  7a f6 2d 00 00 5d  NEW: not in the recording
+16:50:21.382    +  6.65 s  SM 0 RX FIFO: 8500 0900 9200 ff00 ff00 e200 0101
+16:50:21.382    48 bits  85 09 92 ff ff e2  in the recording
+16:50:21.473    +  6.74 s  SM 0 RX FIFO: 7a00 f600 6d00 0000 0000 1d00 0101
+16:50:21.473    48 bits  7a f6 6d 00 00 1d  in the recording
+16:50:22.799    +  8.07 s  SM 0 RX FIFO: 8500 0900 1200 ff00 ff00 6200 0101
+16:50:22.799    48 bits  85 09 12 ff ff 62  in the recording
+16:50:22.890    +  8.16 s  SM 0 RX FIFO: 7a00 f600 ed00 0000 0000 9d00 0101
+16:50:22.890    48 bits  7a f6 ed 00 00 9d  in the recording
+16:50:23.987    +  9.26 s  SM 0 RX FIFO: 8500 0900 9200 ff00 ff00 e200 0101
+16:50:23.987    48 bits  85 09 92 ff ff e2  in the recording
+16:50:24.072    +  9.34 s  SM 0 RX FIFO: 7a00 f600 6d00 0000 0000 1d00 0101
+16:50:24.073    48 bits  7a f6 6d 00 00 1d  in the recording
+16:50:24.583    +  9.85 s  SM 0 RX FIFO: 8500 0800 9200 ff00 ff00 e300 0101
+16:50:24.583    48 bits  85 08 92 ff ff e3  NEW: not in the recording
+16:50:24.674    +  9.94 s  SM 0 RX FIFO: 7a00 f700 6d00 0000 0000 1c00 0101
+16:50:24.674    48 bits  7a f7 6d 00 00 1c  NEW: not in the recording
+16:50:25.441    + 10.71 s  SM 0 RX FIFO: 8500 0900 9200 ff00 ff00 e200 0101
+16:50:25.441    48 bits  85 09 92 ff ff e2  in the recording
+16:50:25.533    + 10.80 s  SM 0 RX FIFO: 7a00 f600 6d00 0000 0000 1d00 0101
+16:50:25.533    48 bits  7a f6 6d 00 00 1d  in the recording
+16:50:27.132    + 12.40 s  SM 0 RX FIFO: 8500 1900 9200 ff00 ff00 d200 0101
+16:50:27.133    48 bits  85 19 92 ff ff d2  in the recording
+16:50:27.218    + 12.49 s  SM 0 RX FIFO: 7a00 e600 6d00 0000 0000 2d00 0101
+16:50:27.219    48 bits  7a e6 6d 00 00 2d  in the recording
+16:50:28.379    + 13.65 s  SM 0 RX FIFO: 8500 0500 9200 ff00 ff00 e600 0101
+16:50:28.379    48 bits  85 05 92 ff ff e6  in the recording
+16:50:28.463    + 13.73 s  SM 0 RX FIFO: 7a00 fa00 6d00 0000 0000 1900 0101
+16:50:28.463    48 bits  7a fa 6d 00 00 19  in the recording
+16:50:29.490    + 14.76 s  SM 0 RX FIFO: 8500 1100 9200 ff00 ff00 da00 0101
+16:50:29.490    48 bits  85 11 92 ff ff da  NEW: not in the recording
+16:50:29.582    + 14.85 s  SM 0 RX FIFO: 7a00 ee00 6d00 0000 0000 2500 0101
+16:50:29.582    48 bits  7a ee 6d 00 00 25  NEW: not in the recording
+16:50:30.838    + 16.11 s  SM 0 RX FIFO: 8500 0900 9200 ff00 ff00 e200 0101
+16:50:30.838    48 bits  85 09 92 ff ff e2  in the recording
+16:50:30.929    + 16.20 s  SM 0 RX FIFO: 7a00 f600 6d00 0000 0000 1d00 0101
+16:50:30.929    48 bits  7a f6 6d 00 00 1d  in the recording
+
+16:50:50.527  3. It listens
+16:50:50.527  The logic analyzer records pin 0 for 20 s.
+16:50:50.527  Press about ten different keys, short presses, a second apart.
+16:50:50.527  (Enter to start)
+16:50:57.464  recording started, 20 s at 1 MHz
+16:51:17.525  demo-video/2026-11-14/remote-2.sr: 266032 bytes, sha256 40dc081c8d7ce1a5, written 16:51:17
+
+16:51:17.525  4. It learns
+16:51:17.525  sim/learn/learn.py on demo-video/2026-11-14/remote-2.sr, now; every step it takes:
+16:51:18.041  [+ 0.516 s] read demo-video/2026-11-14/remote-2.sr: 20.00 s, 720 edges on D0, times in clocks of 27 MHz
+16:51:18.197  [+ 0.672 s] learned: pulses
+16:51:18.197  [+ 0.672 s] the line rests high (its longest pulse): a mark is low, a space high
+16:51:18.197  [+ 0.672 s] marks (low), measured:
+16:51:18.197  [+ 0.672 s]         581 µs x340   (577 µs .. 608 µs)
+16:51:18.197  [+ 0.672 s]        9019 µs x20    (9003 µs .. 9024 µs)
+16:51:18.197  [+ 0.672 s] spaces (high), measured:
+16:51:18.198  [+ 0.673 s]         543 µs x160   (517 µs .. 548 µs)
+16:51:18.198  [+ 0.673 s]        1639 µs x160   (1611 µs .. 1642 µs)
+16:51:18.198  [+ 0.673 s]        2208 µs x10    (2181 µs .. 2210 µs)
+16:51:18.198  [+ 0.673 s]        4428 µs x10    (4421 µs .. 4449 µs)
+16:51:18.198  [+ 0.673 s]         pauses x19    (39.4 ms .. 957.4 ms): between frames
+16:51:18.198  [+ 0.673 s] a frame ends at 8437 µs at rest after its leader
+16:51:18.198  [+ 0.673 s] leader, what every frame of the main kind starts with: mark 9003 µs + space 4421 µs
+16:51:18.198  [+ 0.673 s] after it the marks have one width and the spaces two, 543 µs and 1636 µs: the space carries the bit, a long one is a 1 (threshold 1089 µs)
+16:51:18.198  [+ 0.673 s] the first frame, as measured (1.17 s into the recording):
+16:51:18.198  [+ 0.673 s]     M9019 S4432  (leader)
+16:51:18.198  [+ 0.673 s]     M603 S545->0  M579 S546->0  M579 S545->0  M579 S546->0  M579 S545->0  M579 S546->0  M579 S545->0  M579 S546->0
+16:51:18.198  [+ 0.673 s]     M579 S1641->1  M579 S1641->1  M580 S1641->1  M579 S1641->1  M580 S1641->1  M579 S1641->1  M580 S1640->1  M581 S1641->1
+16:51:18.198  [+ 0.673 s]     ...
+16:51:18.198  [+ 0.673 s] every burst in the recording, decoded by what was learned:
+16:51:18.198  [+ 0.673 s]       1.17 s   32 bits   00 ff 18 e7
+16:51:18.198  [+ 0.673 s]       1.28 s    3 pulses  not this leader (M9019 S2210): a repeat code, or another kind
+16:51:18.198  [+ 0.674 s]       2.25 s   32 bits   00 ff 5a a5
+16:51:18.198  [+ 0.674 s]       2.35 s    3 pulses  not this leader (M9023 S2208): a repeat code, or another kind
+16:51:18.199  [+ 0.674 s]       3.26 s   32 bits   00 ff 0d f2
+16:51:18.199  [+ 0.674 s]       3.37 s    3 pulses  not this leader (M9009 S2206): a repeat code, or another kind
+16:51:18.199  [+ 0.674 s]       4.16 s   32 bits   00 ff 19 e6
+16:51:18.199  [+ 0.674 s]       4.27 s    3 pulses  not this leader (M9016 S2207): a repeat code, or another kind
+16:51:18.199  [+ 0.674 s]       4.94 s   32 bits   00 ff 45 ba
+16:51:18.199  [+ 0.674 s]       5.04 s    3 pulses  not this leader (M9021 S2209): a repeat code, or another kind
+16:51:18.199  [+ 0.674 s]       5.70 s   32 bits   00 ff 44 bb
+16:51:18.199  [+ 0.674 s]       5.81 s    3 pulses  not this leader (M9024 S2209): a repeat code, or another kind
+16:51:18.199  [+ 0.674 s]       6.43 s   32 bits   00 ff 07 f8
+16:51:18.199  [+ 0.674 s]       6.54 s    3 pulses  not this leader (M9022 S2184): a repeat code, or another kind
+16:51:18.199  [+ 0.674 s]       7.09 s   32 bits   00 ff 15 ea
+16:51:18.199  [+ 0.674 s]       7.20 s    3 pulses  not this leader (M9015 S2181): a repeat code, or another kind
+16:51:18.199  [+ 0.674 s]       7.76 s   32 bits   00 ff 16 e9
+16:51:18.199  [+ 0.674 s]       7.87 s    3 pulses  not this leader (M9022 S2183): a repeat code, or another kind
+16:51:18.199  [+ 0.674 s]       8.51 s   32 bits   00 ff 0d f2
+16:51:18.199  [+ 0.674 s]       8.62 s    3 pulses  not this leader (M9018 S2209): a repeat code, or another kind
+16:51:18.199  [+ 0.674 s]     ···█░··█··█··█·█░·█·█·█░█░·█····································  0 .. 20.00 s
+16:51:18.199  [+ 0.675 s] 9 different codes in 10 frames; 10 bursts of another kind left out
+16:51:18.200  [+ 0.675 s] a check found: CRC-8 0x1, init 0, xorout 0, from bit 0, 0 bits before the end; every frame agrees, so the receiver checks it on the chip (its PAU computes the CRC bit by bit)
+16:51:18.200  [+ 0.675 s] for the chip: CLKDIV 339, a strobe every 12.56 µs; the program times each pulse with WAIT ... TIMEOUT:
+16:51:18.200  [+ 0.675 s]     leader mark: at least 522 strobes (6554 µs), ending within 435 more (5462 µs): another remote's leader is refused
+16:51:18.200  [+ 0.675 s]     leader space: at least 261 strobes (3277 µs), ending within 210 more (2637 µs): another remote's leader is refused
+16:51:18.200  [+ 0.675 s]     a space past T = 84 strobes (1055 µs) is long; 8 T without a mark (8.4 ms) end a frame
+16:51:18.200  [+ 0.675 s] CLKDIV 339 + 0/256 at 27 MHz
+16:51:18.201  [+ 0.676 s] the receiver: 49 instructions of 16 bits, machine code (sha256 289cc0c5ea488db2):
+16:51:18.201  [+ 0.676 s]     00: e041 c0c0 c0a3 c083 e092 e0bd c0ab 0082 e08f e0bd c0ab 008d
+16:51:18.201  [+ 0.676 s]     0c: 0002 e089 e0bd c08b 0082 e087 e0be c08b 0096 0002 e083 e0bc
+16:51:18.201  [+ 0.676 s]     18: c0a3 e066 c08b 2082 c08b 2080 007c 2006 4041 2003 40c1 c0f1
+16:51:18.201  [+ 0.676 s]     24: c058 0018 4041 20aa 40c1 2007 20cc e043 809a c050 e041 c0c0
+16:51:18.201  [+ 0.676 s]     30: 0002
+16:51:18.201  [+ 0.676 s] the receiver's source, as learn.py wrote it:
+16:51:18.201  .program learned_pulses_rx
+16:51:18.201  ; Generated by sim/learn/learn.py: pulse distance, idle high, spaces of 14661.7 / 44159.5 clocks (a long one is a 1), leader 243081 119367, sync 0000000011111111, CRC-8 0x1, init 0, xorout 0, from bit 0, 0 bits before the end; 10 frames of another kind.
+16:51:18.201  ; CLKDIV 339.
+16:51:18.201  ; RX FIFO: a frame's bits, 8 a word in bits 15:8 (the first in bit 8); then an end
+16:51:18.201  ; word: the last 0..7 bits in bits 15:8 under a 1, bits 7:0 = 1, or 3 when the CRC
+16:51:18.201  ; is right.
+16:51:18.201  .crc width=8 poly=0x1 res=0x0
+16:51:18.201  .in_pins 0
+16:51:18.201  .shift_in right
+16:51:18.201  .push_thresh 8
+
+16:51:18.201      set x, 1                ; X = 1: a 1 bit
+16:51:18.201      pau crc_reset
+16:51:18.201  frame:
+16:51:18.201      wait 1 in_base 0
+16:51:18.201      wait 0 in_base 0        ; a mark: a frame starts
+16:51:18.201      set dlymul, 18
+16:51:18.201      set timeout_val, 29
+16:51:18.201      wait 1 in_base 0 timeout ; leader mark: 522 strobes
+16:51:18.201      jmp !status timeout, frame ; shorter: not a frame
+16:51:18.201      set dlymul, 15
+16:51:18.201      set timeout_val, 29
+16:51:18.201      wait 1 in_base 0 timeout ; and its end within 435 more
+16:51:18.201      jmp !status timeout, led0
+16:51:18.201      jmp frame               ; longer: another remote's leader
+16:51:18.201  led0:
+16:51:18.201      set dlymul, 9
+16:51:18.201      set timeout_val, 29
+16:51:18.201      wait 0 in_base 0 timeout ; leader space: 261 strobes
+16:51:18.201      jmp !status timeout, frame ; shorter: not a frame
+16:51:18.201      set dlymul, 7
+16:51:18.201      set timeout_val, 30
+16:51:18.201      wait 0 in_base 0 timeout ; and its end within 210 more
+16:51:18.201      jmp !status timeout, led1
+16:51:18.201      jmp frame               ; longer: another remote's leader
+16:51:18.201  led1:
+16:51:18.201      set dlymul, 3
+16:51:18.201      set timeout_val, 28     ; T = 84 strobes: a long pulse lasts past it
+16:51:18.201  bit:
+16:51:18.201      wait 1 in_base 0        ; the mark ends: a space
+16:51:18.201      set y, 6
+16:51:18.201      wait 0 in_base 0 timeout ; the next mark, or the space lasts past T
+16:51:18.201      jmp !status timeout, short
+16:51:18.201  gap:
+16:51:18.201      wait 0 in_base 0 timeout
+16:51:18.201      jmp !status timeout, long ; a long space
+16:51:18.202      jmp y--, gap
+16:51:18.202      jmp end                 ; the mark before was the stop mark
+16:51:18.202  long:
+16:51:18.202      in x, 1
+16:51:18.202      jmp next
+16:51:18.202  short:
+16:51:18.202      in null, 1
+16:51:18.202  next:
+16:51:18.202      pau crc_feed, 1         ; the CRC takes the bit
+16:51:18.202      push iffull
+16:51:18.202      jmp bit
+16:51:18.202  end:
+16:51:18.202      in x, 1                 ; 8 T without a mark: a 1 past the last bits
+16:51:18.202  fill:
+16:51:18.202      jmp status isr_full, done
+16:51:18.202      in null, 1
+16:51:18.202      jmp fill
+16:51:18.202  done:
+16:51:18.202      jmp !pau crc_ok, last
+16:51:18.202      set x, 3                ; the CRC is right
+16:51:18.202  last:
+16:51:18.202      or isr, x               ; bits 7:0: 1, or 3
+16:51:18.202      push
+16:51:18.202      set x, 1
+16:51:18.202      pau crc_reset
+16:51:18.202      jmp frame
+
+16:51:18.202  [+ 0.677 s] learned in 0.68 s, from the recording alone: pulse distance, spaces of 543 / 1636 µs (a long one is a 1), idle high, leader 9003 + 4421 µs, 32 bits a frame, CRC-8 0x1, init 0, xorout 0; 10 frames of another kind left out
+16:51:18.202  (Enter)
+
+16:51:26.962  5. It understands
+16:51:26.962  The program it wrote, on state machine 0. Press keys: each frame is printed
+16:51:26.962  as the chip pushes it, and the comet takes its colour. Keys never recorded
+16:51:26.962  too, then a remote nobody chose.
+16:51:27.003  SM 0's program, read back from the chip: 49 words, the same as written (sha256 289cc0c5ea488db2)
+16:51:27.004  CLKDIV 339 + 0/256; SM 0 and SM 1 running
+16:51:27.005  (Enter: go on; r and Enter: learn another remote)
+16:51:28.460    +  1.46 s  SM 0 RX FIFO: 0000 ff00 1800 e700 0103
+16:51:28.460    32 bits  00 ff 18 e7  CRC ok  in the recording
+16:51:29.582    +  2.58 s  SM 0 RX FIFO: 0000 ff00 5a00 a500 0103
+16:51:29.582    32 bits  00 ff 5a a5  CRC ok  in the recording
+16:51:30.657    +  3.65 s  SM 0 RX FIFO: 0000 ff00 0800 f700 0103
+16:51:30.657    32 bits  00 ff 08 f7  CRC ok  NEW: not in the recording
+16:51:32.008    +  5.00 s  SM 0 RX FIFO: 0000 ff00 1600 e900 0103
+16:51:32.008    32 bits  00 ff 16 e9  CRC ok  in the recording
+16:51:32.690    +  5.69 s  SM 0 RX FIFO: 0000 ff00 0d00 f200 0103
+16:51:32.690    32 bits  00 ff 0d f2  CRC ok  in the recording
+16:51:33.212    +  6.21 s  SM 0 RX FIFO: 0000 ff00 0700 f800 0103
+16:51:33.212    32 bits  00 ff 07 f8  CRC ok  in the recording
+16:51:33.720    +  6.72 s  SM 0 RX FIFO: 0000 ff00 1900 e600 0103
+16:51:33.720    32 bits  00 ff 19 e6  CRC ok  in the recording
+16:51:34.206    +  7.20 s  SM 0 RX FIFO: 0000 ff00 1500 ea00 0103
+16:51:34.207    32 bits  00 ff 15 ea  CRC ok  in the recording
+16:51:34.598    +  7.59 s  SM 0 RX FIFO: 0000 ff00 0900 f600 0103
+16:51:34.598    32 bits  00 ff 09 f6  CRC ok  NEW: not in the recording
+16:51:35.594    +  8.59 s  SM 0 RX FIFO: 0000 ff00 4300 bc00 0103
+16:51:35.594    32 bits  00 ff 43 bc  CRC ok  NEW: not in the recording
+16:51:36.210    +  9.21 s  SM 0 RX FIFO: 0000 ff00 4400 bb00 0103
+16:51:36.211    32 bits  00 ff 44 bb  CRC ok  in the recording
+16:51:36.985    +  9.98 s  SM 0 RX FIFO: 0000 ff00 4000 bf00 0103
+16:51:36.985    32 bits  00 ff 40 bf  CRC ok  NEW: not in the recording
+16:51:37.876    + 10.87 s  SM 0 RX FIFO: 0000 ff00 1800 e700 0103
+16:51:37.876    32 bits  00 ff 18 e7  CRC ok  in the recording
+16:51:38.537    + 11.53 s  SM 0 RX FIFO: 0000 ff00 5200 ad00 0103
+16:51:38.537    32 bits  00 ff 52 ad  CRC ok  NEW: not in the recording
+16:51:39.322    + 12.32 s  SM 0 RX FIFO: 0000 ff00 1c00 e300 0103
+16:51:39.322    32 bits  00 ff 1c e3  CRC ok  NEW: not in the recording
+
+16:52:01.937  6. Why it matters
+16:52:01.937  The same 16-bit instructions, the same two state machines, the same chip, for
+16:52:01.937  every protocol in programs/ and for a line nobody wrote a program for.
+16:52:01.937  (Enter)
+16:52:05.513  log: demo-video/2026-11-14/demo.log

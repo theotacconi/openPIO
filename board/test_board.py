@@ -178,5 +178,31 @@ class Explain(unittest.TestCase):
             self.assertIn(f"{codes} different codes in {frames} frames", lines[-1], name)
 
 
+class DemoTake(unittest.TestCase):
+
+    def test_the_videos_programs_from_its_recordings(self):
+        """The demo filmed on 2026-11-14 (captures/demo-2026-11-14): learned again from the two
+        recordings it made, without a board, the programs are the ones its log says it wrote
+        on the chip, word for word (their sha256), and the recordings are the ones it made."""
+        import argparse
+        import re
+        from asm import assemble
+        from demo import learn
+        from explain import sha, words_sha
+        from learn import Capture
+        take = HERE / "captures" / "demo-2026-11-14"
+        log = (take / "demo.log").read_text()
+        made = re.findall(r"/(remote[-\w]*\.sr): \d+ bytes, sha256 ([0-9a-f]{16})", log)
+        programs = re.findall(r"machine code \(sha256 ([0-9a-f]{16})\)", log)
+        self.assertEqual([name for name, _ in made], ["remote.sr", "remote-2.sr"])
+        args = argparse.Namespace(pin=0, clock_channel=None, select_channel=None,
+                                  select_pin=None)
+        for (name, digest), program in zip(made, programs, strict=True):
+            self.assertEqual(sha(take / name), digest, name)
+            caps = Capture.from_sigrok(take / name, 27e6)
+            src = learn("pulses", caps, "D0", args)[1]
+            self.assertEqual(words_sha(list(assemble(src))), program, name)
+
+
 if __name__ == "__main__":
     unittest.main()
