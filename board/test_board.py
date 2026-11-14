@@ -160,5 +160,23 @@ class Listen(unittest.TestCase):
             self.assertTrue(line.startswith(w) and line.endswith("CRC ok"), line)
 
 
+class Explain(unittest.TestCase):
+
+    def test_frames_decoded_are_the_ones_learned(self):
+        """demo.py's trace of a real remote's recording: the frames it decodes by what was
+        learned, each with its time, are the frames learn.py learned from (step 5 tells a key
+        in the recording from a new one by them); the repeat codes are not."""
+        import explain
+        from learn import Capture, infer_pulses
+        for name, frames, codes in (("nec_remote.sr", 10, 9), ("midea_ac_remote.sr", 14, 10)):
+            cap = Capture.from_sigrok(HERE / "captures" / name, 27e6)["D0"]
+            p = infer_pulses(cap)
+            lines: list[str] = []
+            got = explain.explain_pulses(cap, p, 27e6, True, lines.append)
+            self.assertEqual(sorted(got), sorted(map(list, {tuple(f) for f in p.frames})), name)
+            self.assertEqual(sum(" bits " in line for line in lines), frames, name)
+            self.assertIn(f"{codes} different codes in {frames} frames", lines[-1], name)
+
+
 if __name__ == "__main__":
     unittest.main()

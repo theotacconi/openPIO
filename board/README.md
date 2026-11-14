@@ -28,7 +28,12 @@ host.push(0, b"hello")
 - `test_board.py`: the three on the model, without hardware.
 - `demo.py`: the demo, a step at a time: a comet on a WS2812 ring, an infrared remote recorded,
   learned and received by the program the learner wrote (needs the ring on pin 1, an IR
-  receiver on pin 0 and a logic analyzer; `--recording` without one).
+  receiver on pin 0 and a logic analyzer; `--recording` without one). Every step of the
+  learning is printed, and the program and the RX FIFO words read from the chip; all of it also
+  goes to `demo-<date>-<time>.log`, each line with the time of day, to publish with a video.
+- `explain.py`: what the learner saw and did with a recording, step by step (the widths
+  measured, the leader, each frame's bits and time, the check, the timing, the machine code);
+  no board needed: `python3 board/explain.py board/captures/nec_remote.sr`.
 - `captures/`: logic analyzer recordings of the Tang Nano build, what the learner finds in each
   (`test/learn/test_captures.py`).
 

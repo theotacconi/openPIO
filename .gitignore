@@ -26,3 +26,4 @@ test/formal/*/
 
 # test/lockstep/vsim.py: Verilator builds of the RTL
 test/lockstep/obj_dir/
+demo-*.log
