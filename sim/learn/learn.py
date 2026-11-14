@@ -684,7 +684,10 @@ def find_crc(frames: list[list[int]], starts, tails, spare: int = 0) -> Crc | No
     A CRC of width w is believed from EVIDENCE / w + 1 frames that differ in the bits it
     covers: a frame equal to another there fits whatever the other fits (a key pressed
     twice, a Sony remote's address, the same in every frame), and so does a rotation of
-    another (rotation_class). A CRC narrower than they can prove is not looked for.
+    another (rotation_class), and its inverse when the polynomial divides all ones (an air
+    conditioner remote sends each frame and then its inverse: the demo's take of 2026-11-14,
+    four keys a bit apart, fitted a CRC-6, (x + 1)^6, by chance). A CRC narrower than they can
+    prove is not looked for.
 
     A frame's bits from `start` to the end of its CRC, as a polynomial B of length L, make
     B + I x^(L - w) + X a multiple of the polynomial P (I, X: the initial value and the final
@@ -703,8 +706,11 @@ def find_crc(frames: list[list[int]], starts, tails, spare: int = 0) -> Crc | No
         for s in starts:
             bs = [(to_int(f[s:len(f) - tail]), len(f) - tail - s) for f in frames]
             n = max(k for _, k in bs)
-            others = min(whole, len(set(bs))) - 1 - spare    # frames that are evidence
-            if min(k for _, k in bs) < 2 or others < 1:
+            if min(k for _, k in bs) < 2:
+                continue
+            pairs = {(min(v, v ^ (1 << k) - 1), k) for v, k in bs}   # a frame or its inverse
+            others = min(whole, len(pairs)) - 1 - spare      # frames that are evidence
+            if others < 1:
                 continue
             least = -(-EVIDENCE // others)                   # the narrowest CRC they prove
             if least > 32:

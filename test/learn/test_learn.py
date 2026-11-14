@@ -859,6 +859,23 @@ class LearnPulses(unittest.TestCase):
                                    [midea_levels(keys[0])], 0.2, 1, 40000)
         self.assertEqual(self.receive(p, script, end), [(f, 1) for f in sent[:2]])
 
+    def test_midea_keys_a_bit_apart(self):
+        """The demo's take (2026-11-14): four presses whose keys differ in a bit or two, 8
+        different frames with the inverted copies; a CRC-6, (x + 1)^6, fitted every one of them
+        by chance. An inverted copy is no evidence for a polynomial that divides all ones: 4
+        frames prove no CRC narrower than 14 bits, and none is found."""
+        keys = []
+        for b1, b2 in ((0x08, 0x52), (0x09, 0x52), (0x09, 0xD2), (0x09, 0x92)):
+            data = [0x85, b1, b2, 0xFF, 0xFF]
+            keys.append(data + [-sum(data) & 0xFF])
+        script, end = pulse_script([midea_levels(k) for k in keys], 0.2, 1, 40000)
+        bench = Bench()
+        bench.add(script)
+        bench.run(end)
+        p = infer_pulses(Capture.from_levels(bench.trace, PIN))
+        self.assertEqual(len({tuple(f) for f in p.frames}), 8)
+        self.assertIsNone(p.crc)
+
     def test_433_mhz_remote(self):
         """EV1527 433 MHz remote presses, each its code repeated 5 times after a sync space of
         31 T: frames apart by the sync space, not by the pauses between presses. Pulse width,
