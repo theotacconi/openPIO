@@ -73,6 +73,8 @@ bit:
 
 It is tested on UART, LIN, USB, CAN, HDLC, DALI, MFM, biphase mark, SPI, SD card commands, PS/2, WS2812B, and on infrared and 433 MHz codes (NEC, Philips RC-5, Sony SIRC, an air conditioner remote, EV1527, a weather sensor): it learns each from a recording, and its receiver takes new frames. For 10BASE-T it learns the frames; its receiver takes them, and checks the FCS, from a half-bit of 3 clocks up (a 60 MHz clock: at 50 MHz the line is too fast for it). It learns the line, not the conversation: request-and-answer protocols on a shared wire (I2C, SWD, 1-Wire, ISO 7816) and the formats outside the four families (I2S, SENT, MIL-STD-1553B, 4B5B) need the hand-written programs above.
 
+**The demo** ([video, 3 minutes](https://youtu.be/Ab-KqjKyU2w)), on the FPGA build of the chip: a logic analyzer records 20 seconds of an infrared remote the chip has no program for, learn.py writes a receiver from that recording alone, and the chip runs it and receives keys that were not recorded. Two remotes, an air conditioner's and an NEC one, give two different programs. The recordings and everything the demo printed are in [board/captures/demo-2026-11-14/](board/captures/demo-2026-11-14/), and `board/test_board.py` learns the same two programs again from them, word for word.
+
 ## The chip
 
 | | |
