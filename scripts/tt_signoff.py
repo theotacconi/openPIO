@@ -7,7 +7,7 @@
 Reads <run>/final/metrics.json. Exit status 1 if any DRC/LVS/antenna error
 count is non-zero, the hold worst slack is negative in any corner, or the setup
 worst slack is negative or there is a max slew violation in the typical or
-fast corner. The clock is 50 MHz nominal (typical corner, 1.2 V, 25 C); in the
+fast corner. The clock is src/config.json's CLOCK_PERIOD (typical corner, 1.2 V, 25 C); in the
 slow corner the setup slack is reported with the clock it allows, and slew
 violations (nets detailed routing lengthened, with no repair after it) are
 reported, not checked.
@@ -56,7 +56,8 @@ for key, label in ERROR_COUNTS:
     else:
         print(f"  {label:28s} {'(not run)':>12}")
 
-PERIOD = 20.0                                     # ns, src/config.json CLOCK_PERIOD
+PERIOD = float(json.loads((Path(__file__).resolve().parents[1] / "src" / "config.json")
+                          .read_text())["CLOCK_PERIOD"])          # ns
 SLOW = "nom_slow_1p08V_125C"
 
 for key in sorted(k for k in metrics if k.startswith("design__max_slew_violation__count__corner:")):
