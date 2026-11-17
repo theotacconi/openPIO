@@ -34,7 +34,8 @@ from learn import (STUFF_EVIDENCE, Capture, bursts, clocked_rx_program,  # noqa:
                    write_sigrok, rx_frames as frames_received,
                    frame_timing, frames_rx_program, infer_async, infer_clocked, infer_frames,
                    infer_pulses,
-                   pau_directives, pulses_check, pulses_rx_program, pulses_timing, rx_program,
+                   pau_directives, pulses_check, pulses_rx_program, pulses_timing, rotation_class,
+                   rx_program,
                    timing, tx_program, word_value)
 from seeds import seeded                                 # noqa: E402
 
@@ -720,6 +721,22 @@ def pulse_script(frames: list[list[tuple[int, float]]], scale: float, idle: int,
     return Script(steps), round(t)
 
 
+def nec_keys(rnd, n: int, address: int | None = None) -> list[tuple[int, int]]:
+    """n NEC keys (address, command) whose frames are evidence apart for the check x^8 + 1
+    (find_crc): different, and neither rotations of each other nor of each other's inverse.
+    A byte and its complement make rotations far likelier than in random 32-bit frames:
+    (0x69, 0x87) and (0x43, 0x34) are one rotated."""
+    keys, seen = [], set()
+    while len(keys) < n:
+        key = (rnd.randrange(256) if address is None else address, rnd.randrange(256))
+        f = bits([key[0], key[0] ^ 0xFF, key[1], key[1] ^ 0xFF])
+        classes = {rotation_class(f), rotation_class([b ^ 1 for b in f])}
+        if not classes & seen:
+            keys.append(key)
+            seen |= classes
+    return keys
+
+
 def bmc_frames(rnd, n: int) -> list[list[int]]:
     """n frames of random bits for biphase mark, the second ending at the other level than it
     started from (a frame of b bits with o ones makes b + o edges), so that the frames after the
@@ -843,7 +860,7 @@ class LearnPulses(unittest.TestCase):
         and a lone burst are frames of other kinds. Each byte and its complement XOR to 0: a
         CRC-8 x^8 + 1, partly the remote's check."""
         rnd = seeded(8)
-        frames = [(rnd.randrange(256), rnd.randrange(256)) for _ in range(6)]
+        frames: list = nec_keys(rnd, 6)                 # 6 frames apart: 40 bits of evidence
         frames[2:2] = ["repeat", ("glitch", 3000), "repeat"]
         bench = Bench()
         remote = bench.add(NecRemote(PIN, frames, us=0.2, start=100, gap=40000))
@@ -1105,7 +1122,7 @@ class LearnRecordings(unittest.TestCase):
         pause, so each frame is whole and six give the check. Stopped in the middle of a
         seventh, that one is left out."""
         rnd = seeded(16)
-        keys = [(0x04, c) for c in rnd.sample(range(256), 7)]   # 6 different keys: 40 bits
+        keys = nec_keys(rnd, 7, 0x04)                   # 6 frames apart: 40 bits of evidence
         edges, t, level = [], 150_000, 1
         for k, key in enumerate(keys):
             for lv, us in nec_levels(key):

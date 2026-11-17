@@ -176,7 +176,7 @@ class HostInterface(unittest.TestCase):
                 chip.step()
                 levels.add((chip.sms[0].tx_level, chip.sms[0].rx_level))
             self.assertEqual(got, list(range(1, len(got) + 1)), f"seed {seed}")
-            self.assertGreater(len(got), 250)
+            self.assertGreater(len(got), 200)          # 300 expected: 6 standard deviations
             self.assertEqual([max(x) for x in zip(*levels)], [133] * 2, "both FIFOs filled up")
 
     def test_sram_port_serves_every_request_within_4_clocks(self):
