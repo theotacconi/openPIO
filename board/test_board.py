@@ -86,8 +86,7 @@ class Listen(unittest.TestCase):
     def test_biphase_mark_is_not_pulse_widths(self):
         """Biphase mark has two pulse widths, and the pulses family explains it too, with a
         frame at every long space: the family that finds fewer frames is the one learned."""
-        rnd = seeded(4)
-        frames = [[rnd.randrange(2) for _ in range(rnd.randrange(40, 120))] for _ in range(5)]
+        frames = T.bmc_frames(seeded(4), 5)
         bench = T.Bench()
         tx = bench.add(T.BmcTx(0, 40, frames, start=100, gap=20))
         bench.run(tx.end + 100)

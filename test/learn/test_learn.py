@@ -313,8 +313,8 @@ class LearnFrames(unittest.TestCase):
         """Low speed on D-: NRZI, a 0 stuffed after six 1s (the 0xFF bytes), CRC-16/USB of the
         data packets."""
         rnd = seeded(1)
-        packets = [(0xC3, [0xFF, 0xFF] + [rnd.randrange(256) for _ in range(n)])
-                   for n in (2, 4, 2, 6, 4, 1)]
+        packets = [(0xC3, [rnd.randrange(256) for _ in range(n)] + [0xFF, 0xFF])
+                   for n in (2, 4, 2, 6, 4, 1)]                   # stuffing apart from the sync
         bench = usb_bench(packets)
         bench.run(bench.devices[0].end + 100)
         p = self.learn(bench.trace)
@@ -369,10 +369,10 @@ class LearnFrames(unittest.TestCase):
         self.check_received(got, sectors, [3, 1, 3])
 
     def test_biphase_mark(self):
-        """Frames of random bits without a CRC: biphase mark, told from its shifted codes by
-        the first edge of every frame on a bit boundary."""
+        """Frames of random bits without a CRC: biphase mark, told from Manchester a half-bit
+        earlier by frames that start from either level (bmc_frames)."""
         rnd = seeded(4)
-        frames = [[rnd.randrange(2) for _ in range(rnd.randrange(40, 120))] for _ in range(5)]
+        frames = bmc_frames(rnd, 5)
         bench = Bench()
         tx = bench.add(BmcTx(PIN, 40, frames, start=100, gap=20))
         bench.run(tx.end + 100)
@@ -597,7 +597,7 @@ class LearnClocked(unittest.TestCase):
         2), frames 3 clock periods apart, a start bit 0, odd parity: a 1-bit CRC, believed
         from 41 bytes. A wrong parity bit makes the CRC wrong."""
         rnd = seeded(13)
-        keys = [rnd.randrange(256) for _ in range(48)]
+        keys = rnd.sample(range(256), 48)       # 41 different keys or more: 40 bits of evidence
         bench, end = self.ps2(keys)
         bench.run(end)
         (p,) = self.learn(bench.trace, (MOSI, SCK))
@@ -658,6 +658,18 @@ def pulse_script(frames: list[list[tuple[int, float]]], scale: float, idle: int,
             steps.append((round(t), {PIN: lv}))
             t += us * scale
     return Script(steps), round(t)
+
+
+def bmc_frames(rnd, n: int) -> list[list[int]]:
+    """n frames of random bits for biphase mark, the second ending at the other level than it
+    started from (a frame of b bits with o ones makes b + o edges), so that the frames after the
+    first start from both levels: the line idles at whichever level a frame ended. When every
+    frame starts from the same level the recording is Manchester too, a half-bit earlier (1 in
+    2^(n - 2) random recordings), and nothing can tell them apart."""
+    frames = [[rnd.randrange(2) for _ in range(rnd.randrange(40, 120))] for _ in range(n)]
+    if (len(frames[1]) + sum(frames[1])) % 2 == 0:
+        frames[1][-1] ^= 1
+    return frames
 
 
 def midea_levels(data: list[int], glitch: int | None = None) -> list[tuple[int, float]]:
@@ -1014,8 +1026,8 @@ class LearnRecordings(unittest.TestCase):
         """USB packets, the first and the last cut by the recording: they are left out; the
         clock twice the sample rate doubles every time."""
         rnd = seeded(14)
-        packets = [(0xC3, [0xFF, 0xFF] + [rnd.randrange(256) for _ in range(n)])
-                   for n in (3, 2, 4, 2, 6, 4, 1, 5)]
+        packets = [(0xC3, [rnd.randrange(256) for _ in range(n)] + [0xFF, 0xFF])
+                   for n in (3, 2, 4, 2, 6, 4, 1, 5)]                   # stuffing apart from the sync
         bench = usb_bench(packets)
         bench.run(bench.devices[0].end + 100)
         bs = bursts(Capture.from_levels(bench.trace, PIN), 400)
@@ -1033,7 +1045,7 @@ class LearnRecordings(unittest.TestCase):
         pause, so each frame is whole and six give the check. Stopped in the middle of a
         seventh, that one is left out."""
         rnd = seeded(16)
-        keys = [(0x04, rnd.randrange(256)) for _ in range(7)]
+        keys = [(0x04, c) for c in rnd.sample(range(256), 7)]   # 6 different keys: 40 bits
         edges, t, level = [], 150_000, 1
         for k, key in enumerate(keys):
             for lv, us in nec_levels(key):
@@ -1084,7 +1096,7 @@ class LearnRecordings(unittest.TestCase):
     def test_ps2_cut_at_both_ends(self):
         """A PS/2 keyboard recorded from the middle of a byte to the middle of another."""
         rnd = seeded(15)
-        keys = [rnd.randrange(256) for _ in range(50)]
+        keys = rnd.sample(range(256), 50)       # 48 different keys: the parity's 40 bits of evidence
         bench = Bench(pullups=1 << MOSI | 1 << SCK)
         bench.add(Ps2Device(SCK, MOSI, keys))
         bench.run(50 + 1080 * len(keys) + 300)
