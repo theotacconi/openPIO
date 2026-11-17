@@ -9,9 +9,14 @@ Ports are read and written by name (up to 64 bits). eval() settles the logic aft
 change; tick() is one rising clock edge. The library is built once per source hash in
 test/lockstep/obj_dir/ (git-ignored). Verilator: $VERILATOR, else `verilator` (the dev
 container, scripts/dev.sh).
+
+With $OPENPIO_COVERAGE set to a directory, the RTL is built with Verilator's line (and branch)
+and toggle coverage, and each process writes its counts there when it exits (coverage.py
+reports them).
 """
 from __future__ import annotations
 
+import atexit
 import ctypes
 import hashlib
 import json
@@ -24,12 +29,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SRC = Path(os.environ.get("OPENPIO_SRC", ROOT / "src"))
 BUILD = Path(__file__).resolve().parent / "obj_dir"
+COVERAGE = os.environ.get("OPENPIO_COVERAGE")
+COV_FLAGS = ["--coverage-line", "--coverage-toggle"] if COVERAGE else []
 
 PORT = re.compile(r"VL_(IN|OUT|INOUT)(8|16|64|)\(&(\w+),(\d+),(\d+)\);")
 
 
 def _build(sources: list[str], top: str, params: dict) -> tuple[Path, list[dict]]:
-    h = hashlib.sha256(json.dumps([top, sorted(params.items())]).encode())
+    h = hashlib.sha256(json.dumps([top, sorted(params.items()), COV_FLAGS]).encode())
     for f in sources:
         h.update((SRC / f).read_bytes())
     out = BUILD / f"{top}_{h.hexdigest()[:12]}"
@@ -40,7 +47,8 @@ def _build(sources: list[str], top: str, params: dict) -> tuple[Path, list[dict]
         shutil.rmtree(out)
     out.mkdir(parents=True)
     verilator = os.environ.get("VERILATOR", "verilator")
-    args = [verilator, "--cc", "-O3", "-Wno-fatal", "--x-assign", "0", "--x-initial", "0", "--top-module", top,
+    args = [verilator, "--cc", "-O3", "-Wno-fatal", "--x-assign", "0", "--x-initial", "0", *COV_FLAGS,
+            "--top-module", top,
             "--Mdir", str(out), *(f"-G{k}={v}" for k, v in params.items()),
             *(str(SRC / f) for f in sources)]
     subprocess.run(args, check=True, stdout=subprocess.DEVNULL)
@@ -49,11 +57,15 @@ def _build(sources: list[str], top: str, params: dict) -> tuple[Path, list[dict]
     cases_get = "\n".join(f"    case {i}: return t->{p['name']};" for i, p in enumerate(ports))
     cases_set = "\n".join(f"    case {i}: t->{p['name']} = v; break;" for i, p in enumerate(ports)
                           if p["dir"] != "OUT")
+    cov = ('#include "verilated_cov.h"\n' if COVERAGE else "")
+    cov_write = ("void sim_cov_write(const char* f) { Verilated::threadContextp()->coveragep()->write(f); }"
+                 if COVERAGE else "")
     (out / "shim.cpp").write_text(f"""#include "V{top}.h"
 #include "verilated.h"
-#include <cstdint>
+{cov}#include <cstdint>
 double sc_time_stamp() {{ return 0; }}
 extern "C" {{
+{cov_write}
 void* sim_new() {{ return new V{top}; }}
 void sim_eval(void* p) {{ static_cast<V{top}*>(p)->eval(); }}
 uint64_t sim_get(void* p, int id) {{
@@ -72,12 +84,27 @@ void sim_set(void* p, int id, uint64_t v) {{
 }}
 """)
     subprocess.run([verilator, "--cc", "--build", "-O3", "-Wno-fatal", "--x-assign", "0", "--x-initial", "0",
+                    *COV_FLAGS,
                     "--top-module", top, "--Mdir", str(out), *(f"-G{k}={v}" for k, v in params.items()),
                     "-CFLAGS", "-fPIC -O2", "-LDFLAGS", "-shared", "--exe", str(out / "shim.cpp"),
                     "-o", "libsim.so", *(str(SRC / f) for f in sources)],
                    check=True, stdout=subprocess.DEVNULL)
     meta.write_text(json.dumps(ports))
     return lib, ports
+
+
+_COUNTED: set[str] = set()
+
+
+def _count_at_exit(lib: ctypes.CDLL, path: Path, top: str) -> None:
+    """The library's coverage counts written to $OPENPIO_COVERAGE when the process exits."""
+    if str(path) in _COUNTED:
+        return
+    _COUNTED.add(str(path))
+    Path(COVERAGE).mkdir(parents=True, exist_ok=True)
+    out = Path(COVERAGE) / f"{top}-{os.getpid()}-{len(_COUNTED)}.dat"
+    lib.sim_cov_write.argtypes = [ctypes.c_char_p]
+    atexit.register(lambda: lib.sim_cov_write(str(out).encode()))
 
 
 class VSim:
@@ -94,6 +121,8 @@ class VSim:
         self.ids = {p["name"]: i for i, p in enumerate(ports)}
         self.mask = {p["name"]: (1 << p["bits"]) - 1 for p in ports}
         self.h = self.lib.sim_new()
+        if COVERAGE:
+            _count_at_exit(self.lib, path, top)
         self["clk"] = 0
         self.eval()
 
