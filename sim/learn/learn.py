@@ -432,6 +432,9 @@ MID_CODES = ("manchester", "diff_manchester")     # the PAU's alignment: the fir
 POLARITY_CODES = ("nrz", "manchester")            # a bit is a level: the line rests at one
 EVIDENCE = 40       # bits: a CRC of width w is believed from 40 / w + 1 frames, as a chance
                     # match of every frame is about 2^-(w (frames - 1)) per hypothesis tried
+STUFF_EVIDENCE = 20     # stuffed bits: a rule is believed from 20 without a CRC, as random bits
+                        # follow each run of n by the other bit 1 time in 2, and 30 rules are
+                        # tried (random bits with no run past n hold one by 8: 1 recording in 30)
 FACTOR_EVIDENCE = 6     # bits: a CRC that is a narrower one found times a factor of degree d is
                         # believed from 6 / d + 1 frames, as the factor fits by chance 1 recording
                         # in 2^(d (frames - 1)) (believed: 1 in 64 or fewer); else the narrower,
@@ -843,8 +846,9 @@ def _structure(h: float, name: str, inv: int, align: int, raw: list[list[int]],
     """(score, Frames) for each stuffing rule no recorded bit breaks (and none), with the CRC
     its frames end with. Stuffing stops at the bits every frame ends with (a delimiter, an end
     flag); it starts after the bits every frame starts with when they break the rule (an HDLC
-    flag, six 1s), else at the first bit. A rule needs the CRC or 8 stuffed bits to be
-    believed."""
+    flag, six 1s), else at the first bit. A rule needs STUFF_EVIDENCE stuffed bits, or a CRC
+    the frames without it do not have (a CRC that fits either way is no evidence: the destuffed
+    bit was in its tail)."""
     pre, suf = common_prefix(raw), common_suffix(raw)
     rules = [None]
     for mode, n in itertools.product((0, 1), range(1, 16)):
@@ -854,12 +858,15 @@ def _structure(h: float, name: str, inv: int, align: int, raw: list[list[int]],
         if marks and all(marks):
             rules.append((mode, n, len(marks), k))
     out = []
+    plain = None                                        # the CRC without stuffing
     for rule in rules:
         k = rule[3] if rule else 0
         frames = ([f[:k] + destuff(f[k:len(f) - suf], *rule[:2])[0] + f[len(f) - suf:]
                    for f in raw] if rule else raw)
         sync, crc = common_prefix(frames), frames_crc(frames, (spare,))
-        if rule and not crc and rule[2] < 8:
+        if not rule:
+            plain = crc
+        elif rule[2] < STUFF_EVIDENCE and not (crc and (not plain or crc.rank > plain.rank)):
             continue
         score = (crc.rank if crc else (False, 0), name not in LEVEL_CODES, rule is not None,
                  one_idle or name not in POLARITY_CODES, align == (name in MID_CODES),

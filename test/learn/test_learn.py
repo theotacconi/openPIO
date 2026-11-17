@@ -28,7 +28,8 @@ from devices import (BmcTx, CanNode, DaliBus, DaliGear, LinSlave, NecRemote,  # 
                      Ps2Device, SpiMaster, UartRx, UartTx, UsbTx, WiredAndBus, can_bits,
                      can_crc15, crc7_sd, crc16_usb, crc16_x25, lin_checksum, lin_pid, mfm_halves,
                      mfm_sector, nec_levels, ps2_bits)
-from learn import (Capture, bursts, clocked_rx_program, clocked_timing, crc_check,  # noqa: E402
+from learn import (STUFF_EVIDENCE, Capture, bursts, clocked_rx_program,  # noqa: E402
+                   clocked_timing, crc_check,
                    decode,
                    write_sigrok, rx_frames as frames_received,
                    frame_timing, frames_rx_program, infer_async, infer_clocked, infer_frames,
@@ -387,6 +388,16 @@ class LearnFrames(unittest.TestCase):
         p = self.learn(mfm_levels([mfm_sector(list(s)) for s in sectors]))
         self.check(p, "miller", None, (16, 0x1021, 1, 0))
 
+    def test_mfm_stuffing_by_chance(self):
+        """Sectors with one run of seven 1s, followed by a 0, in a CRC: stuffing a 0 after
+        seven 1s explains the recording, and a CRC fits with it as well as without it (the
+        destuffed bit in its tail). A CRC that fits either way is no evidence: no stuffing."""
+        sectors = [bytes.fromhex("de44c4156e15f982"), bytes.fromhex("f835949bc5f7d3bef6dad588"),
+                   bytes.fromhex("a20758594f7786ab"),
+                   bytes.fromhex("ec0803c46ed560c37c084dccea0fb657"), bytes.fromhex("bab80e1ddd")]
+        p = self.learn(mfm_levels([mfm_sector(list(s)) for s in sectors]))
+        self.assertEqual((p.code, p.stuff), ("miller", None))
+
     def test_biphase_mark(self):
         """Frames of random bits without a CRC: biphase mark, told from Manchester a half-bit
         earlier by frames that start from either level (bmc_frames)."""
@@ -405,6 +416,32 @@ class LearnFrames(unittest.TestCase):
         bench.add(tx)
         got = self.receive(p, bench, tx.end + 100)
         self.check_received(got, frames, [1] * 3)       # no CRC: no verdict
+
+    def test_biphase_mark_short_runs(self):
+        """Random bits with no run of more than 4 equal bits but two runs of 5 a frame, each
+        followed by the other bit, as stuffing after 5 equal bits makes: 12 stuffed bits by
+        chance are too few to believe it (STUFF_EVIDENCE), biphase mark without it is learned."""
+        rnd = seeded(33)
+        frames = []
+        for _ in range(6):
+            f, fives = [rnd.randrange(2)], sorted(rnd.sample(range(10, 60), 2))
+            while len(f) < 70:
+                if fives and len(f) >= fives[0]:
+                    fives.pop(0)
+                    f += [f[-1] ^ 1] * 5 + [f[-1]]
+                    continue
+                b = rnd.randrange(2)
+                f.append(b ^ (len(set(f[-4:])) == 1 and len(f) >= 4 and b == f[-1]))
+            frames.append(f)
+        frames[1][-1] ^= (len(frames[1]) + sum(frames[1])) % 2 == 0     # as bmc_frames
+        runs = sum(len(set(f[i:i + 5])) == 1 for f in frames for i in range(len(f) - 4))
+        self.assertTrue(8 <= runs < STUFF_EVIDENCE, runs)
+        bench = Bench()
+        tx = bench.add(BmcTx(PIN, 40, frames, start=100, gap=20))
+        bench.run(tx.end + 100)
+        p = self.learn(bench.trace)
+        self.check(p, "bmc", None, None)
+        self.assertEqual(p.frames, frames)
 
     def test_rc5_remote(self):
         """Philips RC-5 at an IR receiver's output, a spike in one frame: Manchester, the first
