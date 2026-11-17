@@ -325,11 +325,12 @@ class LearnFrames(unittest.TestCase):
 
         packets = [(0x4B, [rnd.randrange(256) for _ in range(n)]) for n in (3, 8, 0, 5)]
         packets[2] += (0x1234,)                         # a wrong CRC
-        bench = usb_bench(packets)
+        packets.append((0x4B, [0xFD, 0xB2, 0x32, 0x18, 0x8D]))   # CRC 0xF9FA: a bit destuffed
+        bench = usb_bench(packets)                                # after it (crc_check)
         got = self.receive(p, bench, bench.devices[0].end + 200)
         sent = [bits([0x80, pid, *d, *(c[0] if c else crc16_usb(d)).to_bytes(2, "little")])
                 for pid, d, *c in packets]
-        self.check_received(got, sent, [3, 3, 1, 3])
+        self.check_received(got, sent, [3, 3, 1, 3, 3])
 
     def test_can(self):
         """CAN 2.0A on a wired-AND bus, a second node acknowledging: NRZ, the complement after
@@ -350,10 +351,13 @@ class LearnFrames(unittest.TestCase):
 
         frames = [(rnd.randrange(0x7F0), [rnd.randrange(256) for _ in range(n)])
                   for n in (2, 7, 0, 4)]
-        got = self.receive(p, can_bench(frames), sum(170 + 8 * len(d) for _, d in frames) * 50)
+        frames.append((1762, []))       # CRC ...01111: with its delimiter, five 1s, and the ACK
+        got = self.receive(p, can_bench(frames),        # slot's 0 is destuffed (crc_check)
+                           sum(170 + 8 * len(d) for _, d in frames) * 50)
         sent = [b + [can_crc15(b) >> i & 1 for i in range(14, -1, -1)]
                 for b in (can_bits(*f) for f in frames)]
-        self.check_received(got, sent, [3] * 4)
+        self.assertEqual(can_crc15(can_bits(*frames[-1])) & 0x1F, 0b01111)
+        self.check_received(got, sent, [3] * 5)
 
     def test_mfm(self):
         """Floppy sectors: MFM (the PAU's Miller code), CRC-16/CCITT after the address mark:
@@ -514,7 +518,7 @@ class LearnFrames(unittest.TestCase):
         _, trace = self.ethernet((20, 26, 20, 32), 5, 3)
         p = self.learn(trace, 0)
         self.check(p, "manchester", None, (32, 0x04C11DB7, 1, 1), bits([0x55] * 7 + [0xD5]))
-        self.assertEqual((frame_timing(p), crc_check(p)), ((3, 1, 0), (0xC704DD7B, 1)))
+        self.assertEqual((frame_timing(p), crc_check(p)), ((3, 1, 0), (0xC704DD7B, 1, 0)))
 
         frames, trace = self.ethernet((64, 20, 250, 40), 6, 3)
         edges = bursts(Capture.from_levels(trace), 60)[1][1]
