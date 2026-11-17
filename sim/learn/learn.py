@@ -435,10 +435,9 @@ EVIDENCE = 40       # bits: a CRC of width w is believed from 40 / w + 1 frames,
 STUFF_EVIDENCE = 20     # stuffed bits: a rule is believed from 20 without a CRC, as random bits
                         # follow each run of n by the other bit 1 time in 2, and 30 rules are
                         # tried (random bits with no run past n hold one by 8: 1 recording in 30)
-FACTOR_EVIDENCE = 6     # bits: a CRC that is a narrower one found times a factor of degree d is
-                        # believed from 6 / d + 1 frames, as the factor fits by chance 1 recording
-                        # in 2^(d (frames - 1)) (believed: 1 in 64 or fewer); else the narrower,
-                        # which passes every frame the wider would
+FACTOR_EVIDENCE = 6     # bits: a CRC that is a narrower one found at the same bits times a factor
+                        # of degree d is believed from 6 / d + 1 frames, as the factor fits by
+                        # chance 1 recording in 2^(d (frames - 1)); else the narrower
 
 
 @dataclass
@@ -745,15 +744,22 @@ def find_crc(frames: list[list[int]], starts, tails, spare: int = 0) -> Crc | No
 
 def believed(found: list[tuple[Crc, int]]) -> Crc | None:
     """The widest of the CRCs found (every width that fits at each start and end, with how many
-    frames are evidence there) that is not a narrower one found times a factor the evidence
-    does not prove (FACTOR_EVIDENCE): a CRC-15 times x + 1 fits every frame whose bits have an
-    even parity, as 1 in 2^(frames - 1) recordings do (6 CAN frames: a CRC-16), and from one
-    bit earlier a CRC-16 times x + 1 (5 floppy sectors: a CRC-17). A narrower CRC is the safer
-    one: every frame right by the wider is right by it."""
+    frames are evidence there) that is not a narrower one found over the same bits, both with
+    no initial value or final XOR, times a factor the evidence does not prove
+    (FACTOR_EVIDENCE): a CRC-15 times x + 1 fits every frame whose bits have an even parity,
+    as 1 in 2^(frames - 1) recordings do (6 CAN frames fitted a CRC-16). The narrower passes
+    every frame the wider would. Found from another start, or with ones, it does not: a CRC-15
+    from a bit after a sync that every recorded floppy sector happens to follow with the same
+    bit fails the sectors that follow it with the other; there the widest is kept, and a short
+    recording may hold a CRC by chance either way (5 floppy sectors, 1 in about 30)."""
     def full(c: Crc) -> int:
         return c.poly | 1 << c.width
+
+    def implied(n: Crc, c: Crc) -> bool:
+        return ((n.start, n.tail) == (c.start, c.tail)
+                and not (n.init or n.xorout or c.init or c.xorout))
     for c, others in sorted(found, key=lambda f: -f[0].width):
-        if not any(n.width < c.width and pmod(full(c), full(n)) == 0
+        if not any(n.width < c.width and implied(n, c) and pmod(full(c), full(n)) == 0
                    and (c.width - n.width) * others < FACTOR_EVIDENCE for n, _ in found):
             return c
     return None
