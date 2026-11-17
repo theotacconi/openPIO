@@ -1,0 +1,94 @@
+# The tests on data none was written with: every night, and on demand, the Python tests with
+# OPENPIO_SEED set (test/shared/seeds.py) and the lockstep benches with seeds of their own, all
+# from one seed, the run's id unless one is given; and what the benches reach of the RTL
+# (test/lockstep/coverage.py), in the run's summary. A failure is run again locally with the
+# seed the summary prints: a test that fails only on fresh data is a finding (AGENT.md).
+name: fresh
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: 'Seed (empty: the run id)'
+        required: false
+
+env:
+  SEED: ${{ inputs.seed || github.run_id }}
+
+jobs:
+  model:
+    runs-on: ubuntu-24.04
+    env:
+      OPENPIO_SEED: ${{ inputs.seed || github.run_id }}
+    steps:
+      - name: checkout repo
+        uses: actions/checkout@v6
+
+      - name: Setup python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install sigrok-cli
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y sigrok-cli
+
+      - name: Model, learner and board tests
+        run: |
+          echo "OPENPIO_SEED=$OPENPIO_SEED" | tee -a "$GITHUB_STEP_SUMMARY"
+          failed=0
+          for t in test/model/test_*.py test/shared/test_devices.py test/learn/test_learn.py \
+                   test/learn/test_captures.py board/test_board.py; do
+            (cd "$(dirname "$t")" && python3 "$(basename "$t")") || { failed=1; echo "- $t fails" >> "$GITHUB_STEP_SUMMARY"; }
+          done
+          exit $failed
+
+      - name: Protocol programs
+        run: python3 programs/report.py
+
+  lockstep:
+    runs-on: ubuntu-24.04
+    env:
+      OPENPIO_SEED: ${{ inputs.seed || github.run_id }}
+      OPENPIO_COVERAGE: obj_dir/coverage
+    defaults:
+      run:
+        working-directory: test/lockstep
+    steps:
+      - name: checkout repo
+        uses: actions/checkout@v6
+
+      - name: Setup python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install Verilator and Yosys
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y verilator g++ make sigrok-cli
+          pip install yowasp-yosys
+
+      - name: Seed
+        run: echo "seed $SEED (OPENPIO_SEED and --seed)" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: One SM against emu.py (netlist)
+        run: python3 sm_fuzz.py --seed "$SEED" --programs 30 --cycles 300
+
+      - name: Chip core against chip.py (Verilator)
+        run: python3 chip_lockstep.py --seed "$SEED" --runs 40 --cycles 5000
+
+      - name: Every program test in lockstep
+        run: python3 programs.py
+
+      - name: Tiny Tapeout top through its pins
+        run: python3 top_lockstep.py --seed "$SEED" --runs 10 --cycles 20000
+
+      - name: RTL coverage
+        if: success() || failure()
+        run: |
+          { echo '```'; python3 coverage.py obj_dir/coverage --uncovered; echo '```'; } \
+            | tee -a "$GITHUB_STEP_SUMMARY"
