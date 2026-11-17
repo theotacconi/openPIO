@@ -1317,6 +1317,10 @@ def leaders_within(frames: list[list[float]], gap: float) -> tuple[list[list[flo
     return out, gap
 
 
+PAUSE_PAST_MARKS = 1.1   # a pause between frames is past every mark within them (the closest
+                         # recorded: a Midea remote's 5.2 ms pause after a 4.4 ms leader)
+
+
 def infer_pulses(cap: Capture) -> Pulses:
     """The pulse-width code that explains the recording, or ValueError.
 
@@ -1325,7 +1329,9 @@ def infer_pulses(cap: Capture) -> Pulses:
     such jump, from the longest, the one that explains the most frames, less the frames it
     leaves out, is learned: a 433 MHz remote repeats its frame after a sync space, past which
     the pauses between presses leave no frame of one kind; a pause shorter than the right one
-    cuts frames, and their leaders are frames of another kind (_pulses)."""
+    cuts frames, and their leaders are frames of another kind (_pulses). A pause is longer than
+    every mark within the frames it makes (by PAUSE_PAST_MARKS): a WS2812's long space, as long
+    as its long mark, would cut its frames into runs of 1s that end with a 0."""
     ws = cap.widths()
     if len(ws) < 8:
         raise ValueError("too few edges")
@@ -1341,6 +1347,11 @@ def infer_pulses(cap: Capture) -> Pulses:
         raise ValueError("no pauses between frames: no idle width far past the others")
     found, errors = [], []
     for gap, below in cuts:
+        marks = [w for f in _split(cap, idle, gap)[0] for w in f[0::2]]
+        if marks and gap <= PAUSE_PAST_MARKS * max(marks):
+            errors.append(ValueError(f"a pause of {gap:.0f} is not past the marks within the "
+                                     f"frames ({max(marks):.0f})"))
+            continue
         try:
             found.append(_pulses(cap, idle, gap, below))
         except ValueError as e:

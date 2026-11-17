@@ -967,6 +967,18 @@ class LearnPulses(unittest.TestCase):
         got = self.receive(p, script, end)
         self.assertEqual(got, [(b, v) for b, v in zip(sensor, (3, 1, 3))])
 
+    def test_ws2812_pause_past_its_marks(self):
+        """Colours whose long spaces (42 clocks, a 0 bit) cut frames as well as the pause does,
+        and explain the bits as pulse distance: a pause is longer than every mark within the
+        frames it makes (PAUSE_PAST_MARKS), and these marks are 42 clocks too (a 1 bit)."""
+        leds = [0xDDD034, 0x56BFFF, 0x936C75, 0xCCB720, 0x517B06, 0xBC7BFC, 0x5781F1, 0xC9735B,
+                0x4C3172, 0x855F8F, 0xEBB060, 0xB08444, 0xD1E9BC, 0xBB55F4]
+        rgb = [(c >> 16, c >> 8 & 255, c & 255) for c in leds]
+        colours = [rgb[:2], rgb[2:6], rgb[6:8], rgb[8:]]
+        p = infer_pulses(Capture.from_levels(ws2812_trace(colours), 0))
+        want = [bits([c for led in leds for c in led], lsb_first=False) for leds in colours]
+        self.assertEqual((p.carrier, p.frames), ("mark", want))
+
     def test_ws2812_from_the_chip(self):
         """programs/ws2812/ws2812.asm: pulse width, idle low, a long mark with a short space;
         frames latched by the pause."""
