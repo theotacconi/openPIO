@@ -160,6 +160,20 @@ class Listen(unittest.TestCase):
             self.assertTrue(line.startswith(w) and line.endswith("CRC ok"), line)
 
 
+class Bridge(unittest.TestCase):
+
+    def test_the_peripherals_commands(self):
+        """pico/main.py: a peripheral's command goes to it, its error is an e answer, and the
+        chip's SPI lines are as before."""
+        import main as bridge
+        more = {"ut": lambda a: "r " + a[0], "ur": lambda a: 1 // 0}
+        xfer = lambda out: bytes(b ^ 0xFF for b in out)              # noqa: E731
+        self.assertEqual(bridge.reply("ut 00ff\n", xfer, lambda: 0, None, more), "r 00ff")
+        self.assertTrue(bridge.reply("ur\n", xfer, lambda: 0, None, more).startswith("e ur "))
+        self.assertEqual(bridge.reply("1234 00ff\n", xfer, lambda: 0, None, more), "edcb ff00")
+        self.assertEqual(bridge.reply("ut 00\n", xfer, lambda: 0, None), "e ut 00")
+
+
 class Explain(unittest.TestCase):
 
     def test_frames_decoded_are_the_ones_learned(self):

@@ -25,6 +25,7 @@ host.push(0, b"hello")
 - `loopback.py`: the protocol programs through the chip's own pads, each line from one SM to the
   other (below).
 - `listen.py`: from a logic analyzer's recording to a receiver on the board (below).
+- `peripherals.py`: the UART, SPI and I2C programs against the Pico's own peripherals (below).
 - `test_board.py`: the three on the model, without hardware.
 - `demo.py`: the demo, a step at a time: a comet on a WS2812 ring, an infrared remote recorded,
   learned and received by the program the learner wrote (needs the ring on pin 1, an IR
@@ -102,6 +103,54 @@ ok    edges
 Through the bridge an SPI word takes 16 us or more, longer than a byte of HDLC at 844 kbit/s or
 of USB: those checks queue a frame whole with SM 0 stopped, as a host does for a line faster
 than it can feed. `--model` runs the same checks on the model.
+
+## Against the Pico's own peripherals
+
+`loopback.py` checks each program against another program of this project, so a protocol
+misread the same way by both would pass. `peripherals.py` checks them against the Pico's
+UART, SPI and I2C, hardware written by Raspberry Pi and driven by MicroPython (the commands
+are in `pico/main.py`):
+
+- `uart_out`: `uart_tx` into the Pico's UART1, `uart_in`: the Pico's UART1 into `uart_rx`;
+  128 bytes at 9600, 115200, 1 M and 3 M baud.
+- `spi`: the Pico's SPI1 controller, mode 0, into `spi_target`: transfers of 1 to 32 bytes
+  at 250, 500 and 900 kHz, the answers from the TX FIFO in order.
+- `i2c`: `i2c_master` (open drain) against the Pico's I2C1 target, a memory of 256 bytes
+  (`machine.I2CTarget`, MicroPython 1.26 or later): bytes written, read back with a repeated
+  START, an absent address NACKed; at 100 and 400 kHz.
+
+| Signal | Pico GPIO | Pico pin | | pio | FPGA pin | The chip's program |
+|---|---|---|---|---|---|---|
+| SPI1 SCK | GP10 | 14 | -> | 0 | 27 | `spi_target` |
+| SPI1 MOSI | GP11 | 15 | -> | 1 | 28 | `spi_target` |
+| CS_N | GP13 | 17 | -> | 2 | 29 | `spi_target` |
+| SPI1 MISO | GP12 | 16 | <- | 3 | 30 | `spi_target` |
+| UART1 RX | GP9 | 12 | <- | 4 | 31 | `uart_tx` |
+| UART1 TX | GP8 | 11 | -> | 5 | 41 | `uart_rx` |
+| I2C1 SCL | GP15 | 20 | <-> | 6 | 42 | `i2c_master` |
+| I2C1 SDA | GP14 | 19 | <-> | 7 | 48 | `i2c_master` |
+
+SCL and SDA each need a pull-up of about 5 kohm to the Pico's 3V3(OUT), pin 36. After the
+checks the Pico's pins are inputs again; `loopback.py` and `bringup.py` drive pins 0-5
+themselves, so run them with the Pico's peripherals off (after `peripherals.py`, or after a
+reset of the Pico).
+
+`wires` comes first: each wire alone, both levels, the others at the opposite level, so a
+wire in the wrong hole shows by name before any protocol does. With `--sigrok` a logic
+analyzer, D0-D7 on pio 0-7, records the protocol checks and sigrok's decoders must read on
+the wires what each of them sent: a third implementation of each protocol, beside the chip's
+and the Pico's.
+
+```
+$ python3 board/peripherals.py --sigrok
+the Pico: MicroPython 1.29.0 i2ctarget
+ok    wires
+ok    uart_out
+ok    uart_in
+ok    spi
+ok    i2c
+ok    sigrok    the decoders read all 17 on the wires
+```
 
 ## From a recording to a receiver
 
