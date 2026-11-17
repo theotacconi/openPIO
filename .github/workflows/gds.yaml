@@ -1,5 +1,5 @@
-# Tiny Tapeout IHP SG13CMOS5L hardening (copied from TinyTapeout/ttihp-verilog-template, branch cmos5l).
-# gds: LibreLane flow (3.1.0.dev3, action default) via tt_tool --harden; precheck: TT KLayout DRC and
+# Tiny Tapeout IHP SG13CMOS5L hardening (copied from TinyTapeout/ttihp-verilog-template, branch main, shuttle tag ttihp27a).
+# gds: LibreLane flow (3.1.0.dev4, the action's default for CMOS5L) via tt_tool --harden; precheck: TT KLayout DRC and
 # submission checks on the final GDS; viewer: 3D GDS viewer on GitHub Pages; signoff: scripts/tt_signoff.py
 # on the run logs, red on any DRC/LVS/antenna/cap error, negative hold slack, or slew violation or negative
 # setup slack in the typical or fast corner (the slow corner is reported);
@@ -32,7 +32,7 @@ jobs:
           submodules: recursive
 
       - name: Build GDS
-        uses: TinyTapeout/tt-gds-action@ihp-cmos5l
+        uses: TinyTapeout/tt-gds-action@ttihp27a
         with:
           pdk: ihp-sg13cmos5l
 
@@ -65,14 +65,14 @@ jobs:
         uses: actions/checkout@v6
 
       - name: GL test
-        uses: TinyTapeout/tt-gds-action/gl_test@ihp-cmos5l
+        uses: TinyTapeout/tt-gds-action/gl_test@ttihp27a
 
   precheck:
     needs: gds
     runs-on: ubuntu-24.04
     steps:
       - name: Run Tiny Tapeout Precheck
-        uses: TinyTapeout/tt-gds-action/precheck@ihp-cmos5l
+        uses: TinyTapeout/tt-gds-action/precheck@ttihp27a
 
   viewer:
     needs: gds
@@ -81,4 +81,4 @@ jobs:
       pages: write # to deploy to Pages
       id-token: write # to verify the deployment originates from an appropriate source
     steps:
-      - uses: TinyTapeout/tt-gds-action/viewer@ihp-cmos5l
+      - uses: TinyTapeout/tt-gds-action/viewer@ttihp27a
