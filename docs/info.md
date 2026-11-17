@@ -62,6 +62,8 @@ You need an SPI master on `ui_in[2:0]` / `uo_out[0]`: the RP2040 of the demo boa
 4. Exchange data with TX_PUSH and RX_POP; poll STATUS or use HOST_IRQ.
 5. Clear the enable bit before loading a new program.
 
+Reset clears every register, not the memories: the instruction memory keeps whatever it held (nothing defined at power-up) and the FIFOs restart empty. When the design is deselected it is powered down, so after selecting it again, reset it and load the program again.
+
 Echo loop on SM 0 (`pull block`, `mov isr, osr`, `push block`): every TX word comes back on RX.
 
 ```
