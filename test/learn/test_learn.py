@@ -888,13 +888,13 @@ class LearnPulses(unittest.TestCase):
         the frames are fewer than the repeat codes but hold more pulses, and are the ones
         learned."""
         rnd = seeded(28)
-        frames = [(0x00, rnd.randrange(256)) for _ in range(5)]
+        frames = nec_keys(rnd, 6, 0x00)    # with 5, a CRC by chance can flip which width is a 1
         sent = [x for f in frames for x in (f, "repeat", "repeat")]
         bench = Bench()
         remote = bench.add(NecRemote(PIN, sent, us=0.2, start=100, gap=40000))
         bench.run(remote.end + 100)
         p = infer_pulses(Capture.from_levels(bench.trace, PIN))
-        self.assertEqual((p.carrier, p.ignored), ("space", 10))
+        self.assertEqual((p.carrier, p.ignored), ("space", 12))
         self.assertEqual(p.frames, [bits([a, a ^ 0xFF, c, c ^ 0xFF]) for a, c in frames])
 
     def test_nec_one_key_corrupted(self):
@@ -980,11 +980,11 @@ class LearnPulses(unittest.TestCase):
         self.assertEqual(self.receive(p, script, end), [(w, 1) for w in want[0:2] + want[5:7]])
 
     def test_nec_with_a_corrupted_frame_and_noise(self):
-        """Eight NEC keys, one with a mark the receiver missed (two spaces and the mark between
+        """Twelve NEC keys, one with a mark the receiver missed (two spaces and the mark between
         them one long space), and a lone burst: both left out, the check learned from the
-        other seven."""
+        other eleven (from 7, x + 1 times it fits by chance 1 time in 64: believed)."""
         rnd = seeded(31)
-        keys = [(0x10, rnd.randrange(256)) for _ in range(8)]
+        keys = nec_keys(rnd, 12, 0x10)
         levels = [nec_levels(k) for k in keys]
         bad = levels[4]
         k = 2 + 2 * 9 + 1                               # bit 9's space, bit 10's mark and space
@@ -1034,9 +1034,10 @@ class LearnPulses(unittest.TestCase):
 
     def test_433_mhz_sensor(self):
         """Fine Offset WH2 frames: pulse width, a short mark a 1, found by the CRC-8 0x31 after
-        the 0xFF preamble (the long-is-1 bits have none)."""
+        the 0xFF preamble (the long-is-1 bits have none). 14 frames: x + 1 times it fits 8
+        frames by chance 1 time in 128 (believed)."""
         rnd = seeded(10)
-        sensor = [wh2_bits(0x5A, rnd.randrange(4096), rnd.randrange(100)) for _ in range(8)]
+        sensor = [wh2_bits(0x5A, rnd.randrange(4096), rnd.randrange(100)) for _ in range(14)]
         script, end = pulse_script([wh2_levels(b) for b in sensor], 0.1, 0, 20000)
         bench = Bench()
         bench.add(script)
@@ -1116,10 +1117,11 @@ class LearnRecordings(unittest.TestCase):
     def test_remote_pressed_by_hand(self):
         """NEC keys pressed by hand, from 0.3 to 1.5 s apart, the recording started 150 ms
         before the first and stopped 100 ms after the last: closer than the presses, still a
-        pause, so each frame is whole and six give the check. Stopped in the middle of a
-        seventh, that one is left out."""
+        pause, so each frame is whole and they give the check (twelve: from six, a multiple
+        of x^8 + 1 fits by chance 1 time in about 30). Stopped in the middle of a thirteenth,
+        that one is left out."""
         rnd = seeded(16)
-        keys = nec_keys(rnd, 7, 0x04)                   # 6 frames apart: 40 bits of evidence
+        keys = nec_keys(rnd, 13, 0x04)
         edges, t, level = [], 150_000, 1
         for k, key in enumerate(keys):
             for lv, us in nec_levels(key):
@@ -1131,7 +1133,7 @@ class LearnRecordings(unittest.TestCase):
             level, t = 1, t + rnd.randrange(300_000, 1_500_000)
         whole = Capture(1, edges[:-68], (0, edges[-69] + 100_000))
         cut = Capture(1, edges[:-30], (0, edges[-31] + 300))
-        for cap, n in ((whole, 6), (cut, 6)):
+        for cap, n in ((whole, 12), (cut, 12)):
             p = infer_pulses(cap)
             self.assertEqual(p.frames, [bits([a, a ^ 255, c, c ^ 255]) for a, c in keys[:n]])
             self.assertEqual((p.crc.width, p.crc.poly), (8, 0x01))
