@@ -49,7 +49,7 @@ def line_bits(symbols):
 class FourB5B(unittest.TestCase):
 
     def test_nibbles(self):
-        nibbles = list(range(16)) + [random.Random(3).randrange(16) for _ in range(30)]
+        nibbles = list(range(16)) + random.Random(3).choices(range(16), k=30)
         bench = Bench()
         program = bench.load(0, (HERE / "fourb5b_tx.asm").read_text())
         rx = bench.add(BmcRx(PIN, BIT))

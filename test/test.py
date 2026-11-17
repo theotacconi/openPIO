@@ -173,7 +173,7 @@ async def test_fifo_echo(dut):
     await board.start()
     await board.load(0, "loop:\npull block\nmov isr, osr\npush block\njmp loop")
     await board.write(0, CTRL, 0b01)
-    words = [random.Random(1).randrange(1 << 16) for _ in range(150)]
+    words = random.Random(1).choices(range(1 << 16), k=150)
     for k in range(0, len(words), 30):
         await board.spi(header(OP_TX_PUSH, 0), words[k:k + 30])
     got = []
@@ -196,7 +196,7 @@ async def test_uart_tx(dut):
     rx = UartRx(0, 24)                                         # CLKDIV 3, 8 strobes a bit
     board.devices.append(rx)
     await board.load(0, (ROOT / "programs/uart/uart_tx.asm").read_text(), clkdiv_int=3)
-    data = [random.Random(2).randrange(256) for _ in range(12)]
+    data = random.Random(2).choices(range(256), k=12)
     await board.spi(header(OP_TX_PUSH, 0), data)
     await board.write(0, CTRL, 0b01)
     await ClockCycles(dut.clk, 24 * 10 * (len(data) + 2))
@@ -211,7 +211,7 @@ async def test_uart_rx(dut):
     await board.start()
     await board.load(0, (ROOT / "programs/uart/uart_rx.asm").read_text(), clkdiv_int=4)
     await board.write(0, CTRL, 0b01)
-    data = [random.Random(3).randrange(256) for _ in range(12)]
+    data = random.Random(3).choices(range(256), k=12)
     tx = UartTx(3, 32, data, start=board.t + 20)
     board.devices.append(tx)
     await ClockCycles(dut.clk, tx.end - board.t + 100)

@@ -63,7 +63,7 @@ class Uart(unittest.TestCase):
 
     def test_tx_to_rx(self):
         bench = Bench(pullups=1)
-        data = [random.Random(1).randrange(256) for _ in range(20)]
+        data = random.Random(1).choices(range(256), k=20)
         tx = bench.add(UartTx(0, 10, data, start=5, parity="odd", stop_bits=2))
         rx = bench.add(UartRx(0, 10, parity="odd", stop_bits=2))
         bench.run(tx.end + 20)

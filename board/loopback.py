@@ -95,7 +95,7 @@ def check_uart(host: Host) -> str | None:
         host.load(0, program("uart/uart_tx.asm"), clkdiv_int=div, clkdiv_frac=frac)
         host.load(1, program("uart/uart_rx.asm"), clkdiv_int=div, clkdiv_frac=frac, in_base=0)
         host.start(0b11)
-        data = [random.Random(div).randrange(256) for _ in range(64)]
+        data = random.Random(div).choices(range(256), k=64)
         host.push(0, data)
         wait_rx(host, 1, len(data), 20000)
         error = differ(f"CLKDIV {div} + {frac}/256", data, [w >> 8 for w in host.pop(1, rx_level(host, 1))])
@@ -109,7 +109,7 @@ def check_autobaud(host: Host) -> str | None:
     host.load(0, program("uart/uart_tx.asm"), clkdiv_int=29, clkdiv_frac=76)
     host.load(1, program("uart/uart_autobaud.asm"), clkdiv_int=4, in_base=0)
     host.start(0b11)
-    data = [random.Random(4).randrange(256) for _ in range(40)]
+    data = random.Random(4).choices(range(256), k=40)
     host.push(0, [0x55] + data)
     wait_rx(host, 1, 1 + len(data), 20000)
     words = host.pop(1, rx_level(host, 1))
@@ -285,7 +285,7 @@ def check_edges(host: Host) -> str | None:
     host.load(0, program("uart/uart_tx.asm"), clkdiv_int=4)
     host.load(1, program("logic/edges.asm"), clkdiv_int=4)
     host.start(0b11)
-    data = [random.Random(12).randrange(256) for _ in range(20)]
+    data = random.Random(12).choices(range(256), k=20)
     host.push(0, data)
     words, quiet = [], 0
     while quiet < 30:                                      # the RX FIFO drained as it fills

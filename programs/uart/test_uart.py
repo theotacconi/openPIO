@@ -20,7 +20,7 @@ from sigrok import uart as sigrok_bytes                  # noqa: E402
 class UartTxTest(unittest.TestCase):
 
     def check(self, clkdiv_int, clkdiv_frac, max_skew):
-        data = [random.Random(clkdiv_int).randrange(256) for _ in range(30)]
+        data = random.Random(clkdiv_int).choices(range(256), k=30)
         bench = Bench(pullups=1)                         # UART lines idle high
         bench.load(0, (HERE / "uart_tx.asm").read_text(), clkdiv_int=clkdiv_int, clkdiv_frac=clkdiv_frac)
         bit = 8 * (clkdiv_int + clkdiv_frac / 256)
@@ -32,8 +32,10 @@ class UartTxTest(unittest.TestCase):
         self.assertEqual(bench.errors(), [])
         self.assertLessEqual(rx.skew, max_skew)
         self.assertEqual(sigrok_bytes(bench, 0, bit), data, "sigrok")
+        line = [b for d in data for b in [0] + [d >> i & 1 for i in range(8)] + [1]]
+        end = max(i for i in range(1, len(line)) if line[i] != line[i - 1])    # the last edge
         first, last = bench.edges(0)[0][0], bench.edges(0)[-1][0]
-        self.assertAlmostEqual((last - first) / bit, 10 * len(data) - 1, delta=1,
+        self.assertAlmostEqual((last - first) / bit, end, delta=1,
                                msg="back to back: exactly 10 bits a byte")
 
     def test_integer_divider(self):
@@ -58,7 +60,7 @@ class UartRxTest(unittest.TestCase):
         return bench, [w >> 8 for w in bench.received[0]]
 
     def test_back_to_back(self):
-        data = [random.Random(7).randrange(256) for _ in range(30)]
+        data = random.Random(7).choices(range(256), k=30)
         for clkdiv in (1, 4):
             with self.subTest(clkdiv=clkdiv):
                 bench, got = self.run_rx(clkdiv, data)
@@ -67,7 +69,7 @@ class UartRxTest(unittest.TestCase):
 
     def test_baud_tolerance(self):
         """A transmitter 3 % fast or slow: sampling in the middle of each bit still reads it."""
-        data = [random.Random(9).randrange(256) for _ in range(20)]
+        data = random.Random(9).choices(range(256), k=20)
         for tx_bit in (31, 33):                       # receiver: 32 clocks a bit
             with self.subTest(tx_bit=tx_bit):
                 bench, got = self.run_rx(4, data, gap=0.5, tx_bit=tx_bit)

@@ -39,7 +39,7 @@ class MfmController(unittest.TestCase):
     def test_read_sectors(self):
         for corrupt in (False, True):
             with self.subTest(corrupt=corrupt):
-                data = [random.Random(9).randrange(256) for _ in range(10)]
+                data = random.Random(9).choices(range(256), k=10)
                 bench = Bench()
                 bench.load(0, (HERE / "mfm_controller.asm").read_text())
                 disk = bench.add(MfmDisk(WR, RD, CELL, play=200, sector=data))
