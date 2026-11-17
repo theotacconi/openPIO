@@ -545,6 +545,17 @@ class LearnFrames(unittest.TestCase):
         for (b, _), f in zip(got[::2], frames[::2]):
             self.assertEqual(b[:len(hdlc_bits(f))], hdlc_bits(f))
 
+    def test_hdlc_data_starting_alike(self):
+        """Frames whose data all start with a 1 (odd bytes, LSB first), one with 0xFF: the bits
+        every frame starts with are the flag and that 1, and stuffing starts after the flag
+        (after_break), or the 0 stuffed after the first five 1s of 0xFF stays in the data."""
+        rnd = seeded(34)
+        frames = [[rnd.randrange(128) * 2 + 1] + [rnd.randrange(256) for _ in range(n)]
+                  for n in (4, 9, 2, 12, 6, 3, 7)]
+        frames[2][0] = 0xFF
+        p = self.learn(hdlc_trace(frames), 0)
+        self.check(p, "nrzi", (0, 5), (16, 0x1021, 1, 1), bits([0x7E, 0x01])[:9])
+
     def test_hdlc_one_frame_corrupted(self):
         """A bit flipped in one recorded frame: the CRC is learned from the others, and that
         frame is received with the CRC wrong."""

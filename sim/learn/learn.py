@@ -847,18 +847,33 @@ def rotation_class(bits: list[int]) -> tuple[int, ...]:
     return tuple(map(int, min(s[k:] + s[:k] for k in range(len(s)))))
 
 
+def after_break(sync: list[int], mode: int, n: int) -> int:
+    """Where stuffing starts after the bits every frame starts with: after the run in which they
+    last break the rule and the bit that ends it (an HDLC flag, 01111110: bit 8), or at the
+    first bit when they never break it. Not after all of them: when every recorded frame
+    starts its data with the same bit by chance (8 HDLC frames, 1 in 128), that bit is
+    stuffed data like the rest (a frame starting with 0xFF: 11111, a 0, 111)."""
+    bad = [i for i, ok in destuff(sync, mode, n)[1] if not ok]
+    if not bad:
+        return 0
+    j = bad[-1]
+    while j < len(sync) and sync[j] == sync[bad[-1]]:
+        j += 1
+    return min(j + 1, len(sync))
+
+
 def _structure(h: float, name: str, inv: int, align: int, raw: list[list[int]],
                spare: int = 0, one_idle: bool = True) -> list[tuple]:
     """(score, Frames) for each stuffing rule no recorded bit breaks (and none), with the CRC
     its frames end with. Stuffing stops at the bits every frame ends with (a delimiter, an end
     flag); it starts after the bits every frame starts with when they break the rule (an HDLC
-    flag, six 1s), else at the first bit. A rule needs STUFF_EVIDENCE stuffed bits, or a CRC
+    flag, six 1s: after_break), else at the first bit. A rule needs STUFF_EVIDENCE stuffed bits, or a CRC
     the frames without it do not have (a CRC that fits either way is no evidence: the destuffed
     bit was in its tail)."""
     pre, suf = common_prefix(raw), common_suffix(raw)
     rules = [None]
     for mode, n in itertools.product((0, 1), range(1, 16)):
-        k = pre if any(not ok for f in raw for _, ok in destuff(f[:pre], mode, n)[1]) else 0
+        k = after_break(raw[0][:pre], mode, n)
         marks = [ok for f in raw for i, ok in destuff(f[k:len(f) - suf], mode, n)[1]
                  if i + k >= pre]
         if marks and all(marks):
