@@ -6,14 +6,15 @@ line states. References come from the definitions, not from the model.
 
     python3 test/model/test_isa_v3.py
 """
-import random
 import sys
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "sim" / "model"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "test" / "shared"))
 from asm import assemble          # noqa: E402
 from emu import StateMachine      # noqa: E402
+from seeds import seeded                                 # noqa: E402
 
 
 def halves(code: str, bits: list[int], level: int) -> list[int]:
@@ -38,9 +39,9 @@ class LineCodes(unittest.TestCase):
     """PAU_CODE rows against the definitions of FM0, differential Manchester and Miller."""
 
     def test_waveforms(self):
-        rng = random.Random(5)
+        rnd = seeded(5)
         for code in ("fm0", "diff_manchester", "miller"):
-            bits = [rng.randrange(2) for _ in range(12)]
+            bits = [rnd.randrange(2) for _ in range(12)]
             h = 4
             sm = StateMachine(assemble(f"""
                 .pau code={code} baud={h}

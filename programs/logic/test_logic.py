@@ -7,7 +7,6 @@ capture started by the UART receiver's framing error). Edge timestamps (IN TIME)
 of a random waveform, the intervals exact at CLKDIV 1 and within a strobe at CLKDIV 3. A
 recording of all pins (SM status: a pin changed): every change of a random waveform on the 13
 input pins, with the exact time between changes."""
-import random
 import sys
 import unittest
 from pathlib import Path
@@ -18,6 +17,7 @@ sys.path.insert(0, str(HERE.parents[1] / "sim" / "model"))
 from asm import condition                                # noqa: E402
 from bench import Bench, Script                          # noqa: E402
 from devices import UartTx                               # noqa: E402
+from seeds import seeded                                 # noqa: E402
 
 PADS_IN = 0xF8FF                                         # pins with an input pad (HOST.md)
 
@@ -25,7 +25,7 @@ PADS_IN = 0xF8FF                                         # pins with an input pa
 def wave(n, seed, trigger_pin=None, rise=True, at=0):
     """n clocks of random levels on the input pins; trigger_pin held at the idle level until
     clock `at`, then at the active one."""
-    rnd = random.Random(seed)
+    rnd = seeded(seed)
     levels = []
     for t in range(n):
         v = rnd.getrandbits(16) & PADS_IN
@@ -101,7 +101,7 @@ class LogicAnalyzer(unittest.TestCase):
 class EdgeTimes(unittest.TestCase):
 
     def run_edges(self, clkdiv, seed):
-        rnd = random.Random(seed)
+        rnd = seeded(seed)
         edges, t = [], 30
         for _ in range(60):
             t += rnd.randrange(2 * clkdiv, 40 * clkdiv)
@@ -128,7 +128,7 @@ class EdgeTimes(unittest.TestCase):
 class Record(unittest.TestCase):
 
     def test_every_change_of_every_pin(self):
-        rnd = random.Random(10)
+        rnd = seeded(10)
         changes, t, v = [], 40, 0
         for _ in range(80):
             t += rnd.randrange(3, 30)                    # 3 strobes apart at least (CLKDIV 1)

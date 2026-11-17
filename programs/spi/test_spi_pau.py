@@ -3,7 +3,6 @@
 of several bytes both ways, answers from the TX FIFO and 0xFF when it is empty, MISO set up
 before every rising SCK edge (checked by the master), a byte cut by CS_N dropped. A program
 written after the ISA v3 revision. sigrok's SPI decoder reads the same bytes both ways."""
-import random
 import sys
 import unittest
 from pathlib import Path
@@ -14,6 +13,7 @@ sys.path.insert(0, str(HERE.parents[1] / "sim" / "model"))
 from bench import Bench                                  # noqa: E402
 from devices import SpiMaster                            # noqa: E402
 from sigrok import spi as sigrok_spi                     # noqa: E402
+from seeds import seeded                                 # noqa: E402
 
 MOSI, SCK, CS, MISO = 0, 1, 2, 3
 
@@ -31,7 +31,7 @@ class SpiPauTarget(unittest.TestCase):
         return bench, master
 
     def test_transfers(self):
-        rng = random.Random(6)
+        rng = seeded(6)
         transfers = [[rng.randrange(256) for _ in range(n)] for n in (1, 4, 9)]
         answers = [rng.randrange(256) for _ in range(12)]
         bench, master = self.run_target(transfers, answers)

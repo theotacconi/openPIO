@@ -4,10 +4,10 @@ the protocol definitions, before they are used to judge openPIO programs.
 
     python3 test/shared/test_devices.py
 """
-import random
 import unittest
 
 from bench import Bench, Script
+from seeds import seeded
 from devices import (BmcRx, BmcTx, DaliBus, DaliGear, WiredAndBus, CanNode, HdlcRx, I2cTarget,
                      I2sCodec, SpiMaster, SpiSlave, UartRx, UartTx, Ws2812Chain, can_crc15, crc7_sd,
                      crc8_maxim, crc16_ccitt, crc16_modbus, crc16_usb, crc16_x25)
@@ -63,7 +63,7 @@ class Uart(unittest.TestCase):
 
     def test_tx_to_rx(self):
         bench = Bench(pullups=1)
-        data = random.Random(1).choices(range(256), k=20)
+        data = seeded(1).choices(range(256), k=20)
         tx = bench.add(UartTx(0, 10, data, start=5, parity="odd", stop_bits=2))
         rx = bench.add(UartRx(0, 10, parity="odd", stop_bits=2))
         bench.run(tx.end + 20)

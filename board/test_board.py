@@ -6,7 +6,6 @@ on the model's pins as a logic analyzer would have seen them.
 
     python3 board/test_board.py
 """
-import random
 import subprocess
 import sys
 import tempfile
@@ -20,6 +19,7 @@ import loopback                                          # noqa: E402
 from board import Board, Model                           # noqa: E402
 from host import Host                                    # noqa: E402
 from learn import write_sigrok                           # noqa: E402
+from seeds import seeded                                 # noqa: E402
 import test_learn as T                                   # noqa: E402
 
 
@@ -56,7 +56,7 @@ class Listen(unittest.TestCase):
     def test_hdlc_frames_with_their_crc(self):
         """One frame of the recording corrupted on the line: the CRC is learned from the
         others, and that frame is printed with the CRC wrong."""
-        rnd = random.Random(1)
+        rnd = seeded(1)
         frames = [[rnd.randrange(256) for _ in range(n)] for n in (4, 9, 2, 12, 6, 3, 7, 5)]
         levels = T.hdlc_trace(frames)
         edges = T.bursts(T.Capture.from_levels(levels), 80)[3][1]
@@ -73,7 +73,7 @@ class Listen(unittest.TestCase):
                 self.assertEqual(words[2:3 + len(f)], [f"{b:02x}" for b in [0x7E, *f]])
 
     def test_nec_remote(self):
-        rnd = random.Random(2)
+        rnd = seeded(2)
         frames = [(rnd.randrange(256), rnd.randrange(256)) for _ in range(4)]
         bench = T.Bench()
         remote = bench.add(T.NecRemote(0, frames, us=0.2, start=100, gap=40000))
@@ -86,7 +86,7 @@ class Listen(unittest.TestCase):
     def test_biphase_mark_is_not_pulse_widths(self):
         """Biphase mark has two pulse widths, and the pulses family explains it too, with a
         frame at every long space: the family that finds fewer frames is the one learned."""
-        rnd = random.Random(4)
+        rnd = seeded(4)
         frames = [[rnd.randrange(2) for _ in range(rnd.randrange(40, 120))] for _ in range(5)]
         bench = T.Bench()
         tx = bench.add(T.BmcTx(0, 40, frames, start=100, gap=20))
@@ -146,7 +146,7 @@ class Listen(unittest.TestCase):
                          text.decode())
 
     def test_ps2_keyboard_with_its_parity(self):
-        rnd = random.Random(3)
+        rnd = seeded(3)
         keys = [rnd.randrange(256) for _ in range(56)]  # 41 different ones prove a parity
         bench = T.Bench(pullups=3)
         bench.add(T.Ps2Device(1, 0, keys))

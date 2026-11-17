@@ -3,7 +3,6 @@
 time within the datasheet's +-150 ns, at 48 MHz (CLKDIV 6) and 50 MHz (fractional CLKDIV 6.25);
 two frames latched by the 50 us low gap when the FIFO runs empty. sigrok's WS281x decoder reads
 the same colours and the two latches."""
-import random
 import sys
 import unittest
 from pathlib import Path
@@ -14,6 +13,7 @@ sys.path.insert(0, str(HERE.parents[1] / "sim" / "model"))
 from bench import Bench                                  # noqa: E402
 from devices import Ws2812Chain                          # noqa: E402
 from sigrok import ws2812 as sigrok_ws2812               # noqa: E402
+from seeds import seeded                                 # noqa: E402
 
 DIN, LEDS = 0, 4                                         # pin as in the program
 
@@ -28,7 +28,7 @@ def words(colours):
 class Ws2812(unittest.TestCase):
 
     def test_two_frames(self):
-        rng = random.Random(5)
+        rng = seeded(5)
         for mhz, clkdiv_int, clkdiv_frac in ((48, 6, 0), (50, 6, 64)):
             with self.subTest(mhz=mhz):
                 frames = [[tuple(rng.randrange(256) for _ in range(3)) for _ in range(LEDS)] for _ in range(2)]

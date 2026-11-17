@@ -5,7 +5,6 @@ bytes that look like flags; a frame the host cancels is aborted at once (seven 1
 one goes out once the host has loaded the program again. The receiver program on the other SM gets the same frames from
 the line, with the FCS verdict, and flags a corrupted frame; frames after an idle line of any
 length (found on the FPGA board)."""
-import random
 import sys
 import unittest
 from pathlib import Path
@@ -16,6 +15,7 @@ sys.path.insert(0, str(HERE.parents[1] / "sim" / "model"))
 from bench import Bench, Script                          # noqa: E402
 from chip import IRQ                                     # noqa: E402
 from devices import HdlcRx, crc16_x25                     # noqa: E402
+from seeds import seeded                                 # noqa: E402
 
 LINE, BIT = 0, 8                                         # pin as in the program
 
@@ -23,7 +23,7 @@ LINE, BIT = 0, 8                                         # pin as in the program
 class Hdlc(unittest.TestCase):
 
     def test_frames(self):
-        rng = random.Random(8)
+        rng = seeded(8)
         frames = [[0x7E, 0xFF, 0xFF, 0x7E], [0x00], [0xFF] * 3] + \
                  [[rng.randrange(256) for _ in range(rng.randrange(1, 21))] for _ in range(4)]
         bench = Bench()

@@ -77,7 +77,7 @@ class Captures(unittest.TestCase):
         p = infer_pulses(Capture.from_sigrok(CAPTURES / "ws2812_random.sr", 24e6)["D0"])
         self.assertEqual((p.carrier, p.idle, p.one, p.crc), ("mark", 0, 1, None))
         self.assertEqual((round(p.short), round(p.long)), (9, 21))         # 375, 875 ns
-        rnd = random.Random(5)
+        rnd = random.Random(5)                 # the colours the recording was made with
         sent = [[c for _ in range(12) for c in (rnd.randrange(24) for _ in range(3))]
                 for _ in range(120)]
         sent = [[led[k] for i in range(0, 36, 3) for led in [f[i:i + 3]] for k in (1, 0, 2)]

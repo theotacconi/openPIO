@@ -2,7 +2,6 @@
 """I2C controller judged by the reference I2C target (open drain, pull-ups): writes, reads with
 a repeated START, NACK from an absent target, clock stretching and lost arbitration. sigrok's
 I2C decoder reads the same conditions, addresses, bytes and acknowledges."""
-import random
 import sys
 import unittest
 from pathlib import Path
@@ -13,6 +12,7 @@ sys.path.insert(0, str(HERE.parents[1] / "sim" / "model"))
 from bench import Bench, Device                          # noqa: E402
 from devices import I2cTarget                            # noqa: E402
 from sigrok import i2c as sigrok_i2c                     # noqa: E402
+from seeds import seeded                                 # noqa: E402
 
 SCL, SDA = 2, 3  # pins as in the program
 
@@ -33,7 +33,7 @@ def setup(target=None, clkdiv=1):
 class I2cController(unittest.TestCase):
 
     def test_write_then_read_with_repeated_start(self):
-        rng = random.Random(5)
+        rng = seeded(5)
         wdata = [rng.randrange(256) for _ in range(6)]
         rdata = [rng.randrange(256) for _ in range(5)]
         target = I2cTarget(SCL, SDA, 0x50, read_data=rdata)

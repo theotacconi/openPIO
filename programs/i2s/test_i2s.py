@@ -3,7 +3,6 @@
 codec's DAC (16 bits a word, MSB one BCLK after LRCLK, data stable before BCLK rises), SM 1, in
 lockstep from the same CTRL write, reads the codec's ADC samples; an empty TX FIFO sends silence
 without stopping BCLK. sigrok's I2S decoder reads the same samples both ways."""
-import random
 import sys
 import unittest
 from pathlib import Path
@@ -14,6 +13,7 @@ sys.path.insert(0, str(HERE.parents[1] / "sim" / "model"))
 from bench import Bench                                  # noqa: E402
 from devices import I2sCodec                             # noqa: E402
 from sigrok import i2s as sigrok_i2s                     # noqa: E402
+from seeds import seeded                                 # noqa: E402
 
 SDOUT, BCLK, LRCLK, SDIN = 0, 1, 2, 3                    # pins as in the programs
 CLKDIV = 4
@@ -22,7 +22,7 @@ CLKDIV = 4
 class I2s(unittest.TestCase):
 
     def test_both_directions(self):
-        rng = random.Random(9)
+        rng = seeded(9)
         dac = [(rng.randrange(1 << 16), rng.randrange(1 << 16)) for _ in range(8)]
         adc = [(rng.randrange(1 << 16), rng.randrange(1 << 16)) for _ in range(8)]
         bench = Bench()

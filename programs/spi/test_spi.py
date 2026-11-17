@@ -6,7 +6,6 @@ reference SPI master at clk / 28: random words both ways in transfers of several
 answer 0xFF when the host has none, MISO released while CS_N is high, a word cut by CS_N rising
 dropped, IRQ 0 when the RX FIFO overflows, 12-bit words by the push threshold alone. sigrok's
 SPI decoder reads the same words both ways."""
-import random
 import sys
 import unittest
 from pathlib import Path
@@ -17,6 +16,7 @@ sys.path.insert(0, str(HERE.parents[1] / "sim" / "model"))
 from bench import Bench                                  # noqa: E402
 from devices import SpiMaster, SpiSlave                  # noqa: E402
 from sigrok import spi as sigrok_spi                     # noqa: E402
+from seeds import seeded                                 # noqa: E402
 
 MOSI, SCK, CS, MISO = 0, 1, 2, 3
 
@@ -24,7 +24,7 @@ MOSI, SCK, CS, MISO = 0, 1, 2, 3
 class SpiMasterTest(unittest.TestCase):
 
     def test_all_modes(self):
-        rng = random.Random(3)
+        rng = seeded(3)
         for div, mode in [(div, mode) for div in (1, 2) for mode in range(4)]:
             with self.subTest(clkdiv=div, mode=mode):
                 sent = [rng.randrange(256) for _ in range(20)]
@@ -59,7 +59,7 @@ class SpiTargetTest(unittest.TestCase):
         return bench, master
 
     def test_transfers(self):
-        rng = random.Random(4)
+        rng = seeded(4)
         transfers = [[rng.randrange(256) for _ in range(n)] for n in (1, 4, 9)]
         answers = [rng.randrange(256) for _ in range(12)]
         bench, master = self.run_target(transfers, answers)

@@ -116,6 +116,8 @@ for t in test/model/test_*.py; do python3 "$t"; done   # instruction set, assemb
 python3 programs/report.py                             # every program; rewrites programs/README.md
 ```
 
+The tests draw their random data from fixed seeds, so every run checks the same data. `OPENPIO_SEED=<n>` mixes every seed with n, for data no test was written with (`test/shared/seeds.py`): `OPENPIO_SEED=7 python3 programs/report.py`.
+
 The Verilog is checked three ways: stepped against the model every clock (`test/lockstep/`), driven through its pins by cocotb (`test/test.py`), and with formal proofs (`test/formal/`).
 
 ```

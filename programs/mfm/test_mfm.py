@@ -4,7 +4,6 @@ line by the drive (every transition on the half-cell grid, the MFM rule at every
 address mark, data, CRC-16/CCITT); a sector the drive plays (gap, zeros, 0xA1, data, CRC) is
 found by a sync hunt in software and read back with its CRC verdict, a corrupted one too. A
 protocol written after the ISA v3 revision."""
-import random
 import sys
 import unittest
 from pathlib import Path
@@ -14,6 +13,7 @@ sys.path.insert(0, str(HERE.parents[1] / "test" / "shared"))
 sys.path.insert(0, str(HERE.parents[1] / "sim" / "model"))
 from bench import Bench                                  # noqa: E402
 from devices import MfmDisk, crc16_ccitt                 # noqa: E402
+from seeds import seeded                                 # noqa: E402
 
 WR, RD = 0, 1
 CELL = 8                                                 # 2H strobes, CLKDIV 1
@@ -22,7 +22,7 @@ CELL = 8                                                 # 2H strobes, CLKDIV 1
 class MfmController(unittest.TestCase):
 
     def test_write_sectors(self):
-        rng = random.Random(7)
+        rng = seeded(7)
         sectors = [[rng.randrange(256) for _ in range(n)] for n in (1, 6, 16)]
         bench = Bench()
         bench.load(0, (HERE / "mfm_controller.asm").read_text())
@@ -39,7 +39,7 @@ class MfmController(unittest.TestCase):
     def test_read_sectors(self):
         for corrupt in (False, True):
             with self.subTest(corrupt=corrupt):
-                data = random.Random(9).choices(range(256), k=10)
+                data = seeded(9).choices(range(256), k=10)
                 bench = Bench()
                 bench.load(0, (HERE / "mfm_controller.asm").read_text())
                 disk = bench.add(MfmDisk(WR, RD, CELL, play=200, sector=data))

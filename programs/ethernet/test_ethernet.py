@@ -7,7 +7,6 @@ reference Manchester transmitter: frames of 64 to 1518 bytes with their FCS verd
 corrupted frame, a 1518-byte frame drained by an SPI-speed host through the 253-word RX FIFO
 (FIFO_SPLIT 1), a transmitter 100 ppm fast or slow with its edges jittered by +-0.45 clock (an
 unsynchronized source), and the chip receiving its own transmitter."""
-import random
 import sys
 import unittest
 import zlib
@@ -19,6 +18,7 @@ sys.path.insert(0, str(HERE.parents[1] / "sim" / "model"))
 from bench import Bench                                  # noqa: E402
 from chip import IRQ, IRQ_MASK                           # noqa: E402
 from devices import ManchesterRx, ManchesterTx, bits_to_bytes  # noqa: E402
+from seeds import seeded                                 # noqa: E402
 
 TDP, TDN, RDP = 0, 1, 0
 SPI_WORD = 98             # clocks a host word takes: SCLK = clock / 6, bursts of 64 (97.5)
@@ -69,7 +69,7 @@ class EthernetTx(unittest.TestCase):
         self.assertEqual(bytes(data[-4:]), zlib.crc32(f).to_bytes(4, "little"), "FCS")
 
     def test_frames(self):
-        fs = frames(random.Random(4), (60, 64, 100))
+        fs = frames(seeded(4), (60, 64, 100))
         bench, rx = tx_setup()
         for f in fs:
             send(bench, f)
@@ -85,7 +85,7 @@ class EthernetTx(unittest.TestCase):
     def test_frame_from_a_slow_host(self):
         """An SPI host gives a word every ~98 clocks, the line at 40 MHz takes one every 64: a
         500-byte frame waits in the 253-word TX FIFO until the host sets flag 0."""
-        f = frames(random.Random(5), (500,))[0]
+        f = frames(seeded(5), (500,))[0]
         bench, rx = tx_setup(host_word_clocks=SPI_WORD)
         send(bench, f)
         self.assertFalse(bench.to_send[0], "the whole frame was in the FIFO")
@@ -96,7 +96,7 @@ class EthernetTx(unittest.TestCase):
         """At 60 MHz (3 strobes a half-bit) the line takes a word every 96 clocks, about as
         fast as the SPI host gives one: a 1518-byte frame starts with the FIFO full and the
         rest streams in while it is sent."""
-        f = frames(random.Random(6), (1518,))[0]
+        f = frames(seeded(6), (1518,))[0]
         bench, rx = tx_setup(baud=3, host_word_clocks=SPI_WORD)
         send(bench, f, baud=3)
         self.assertEqual(bench.errors(), [])
@@ -153,25 +153,25 @@ class EthernetRx(unittest.TestCase):
         return bench
 
     def test_frames(self):
-        self.receive(frames(random.Random(7), (64, 100, 64, 333, 64)))
+        self.receive(frames(seeded(7), (64, 100, 64, 333, 64)))
 
     def test_corrupted_frame(self):
-        self.receive(frames(random.Random(8), (64, 200, 64)), bad=(1,))
+        self.receive(frames(seeded(8), (64, 200, 64)), bad=(1,))
 
     def test_longest_frame_to_a_slow_host(self):
         """The line gives a word every 90 clocks, the SPI host takes one every 98: a 1518-byte
         frame (812 words) leaves about 70 in the 253-word RX FIFO."""
-        self.receive(frames(random.Random(9), (1518, 64)), host_word_clocks=SPI_WORD)
+        self.receive(frames(seeded(9), (1518, 64)), host_word_clocks=SPI_WORD)
 
     def test_unsynchronized_source(self):
         for ppm, seed in ((100, 1), (-100, 2)):
             with self.subTest(ppm=ppm):
-                self.receive(frames(random.Random(10 + seed), (64, 1518, 64)),
+                self.receive(frames(seeded(10 + seed), (64, 1518, 64)),
                              bit=6 * (1 + ppm * 1e-6), jitter=0.45, seed=seed)
 
     def test_own_transmitter(self):
         """eth_tx on SM 1 at 60 MHz drives pin 0, eth_rx on SM 0 receives it."""
-        fs = frames(random.Random(11), (64, 300))
+        fs = frames(seeded(11), (64, 300))
         bench = Bench()
         bench.load(0, (HERE / "eth_rx.asm").read_text())
         bench.load(1, (HERE / "eth_tx.asm").read_text(), pau_cfg=3)

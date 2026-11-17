@@ -3,7 +3,6 @@
 in its own bit time, CRC16 against CRC-16/USB, EOP timing, CRC errors, a packet broken by SE1
 (an illegal line state) dropped and the next one received. sigrok's USB decoders read the
 same packets, and check their CRC16 themselves."""
-import random
 import sys
 import unittest
 from pathlib import Path
@@ -15,13 +14,14 @@ from bench import Bench                                  # noqa: E402
 from chip import IRQ                                     # noqa: E402
 from devices import SE1, UsbRx, UsbTx, crc16_usb, usb_states   # noqa: E402
 from sigrok import usb as sigrok_usb                     # noqa: E402
+from seeds import seeded                                 # noqa: E402
 
 DM, DP, BIT = 0, 1, 8
 DATA0, DATA1 = 0xC3, 0x4B
 
 
 def payloads(seed):
-    rng = random.Random(seed)
+    rng = seeded(seed)
     return [[0xFF, 0xFF, 0x7E], []] + [[rng.randrange(256) for _ in range(rng.randrange(1, 9))] for _ in range(4)]
 
 

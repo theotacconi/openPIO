@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "sim" / "model"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "test" / "shared"))
 from asm import assemble                                             # noqa: E402
 from chip import (Chip, header, CTRL, GPIO, ID, IRQ, IRQ_MASK, PC, PINS, STATUS, WRAP, X, FIFO_LEVEL,  # noqa: E402
                   FIFO_SPLIT,
@@ -15,6 +16,7 @@ from chip import (Chip, header, CTRL, GPIO, ID, IRQ, IRQ_MASK, PC, PINS, STATUS,
                   SM_STATUS, PINS_IN, PINS_OE, PADS_BIDIR, PADS_IN, PADS_OUT,
                   OP_IMEM_RD, OP_IMEM_WR, OP_REG_RD, OP_REG_WR, OP_RX_POP, OP_TX_PUSH)
 from host import Host                                                # noqa: E402
+from seeds import seeded                                 # noqa: E402
 
 
 def load(chip, n, program, **cfg):
@@ -159,18 +161,17 @@ class HostInterface(unittest.TestCase):
     def test_random_traffic_keeps_order(self):
         """The host writes and reads SM 0 at random clocks, SM 0 adds 1 to every word: each
         arrives once, in order, through front, SRAM, IN and OUT registers of both FIFOs."""
-        import random
         for seed, clkdiv in ((1, 1), (2, 1), (3, 2)):
-            rng = random.Random(seed)
+            rnd = seeded(seed)
             chip = Chip(2)
             load(chip, 0, assemble(".y 1\n.wrap_target\npull block\nmov x, osr\nadd x, y\n"
                                    "mov isr, x\npush block\n.wrap"), clkdiv_int=clkdiv)
             chip.reg_write(0, CTRL, 0b01)
             sent, got, levels = 0, [], set()
             for _ in range(6000):
-                if rng.random() < 0.5 and sent < 3000 and chip.tx_push(0, sent):
+                if rnd.random() < 0.5 and sent < 3000 and chip.tx_push(0, sent):
                     sent += 1
-                if rng.random() < 0.05 and (w := chip.sms[0].rx_read()) is not None:
+                if rnd.random() < 0.05 and (w := chip.sms[0].rx_read()) is not None:
                     got.append(w)
                 chip.step()
                 levels.add((chip.sms[0].tx_level, chip.sms[0].rx_level))

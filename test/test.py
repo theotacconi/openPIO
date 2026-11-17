@@ -12,7 +12,6 @@ see it.
     test_uart_tx            programs/uart/uart_tx.asm judged by the reference UART receiver
     test_uart_rx            programs/uart/uart_rx.asm fed by the reference UART transmitter
 """
-import random
 import sys
 from pathlib import Path
 
@@ -27,6 +26,7 @@ from chip import (CTRL, ID, OP_IMEM_RD, OP_REG_RD, OP_REG_WR, OP_RX_POP, OP_TX_P
                   PC, STATUS, WRAP, Chip, header, sm_register)
 from devices import UartRx, UartTx                             # noqa: E402
 from host import Host                                          # noqa: E402
+from seeds import seeded                                 # noqa: E402
 
 HALF = 3                    # clocks of each SCLK phase: SCLK = clk / 6, HOST.md's limit
 
@@ -173,7 +173,7 @@ async def test_fifo_echo(dut):
     await board.start()
     await board.load(0, "loop:\npull block\nmov isr, osr\npush block\njmp loop")
     await board.write(0, CTRL, 0b01)
-    words = random.Random(1).choices(range(1 << 16), k=150)
+    words = seeded(1).choices(range(1 << 16), k=150)
     for k in range(0, len(words), 30):
         await board.spi(header(OP_TX_PUSH, 0), words[k:k + 30])
     got = []
@@ -196,7 +196,7 @@ async def test_uart_tx(dut):
     rx = UartRx(0, 24)                                         # CLKDIV 3, 8 strobes a bit
     board.devices.append(rx)
     await board.load(0, (ROOT / "programs/uart/uart_tx.asm").read_text(), clkdiv_int=3)
-    data = random.Random(2).choices(range(256), k=12)
+    data = seeded(2).choices(range(256), k=12)
     await board.spi(header(OP_TX_PUSH, 0), data)
     await board.write(0, CTRL, 0b01)
     await ClockCycles(dut.clk, 24 * 10 * (len(data) + 2))
@@ -211,7 +211,7 @@ async def test_uart_rx(dut):
     await board.start()
     await board.load(0, (ROOT / "programs/uart/uart_rx.asm").read_text(), clkdiv_int=4)
     await board.write(0, CTRL, 0b01)
-    data = random.Random(3).choices(range(256), k=12)
+    data = seeded(3).choices(range(256), k=12)
     tx = UartTx(3, 32, data, start=board.t + 20)
     board.devices.append(tx)
     await ClockCycles(dut.clk, tx.end - board.t + 100)

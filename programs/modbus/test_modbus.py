@@ -7,7 +7,6 @@ transmitter on the peer SM through its IRQ (irq clear peer), so a reply the host
 request arrived goes out after the request's 3.5 characters of silence, with DE around it.
 sigrok's UART decoder reads the same characters on every line, and its Modbus decoder the
 slave's requests and replies, each with a CRC it finds correct."""
-import random
 import sys
 import unittest
 from pathlib import Path
@@ -17,6 +16,7 @@ sys.path.insert(0, str(HERE.parents[1] / "test" / "shared"))
 from bench import Bench                                  # noqa: E402
 from devices import UartRx, UartTx, crc16_modbus         # noqa: E402
 from sigrok import modbus as sigrok_modbus, uart as sigrok_uart   # noqa: E402
+from seeds import seeded                                 # noqa: E402
 
 RX, TX, DE = 0, 1, 2       # RS-485 transceiver: RO, DI, DE
 CHAR = 11 * 32              # clocks a character at CLKDIV 4
@@ -63,7 +63,7 @@ class ModbusRx(unittest.TestCase):
         self.assertFalse(bench.chip.sms[0].irq_flags[0])
 
     def test_frames_and_gaps(self):
-        rnd = random.Random(5)
+        rnd = seeded(5)
         frames = [adu(*[rnd.randrange(256) for _ in range(n)]) for n in (1, 6, 20)]
         for inner_gap in (0.0, 1.5):
             with self.subTest(inner_gap=inner_gap):

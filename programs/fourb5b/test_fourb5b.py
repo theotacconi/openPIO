@@ -6,7 +6,6 @@ transmitter: USB Power Delivery messages (preamble, SOP K-codes, header, data ob
 CRC-32 from zlib.crc32 in 4b5b, EOP) with the transmitter 6 % fast or slow, every symbol in
 order, and the same messages read by sigrok's USB PD decoder, which checks the CRC itself; a
 frame the host does not read in time is flagged (PAU overrun)."""
-import random
 import sys
 import unittest
 import zlib
@@ -18,6 +17,7 @@ sys.path.insert(0, str(HERE.parents[1] / "sim" / "model"))
 from bench import Bench                                  # noqa: E402
 from devices import BmcRx, BmcTx                         # noqa: E402
 from sigrok import usb_pd as sigrok_usb_pd               # noqa: E402
+from seeds import seeded                                 # noqa: E402
 
 CODES = [0b11110, 0b01001, 0b10100, 0b10101, 0b01010, 0b01011, 0b01110, 0b01111,
          0b10010, 0b10011, 0b10110, 0b10111, 0b11010, 0b11011, 0b11100, 0b11101]
@@ -49,7 +49,7 @@ def line_bits(symbols):
 class FourB5B(unittest.TestCase):
 
     def test_nibbles(self):
-        nibbles = list(range(16)) + random.Random(3).choices(range(16), k=30)
+        nibbles = list(range(16)) + seeded(3).choices(range(16), k=30)
         bench = Bench()
         program = bench.load(0, (HERE / "fourb5b_tx.asm").read_text())
         rx = bench.add(BmcRx(PIN, BIT))
@@ -75,7 +75,7 @@ class FourB5BRx(unittest.TestCase):
         return bench
 
     def test_frames(self):
-        rnd = random.Random(8)
+        rnd = seeded(8)
         messages = [pd_message(1),                                      # GoodCRC
                     pd_message(1, [0x0801912C, 0x0002D12C], 1),         # Source_Capabilities
                     pd_message(2, [0x1304B12C], 2),                     # Request

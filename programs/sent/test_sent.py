@@ -4,7 +4,6 @@ nibble, six data nibbles and the CRC4, back to back, the sensor's tick nominal (
 fast or slow, with low times of 5 and 4 ticks; every nibble decoded on the chip, the CRC
 checked on the chip (good frames and frames with a wrong CRC). A protocol written after the
 ISA was frozen (2026-10-28), without changing the hardware."""
-import random
 import sys
 import unittest
 from pathlib import Path
@@ -14,6 +13,7 @@ sys.path.insert(0, str(HERE.parents[1] / "test" / "shared"))
 sys.path.insert(0, str(HERE.parents[1] / "sim" / "model"))
 from bench import Bench                                  # noqa: E402
 from devices import SentTx, sent_crc4                    # noqa: E402
+from seeds import seeded                                 # noqa: E402
 
 LINE = 0                                                 # pin as in the program
 TICK = 150                                               # 3 us at 50 MHz
@@ -43,7 +43,7 @@ class Sent(unittest.TestCase):
         return frames_from(bench.received[0])
 
     def test_frames(self):
-        rng = random.Random(11)
+        rng = seeded(11)
         for scale, low in ((1.0, 5), (0.8, 5), (1.2, 5), (1.0, 4), (0.8, 4), (1.2, 4)):
             with self.subTest(scale=scale, low=low):
                 frames = [(rng.randrange(16), [rng.randrange(16) for _ in range(6)])

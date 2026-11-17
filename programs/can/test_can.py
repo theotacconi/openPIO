@@ -2,7 +2,6 @@
 """CAN transmitter and receiver against reference CAN nodes on a wired-AND bus: frames, ACK,
 arbitration lost at the exact bit, CRC errors. sigrok's CAN decoder reads the same frames on the
 bus (identifier, data, stuffing, ACK) with no warning."""
-import random
 import sys
 import unittest
 from pathlib import Path
@@ -12,6 +11,7 @@ sys.path.insert(0, str(HERE.parents[1] / "test" / "shared"))
 from bench import Bench                                  # noqa: E402
 from devices import WiredAndBus, CanNode, can_bits            # noqa: E402
 from sigrok import can as sigrok_can                     # noqa: E402
+from seeds import seeded                                 # noqa: E402
 
 TX, RX, BIT = 0, 1, 8  # pins as in the program
 
@@ -43,7 +43,7 @@ def tx_bench(nodes, frames):
 class CanTx(unittest.TestCase):
 
     def test_frames_acknowledged(self):
-        rng = random.Random(6)
+        rng = seeded(6)
         frames = [(rng.randrange(0x7F0), [rng.randrange(256) for _ in range(rng.randrange(9))])
                   for _ in range(30)]                   # many CRCs: stuffing next to the delimiter
         frames[1] = (0x7EF, [0xFF])               # long recessive runs: stuffing (0x7F0 up: not legal)
@@ -85,7 +85,7 @@ class CanTx(unittest.TestCase):
 class CanRx(unittest.TestCase):
 
     def test_frames(self):
-        rng = random.Random(8)
+        rng = seeded(8)
         frames = [(rng.randrange(0x7F0), [rng.randrange(256) for _ in range(n)]) for n in (0, 3, 8)]
         sender = CanNode(BIT, send=frames, idle=0)             # waits for 11 idle bits
         bench = Bench(pullups=1 << RX | 1 << TX)

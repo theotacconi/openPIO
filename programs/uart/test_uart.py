@@ -5,7 +5,6 @@ or slow and with framing errors. Full duplex on one SM through the PAU: both dir
 once, bit edges on time, a framing error. Autobaud: the rate learned from a leading 0x55, then
 random bytes back to back, at bit times from 12 to 61 clocks that are not whole strobes. Every
 line, sent or received, is read by sigrok's UART decoder as well: the same bytes."""
-import random
 import sys
 import unittest
 from pathlib import Path
@@ -15,12 +14,13 @@ sys.path.insert(0, str(HERE.parents[1] / "test" / "shared"))
 from bench import Bench                                  # noqa: E402
 from devices import UartRx, UartTx                       # noqa: E402
 from sigrok import uart as sigrok_bytes                  # noqa: E402
+from seeds import seeded                                 # noqa: E402
 
 
 class UartTxTest(unittest.TestCase):
 
     def check(self, clkdiv_int, clkdiv_frac, max_skew):
-        data = random.Random(clkdiv_int).choices(range(256), k=30)
+        data = seeded(clkdiv_int).choices(range(256), k=30)
         bench = Bench(pullups=1)                         # UART lines idle high
         bench.load(0, (HERE / "uart_tx.asm").read_text(), clkdiv_int=clkdiv_int, clkdiv_frac=clkdiv_frac)
         bit = 8 * (clkdiv_int + clkdiv_frac / 256)
@@ -60,7 +60,7 @@ class UartRxTest(unittest.TestCase):
         return bench, [w >> 8 for w in bench.received[0]]
 
     def test_back_to_back(self):
-        data = random.Random(7).choices(range(256), k=30)
+        data = seeded(7).choices(range(256), k=30)
         for clkdiv in (1, 4):
             with self.subTest(clkdiv=clkdiv):
                 bench, got = self.run_rx(clkdiv, data)
@@ -69,7 +69,7 @@ class UartRxTest(unittest.TestCase):
 
     def test_baud_tolerance(self):
         """A transmitter 3 % fast or slow: sampling in the middle of each bit still reads it."""
-        data = random.Random(9).choices(range(256), k=20)
+        data = seeded(9).choices(range(256), k=20)
         for tx_bit in (31, 33):                       # receiver: 32 clocks a bit
             with self.subTest(tx_bit=tx_bit):
                 bench, got = self.run_rx(4, data, gap=0.5, tx_bit=tx_bit)
@@ -96,7 +96,7 @@ class UartDuplexTest(unittest.TestCase):
         return bench, rx
 
     def test_both_directions_at_once(self):
-        rnd = random.Random(11)
+        rnd = seeded(11)
         out, into = [rnd.randrange(256) for _ in range(40)], [rnd.randrange(256) for _ in range(40)]
         bench, rx = self.run_duplex(out, into)
         self.assertEqual(rx.frames, out)
@@ -118,7 +118,7 @@ class UartAutobaudTest(unittest.TestCase):
     def test_rates(self):
         for bit in (12.0, 37.3, 60.7):
             with self.subTest(bit=bit):
-                data = [random.Random(int(bit)).randrange(256) for _ in range(30)]
+                data = seeded(int(bit)).choices(range(256), k=30)
                 bench = Bench(pullups=1)
                 bench.load(0, (HERE / "uart_autobaud.asm").read_text())
                 tx = bench.add(UartTx(0, bit, [0x55] + data, start=40))

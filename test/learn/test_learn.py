@@ -13,7 +13,6 @@ that carries the bits, its widths, the leader, the CRC; the generated program re
 
     python3 test/learn/test_learn.py
 """
-import random
 import sys
 import tempfile
 import unittest
@@ -36,6 +35,7 @@ from learn import (Capture, bursts, clocked_rx_program, clocked_timing, crc_chec
                    infer_pulses,
                    pau_directives, pulses_check, pulses_rx_program, pulses_timing, rx_program,
                    timing, tx_program, word_value)
+from seeds import seeded                                 # noqa: E402
 
 PIN = 3
 FORMATS = [  # (data bits, parity, stop bits, idle level, clocks a bit)
@@ -60,14 +60,14 @@ class Inverted(Device):
 
 def transmitter(fmt, data, seed, start=200):
     n, parity, stop, idle, bit = fmt
-    rnd = random.Random(seed)
+    rnd = seeded(seed)
     gaps = [0 if rnd.random() < .5 else rnd.randrange(1, 4) for _ in data]   # some back to back
     tx = UartTx(PIN, bit, data, start=start, gap=gaps, data_bits=n, parity=parity, stop_bits=stop)
     return tx if idle else Inverted(tx, PIN)
 
 
 def values(fmt, seed, count=40):
-    rnd = random.Random(seed)
+    rnd = seeded(seed)
     return [rnd.randrange(1 << fmt[0]) for _ in range(count)]
 
 
@@ -185,7 +185,7 @@ class Learn(unittest.TestCase):
         master leaves two bit times after every character. The learned receiver gives each
         break as a word of zeros with a framing error, then the frame's characters from the
         sync byte on, not characters read from the break's middle."""
-        rnd = random.Random(22)
+        rnd = seeded(22)
         frames = [[rnd.randrange(256) for _ in range(n)] for n in (2, 4, 1, 3, 2, 4)]
         cap = Capture.from_levels(self.lin(frames))
         self.assertRaises(ValueError, infer_async, cap)
@@ -312,7 +312,7 @@ class LearnFrames(unittest.TestCase):
     def test_usb(self):
         """Low speed on D-: NRZI, a 0 stuffed after six 1s (the 0xFF bytes), CRC-16/USB of the
         data packets."""
-        rnd = random.Random(1)
+        rnd = seeded(1)
         packets = [(0xC3, [0xFF, 0xFF] + [rnd.randrange(256) for _ in range(n)])
                    for n in (2, 4, 2, 6, 4, 1)]
         bench = usb_bench(packets)
@@ -333,7 +333,7 @@ class LearnFrames(unittest.TestCase):
     def test_can(self):
         """CAN 2.0A on a wired-AND bus, a second node acknowledging: NRZ, the complement after
         five equal bits, CRC-15 from the start of frame."""
-        rnd = random.Random(2)
+        rnd = seeded(2)
         frames = [(rnd.randrange(0x7F0), [rnd.randrange(256) for _ in range(n)])
                   for n in (1, 3, 3, 8, 0, 5)]
         bench = can_bench(frames)
@@ -354,7 +354,7 @@ class LearnFrames(unittest.TestCase):
 
     def test_mfm(self):
         """Floppy sectors: MFM (the PAU's Miller code), CRC-16/CCITT after the address mark."""
-        rnd = random.Random(3)
+        rnd = seeded(3)
         p = self.learn(mfm_levels([mfm_sector([rnd.randrange(256) for _ in range(n)])
                                    for n in (8, 12, 8, 16, 5)]))
         self.check(p, "miller", None, (16, 0x1021, 1, 0), bits([0, 0, 0, 0, 0xA1], lsb_first=False))
@@ -371,7 +371,7 @@ class LearnFrames(unittest.TestCase):
     def test_biphase_mark(self):
         """Frames of random bits without a CRC: biphase mark, told from its shifted codes by
         the first edge of every frame on a bit boundary."""
-        rnd = random.Random(4)
+        rnd = seeded(4)
         frames = [[rnd.randrange(2) for _ in range(rnd.randrange(40, 120))] for _ in range(5)]
         bench = Bench()
         tx = bench.add(BmcTx(PIN, 40, frames, start=100, gap=20))
@@ -392,7 +392,7 @@ class LearnFrames(unittest.TestCase):
         edge mid-bit (the first half-bit is the idle level), not biphase mark, which explains
         the same edges a half-bit later: every frame starts from the idle level. A Manchester
         line's polarity is a convention: the bits come complemented (S1 S2 = 0 0)."""
-        rnd = random.Random(32)
+        rnd = seeded(32)
         keys = [(rnd.randrange(32), rnd.randrange(64)) for _ in range(8)]
         script, end = pulse_script([rc5_levels(a, c, k & 1, 4 if k == 2 else None)
                                     for k, (a, c) in enumerate(keys)], 0.2, 1, 40000)
@@ -415,7 +415,7 @@ class LearnFrames(unittest.TestCase):
     def test_ethernet_from_the_chip(self):
         """10BASE-T frames sent by programs/ethernet/eth_tx.asm on the chip: Manchester, the
         preamble and SFD, the FCS (CRC-32)."""
-        rnd = random.Random(5)
+        rnd = seeded(5)
         bench = Bench()
         bench.load(0, (ROOT / "programs/ethernet/eth_tx.asm").read_text())
         bench.start(1)
@@ -435,7 +435,7 @@ class LearnFrames(unittest.TestCase):
     def ethernet(self, sizes, seed: int, baud: int) -> tuple[list[list[int]], list[int]]:
         """(the frames' bytes after the SFD, the line a clock) of eth_tx.asm sending random
         frames of these sizes (the FCS's 4 bytes too), `baud` clocks a half-bit."""
-        rnd = random.Random(seed)
+        rnd = seeded(seed)
         bench = Bench()
         bench.load(0, (ROOT / "programs/ethernet/eth_tx.asm").read_text()
                    .replace("baud=2", f"baud={baud}"))
@@ -479,7 +479,7 @@ class LearnFrames(unittest.TestCase):
         """programs/hdlc/hdlc_tx.asm, the line idle between frames: NRZI, a 0 after five 1s,
         the flag 0x7E, the FCS (CRC-16/X.25) after it. A bit flipped on the line makes the CRC
         wrong."""
-        rnd = random.Random(12)
+        rnd = seeded(12)
         frames = [[rnd.randrange(256) for _ in range(n)] for n in (4, 9, 2, 12, 6, 3)]
         p = self.learn(hdlc_trace(frames), 0)
         self.check(p, "nrzi", (0, 5), (16, 0x1021, 1, 1), bits([0x7E]))
@@ -501,7 +501,7 @@ class LearnFrames(unittest.TestCase):
     def test_hdlc_one_frame_corrupted(self):
         """A bit flipped in one recorded frame: the CRC is learned from the others, and that
         frame is received with the CRC wrong."""
-        rnd = random.Random(17)
+        rnd = seeded(17)
         frames = [[rnd.randrange(256) for _ in range(n)] for n in (4, 9, 2, 12, 6, 3, 7, 5)]
         levels = hdlc_trace(frames)
         edges = bursts(Capture.from_levels(levels), 80)[3][1]
@@ -576,7 +576,7 @@ class LearnClocked(unittest.TestCase):
 
     def test_spi_every_mode(self):
         """MOSI on SCK while CS_N is low, in each mode; no CRC."""
-        rnd = random.Random(7)
+        rnd = seeded(7)
         for mode in range(4):
             with self.subTest(mode=mode):
                 transfers = [[rnd.randrange(256) for _ in range(n)] for n in (2, 5, 1, 3)]
@@ -596,7 +596,7 @@ class LearnClocked(unittest.TestCase):
         """A PS/2 keyboard's bytes: data set while the clock is high, sampled as it falls (mode
         2), frames 3 clock periods apart, a start bit 0, odd parity: a 1-bit CRC, believed
         from 41 bytes. A wrong parity bit makes the CRC wrong."""
-        rnd = random.Random(13)
+        rnd = seeded(13)
         keys = [rnd.randrange(256) for _ in range(48)]
         bench, end = self.ps2(keys)
         bench.run(end)
@@ -770,7 +770,7 @@ class LearnPulses(unittest.TestCase):
         """The reference NEC remote: pulse distance, the leader of 9 ms and 4.5 ms; repeat codes
         and a lone burst are frames of other kinds. Each byte and its complement XOR to 0: a
         CRC-8 x^8 + 1, partly the remote's check."""
-        rnd = random.Random(8)
+        rnd = seeded(8)
         frames = [(rnd.randrange(256), rnd.randrange(256)) for _ in range(6)]
         frames[2:2] = ["repeat", ("glitch", 3000), "repeat"]
         bench = Bench()
@@ -801,7 +801,7 @@ class LearnPulses(unittest.TestCase):
         """A remote that sends a repeat code even after a short press, two after a longer one:
         the frames are fewer than the repeat codes but hold more pulses, and are the ones
         learned."""
-        rnd = random.Random(28)
+        rnd = seeded(28)
         frames = [(0x00, rnd.randrange(256)) for _ in range(5)]
         sent = [x for f in frames for x in (f, "repeat", "repeat")]
         bench = Bench()
@@ -814,7 +814,7 @@ class LearnPulses(unittest.TestCase):
     def test_nec_one_key_corrupted(self):
         """Ten keys, a bit of the fourth flipped (a reflection): the check is learned from the
         other nine, and a frame received with that bit flipped is still found wrong."""
-        rnd = random.Random(18)
+        rnd = seeded(18)
         keys = [(0x04, rnd.randrange(256)) for _ in range(10)]
         levels = [nec_levels(k) for k in keys]
         levels[3][2 + 2 * 19 + 1] = (1, 1687.5 + 562.5 - levels[3][2 + 2 * 19 + 1][1])
@@ -834,7 +834,7 @@ class LearnPulses(unittest.TestCase):
         starts another frame. A spike in a mark is merged with it. The last byte is a checksum
         (0x100 minus the sum of the others), not a CRC: none is found. The receiver takes
         only its leader: an NEC remote's frames, of the same bits, are not received."""
-        rnd = random.Random(29)
+        rnd = seeded(29)
         keys = []
         for _ in range(6):
             data = [0x85, rnd.randrange(256), rnd.randrange(256), 0xFF, 0xFF]
@@ -880,7 +880,7 @@ class LearnPulses(unittest.TestCase):
         """EV1527 433 MHz remote presses, each its code repeated 5 times after a sync space of
         31 T: frames apart by the sync space, not by the pauses between presses. Pulse width,
         idle low, a long mark a 1; the sync bit's mark ends each frame."""
-        rnd = random.Random(30)
+        rnd = seeded(30)
         codes = [rnd.randrange(1 << 20) << 4 | key for key in (1, 2, 4, 8)]
         script, end = pulse_script([ev1527_levels(c) for c in codes], 0.2, 0, 200000)
         bench = Bench()
@@ -897,7 +897,7 @@ class LearnPulses(unittest.TestCase):
         """Eight NEC keys, one with a mark the receiver missed (two spaces and the mark between
         them one long space), and a lone burst: both left out, the check learned from the
         other seven."""
-        rnd = random.Random(31)
+        rnd = seeded(31)
         keys = [(0x10, rnd.randrange(256)) for _ in range(8)]
         levels = [nec_levels(k) for k in keys]
         bad = levels[4]
@@ -915,7 +915,7 @@ class LearnPulses(unittest.TestCase):
 
     def test_sirc(self):
         """Sony SIRC at an IR receiver's output: pulse width, idle high, the leader's mark."""
-        rnd = random.Random(9)
+        rnd = seeded(9)
         frames = [(rnd.randrange(128), rnd.randrange(32)) for _ in range(6)]
         script, end = pulse_script([sirc_levels(*f) for f in frames], 0.2, 1, 30000)
         bench = Bench()
@@ -949,7 +949,7 @@ class LearnPulses(unittest.TestCase):
     def test_433_mhz_sensor(self):
         """Fine Offset WH2 frames: pulse width, a short mark a 1, found by the CRC-8 0x31 after
         the 0xFF preamble (the long-is-1 bits have none)."""
-        rnd = random.Random(10)
+        rnd = seeded(10)
         sensor = [wh2_bits(0x5A, rnd.randrange(4096), rnd.randrange(100)) for _ in range(8)]
         script, end = pulse_script([wh2_levels(b) for b in sensor], 0.1, 0, 20000)
         bench = Bench()
@@ -970,7 +970,7 @@ class LearnPulses(unittest.TestCase):
     def test_ws2812_from_the_chip(self):
         """programs/ws2812/ws2812.asm: pulse width, idle low, a long mark with a short space;
         frames latched by the pause."""
-        rnd = random.Random(11)
+        rnd = seeded(11)
         colours = [[tuple(rnd.randrange(256) for _ in range(3)) for _ in range(n)]
                    for n in (2, 4, 2, 6)]
         p = infer_pulses(Capture.from_levels(ws2812_trace(colours), 0))
@@ -1001,7 +1001,7 @@ class LearnRecordings(unittest.TestCase):
     def test_usb_cut_at_both_ends(self):
         """USB packets, the first and the last cut by the recording: they are left out; the
         clock twice the sample rate doubles every time."""
-        rnd = random.Random(14)
+        rnd = seeded(14)
         packets = [(0xC3, [0xFF, 0xFF] + [rnd.randrange(256) for _ in range(n)])
                    for n in (3, 2, 4, 2, 6, 4, 1, 5)]
         bench = usb_bench(packets)
@@ -1020,7 +1020,7 @@ class LearnRecordings(unittest.TestCase):
         before the first and stopped 100 ms after the last: closer than the presses, still a
         pause, so each frame is whole and six give the check. Stopped in the middle of a
         seventh, that one is left out."""
-        rnd = random.Random(16)
+        rnd = seeded(16)
         keys = [(0x04, rnd.randrange(256)) for _ in range(7)]
         edges, t, level = [], 150_000, 1
         for k, key in enumerate(keys):
@@ -1071,7 +1071,7 @@ class LearnRecordings(unittest.TestCase):
 
     def test_ps2_cut_at_both_ends(self):
         """A PS/2 keyboard recorded from the middle of a byte to the middle of another."""
-        rnd = random.Random(15)
+        rnd = seeded(15)
         keys = [rnd.randrange(256) for _ in range(50)]
         bench = Bench(pullups=1 << MOSI | 1 << SCK)
         bench.add(Ps2Device(SCK, MOSI, keys))
