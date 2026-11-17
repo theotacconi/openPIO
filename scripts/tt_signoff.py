@@ -8,7 +8,8 @@ Reads <run>/final/metrics.json. Exit status 1 if any DRC/LVS/antenna error
 count is non-zero, the hold worst slack is negative in any corner, or the setup
 worst slack is negative or there is a max slew violation in the typical or
 fast corner. The clock is src/config.json's CLOCK_PERIOD (typical corner, 1.2 V, 25 C); in the
-slow corner the setup slack is reported with the clock it allows, and slew
+slow corner the setup slack is reported with the clock it allows. With a
+SIGNOFF_SDC_FILE the clock is its signoff_period, checked in every corner. Slew
 violations (nets detailed routing lengthened, with no repair after it) are
 reported, not checked.
 
@@ -16,6 +17,7 @@ The SRAM pins have a buffer each (odb_sram_buf.py): a long net never ends at an
 SRAM pin, whose limits (0.064 pF out, 0.476 ns slew in) the repair underestimates.
 """
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -56,8 +58,14 @@ for key, label in ERROR_COUNTS:
     else:
         print(f"  {label:28s} {'(not run)':>12}")
 
-PERIOD = float(json.loads((Path(__file__).resolve().parents[1] / "src" / "config.json")
-                          .read_text())["CLOCK_PERIOD"])          # ns
+SRC = Path(__file__).resolve().parents[1] / "src"
+CONFIG = json.loads((SRC / "config.json").read_text())
+SIGNOFF = CONFIG.get("SIGNOFF_SDC_FILE")         # the clock promised in every corner
+if SIGNOFF:
+    sdc = (SRC / SIGNOFF.removeprefix("dir::")).read_text()
+    PERIOD = float(re.search(r"^set signoff_period ([0-9.]+)", sdc, re.M).group(1))
+else:
+    PERIOD = float(CONFIG["CLOCK_PERIOD"])       # ns
 SLOW = "nom_slow_1p08V_125C"
 
 for key in sorted(k for k in metrics if k.startswith("design__max_slew_violation__count__corner:")):
@@ -71,7 +79,7 @@ for key in sorted(k for k in metrics if k.startswith("design__max_slew_violation
 for kind in ("setup", "hold"):
     for key in sorted(k for k in metrics if k.startswith(f"timing__{kind}__ws__corner:")):
         val = float(metrics[key])
-        if kind == "setup" and key.endswith(SLOW):
+        if kind == "setup" and key.endswith(SLOW) and not SIGNOFF:
             note = f"info: {1e3 / (PERIOD - val):.0f} MHz max" if val < 0 else "ok"
         else:
             failed |= val < 0
