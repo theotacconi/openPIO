@@ -332,10 +332,12 @@ class LearnFrames(unittest.TestCase):
 
     def test_can(self):
         """CAN 2.0A on a wired-AND bus, a second node acknowledging: NRZ, the complement after
-        five equal bits, CRC-15 from the start of frame."""
+        five equal bits, CRC-15 from the start of frame. The CRC-15 is x + 1 times a CRC-14:
+        believed from 7 frames (FACTOR_EVIDENCE); from 12, a CRC-16 by chance (x + 1 times the
+        CRC-15) is 1 recording in 2^11."""
         rnd = seeded(2)
         frames = [(rnd.randrange(0x7F0), [rnd.randrange(256) for _ in range(n)])
-                  for n in (1, 3, 3, 8, 0, 5)]
+                  for n in (1, 3, 3, 8, 0, 5, 2, 6, 4, 7, 1, 3)]
         bench = can_bench(frames)
         bus = bench.devices[0]
         bench.run(sum(160 + 8 * len(d) for _, d in frames) * 50,
@@ -353,11 +355,18 @@ class LearnFrames(unittest.TestCase):
         self.check_received(got, sent, [3] * 4)
 
     def test_mfm(self):
-        """Floppy sectors: MFM (the PAU's Miller code), CRC-16/CCITT after the address mark."""
+        """Floppy sectors: MFM (the PAU's Miller code), CRC-16/CCITT after the address mark:
+        CCITT is x + 1 times a CRC-15, and when that one fits too (from the bit after the
+        address mark, when the sectors' first bits agree) 5 sectors are not enough to believe
+        the factor x + 1 (find_crc): the CRC-15 is learned, and checks the sectors too."""
         rnd = seeded(3)
         p = self.learn(mfm_levels([mfm_sector([rnd.randrange(256) for _ in range(n)])
                                    for n in (8, 12, 8, 16, 5)]))
-        self.check(p, "miller", None, (16, 0x1021, 1, 0), bits([0, 0, 0, 0, 0xA1], lsb_first=False))
+        if p.crc and p.crc.width == 15:
+            self.check(p, "miller", None, (15, 0x701F, p.crc.init, p.crc.xorout))
+        else:
+            self.check(p, "miller", None, (16, 0x1021, 1, 0),
+                       bits([0, 0, 0, 0, 0xA1], lsb_first=False))
 
         sectors = [mfm_sector([rnd.randrange(256) for _ in range(n)]) for n in (10, 6, 14)]
         sectors[1][50] ^= 1                             # a bit flipped on the disk
@@ -367,6 +376,16 @@ class LearnFrames(unittest.TestCase):
                           if t == 0 or lv != levels[t - 1]]))
         got = self.receive(p, bench, len(levels))
         self.check_received(got, sectors, [3, 1, 3])
+
+    def test_mfm_parity_by_chance(self):
+        """Sectors whose bits after the second sync byte have an even parity, 1 recording in 16:
+        x + 1 times CRC-16/CCITT fits them too, from one bit earlier. Four frames are 4 bits of
+        evidence for that factor, not enough (FACTOR_EVIDENCE): CCITT is learned, not a CRC-17."""
+        sectors = [bytes.fromhex("42c03f37617081f0"), bytes.fromhex("a195e4420f5a0c86effe9d73"),
+                   bytes.fromhex("4e5a71e64540c43f"),
+                   bytes.fromhex("094891c9726d742ea8f4780e81bcd682"), bytes.fromhex("e720abfcb6")]
+        p = self.learn(mfm_levels([mfm_sector(list(s)) for s in sectors]))
+        self.check(p, "miller", None, (16, 0x1021, 1, 0))
 
     def test_biphase_mark(self):
         """Frames of random bits without a CRC: biphase mark, told from Manchester a half-bit

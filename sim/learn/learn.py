@@ -432,6 +432,10 @@ MID_CODES = ("manchester", "diff_manchester")     # the PAU's alignment: the fir
 POLARITY_CODES = ("nrz", "manchester")            # a bit is a level: the line rests at one
 EVIDENCE = 40       # bits: a CRC of width w is believed from 40 / w + 1 frames, as a chance
                     # match of every frame is about 2^-(w (frames - 1)) per hypothesis tried
+FACTOR_EVIDENCE = 6     # bits: a CRC that is a narrower one found times a factor of degree d is
+                        # believed from 6 / d + 1 frames, as the factor fits by chance 1 recording
+                        # in 2^(d (frames - 1)) (believed: 1 in 64 or fewer); else the narrower,
+                        # which passes every frame the wider would
 
 
 @dataclass
@@ -700,7 +704,7 @@ def find_crc(frames: list[list[int]], starts, tails, spare: int = 0) -> Crc | No
         out = gcds([v ^ vs[0] for v in vs[1:]], spare)
         return out + [pgcd(v ^ vs[1] for v in vs[2:])] if spare else out
 
-    best = None
+    found: list[tuple[Crc, int]] = []
     whole = len({rotation_class(f) for f in frames})
     for tail in tails:
         for s in starts:
@@ -717,8 +721,9 @@ def find_crc(frames: list[list[int]], starts, tails, spare: int = 0) -> Crc | No
                 continue
             by_end = differences([v for v, _ in bs])
             by_start = differences([v << n - k for v, k in bs])
-            for w in range(32, max(best.width if best else 0, least - 1), -1):
+            for w in range(32, least - 1, -1):               # every width that fits here
                 ones = (1 << w) - 1
+                hit = None
                 for init, xo in ((0, 0), (0, 1), (1, 0), (1, 1)):
                     ds = [v ^ (ones << k - w if init and k > w else 0) ^ (ones if xo else 0)
                           for v, k in bs]
@@ -726,13 +731,29 @@ def find_crc(frames: list[list[int]], starts, tails, spare: int = 0) -> Crc | No
                     for h in hs:
                         p = factor(h, w) if deg(h) >= w else None
                         if p and sum(pmod(d, p) != 0 for d in ds) <= spare:
-                            best = Crc(w, p ^ 1 << w, init, xo, s, tail, spare)
+                            hit = Crc(w, p ^ 1 << w, init, xo, s, tail, spare)
                             break
-                    if best and best.width == w:
+                    if hit:
                         break
-                if best and best.width == w:
-                    break
-    return best
+                if hit:
+                    found.append((hit, others))
+    return believed(found)
+
+
+def believed(found: list[tuple[Crc, int]]) -> Crc | None:
+    """The widest of the CRCs found (every width that fits at each start and end, with how many
+    frames are evidence there) that is not a narrower one found times a factor the evidence
+    does not prove (FACTOR_EVIDENCE): a CRC-15 times x + 1 fits every frame whose bits have an
+    even parity, as 1 in 2^(frames - 1) recordings do (6 CAN frames: a CRC-16), and from one
+    bit earlier a CRC-16 times x + 1 (5 floppy sectors: a CRC-17). A narrower CRC is the safer
+    one: every frame right by the wider is right by it."""
+    def full(c: Crc) -> int:
+        return c.poly | 1 << c.width
+    for c, others in sorted(found, key=lambda f: -f[0].width):
+        if not any(n.width < c.width and pmod(full(c), full(n)) == 0
+                   and (c.width - n.width) * others < FACTOR_EVIDENCE for n, _ in found):
+            return c
+    return None
 
 
 def infer_frames(cap: Capture, gap: float = 10) -> Frames:
