@@ -2,8 +2,9 @@
 """MFM disk controller against a reference drive: sectors written are decoded from the write
 line by the drive (every transition on the half-cell grid, the MFM rule at every cell boundary,
 address mark, data, CRC-16/CCITT); a sector the drive plays (gap, zeros, 0xA1, data, CRC) is
-found by a sync hunt in software and read back with its CRC verdict, a corrupted one too. A
-protocol written after the ISA v3 revision."""
+found by a sync hunt in software and read back with its CRC verdict, a corrupted one too; random
+settings inside what the controller promises (dividers, a disk 3 % fast or slow, its pulses
+wandering). A protocol written after the ISA v3 revision."""
 import sys
 import unittest
 from pathlib import Path
@@ -54,6 +55,45 @@ class MfmController(unittest.TestCase):
                 if not corrupt:
                     self.assertEqual([w & 0xFF for w in got[:-1]], [*data, crc >> 8, crc & 0xFF])
                 self.assertEqual(bool(got[-1] >> 12 & 1), not corrupt, "the CRC verdict")
+                self.assertEqual(bench.errors(), [])
+
+    def test_sweep(self):
+        """Random settings inside what mfm_controller.asm promises. Reading: a divider from 1 to
+        8 (fractional), a disk 3 % slow, 3 % fast and twice at random within, each pulse up to
+        1/8 of a half-cell off, sectors of 1 to 40 bytes rich in 0x00, 0xFF and 0xA1; every byte
+        and the CRC verdict right. Writing: a divider from 1 to 8, the drive's checks. Measured:
+        pulses 3/16 off pass at 3 % fast or slow, 1/8 at 5 %."""
+        rnd = seeded(26)
+        for trial in range(4):
+            div = rnd.randrange(1, 9) + rnd.choice([0, rnd.randrange(256)]) / 256
+            off = [-0.03, 0.03, rnd.uniform(-0.03, 0.03), rnd.uniform(-0.03, 0.03)][trial]
+            data = [rnd.choice([0x00, 0xFF, 0xA1, rnd.randrange(256)]) for _ in range(rnd.randrange(1, 41))]
+            cell = CELL * div
+            with self.subTest(trial=trial, read=True, div=div, off=f"{off:+.2%}", n=len(data)):
+                bench = Bench()
+                bench.load(0, (HERE / "mfm_controller.asm").read_text(), clkdiv_int=int(div),
+                           clkdiv_frac=round(div % 1 * 256))
+                disk = bench.add(MfmDisk(WR, RD, round(cell), play=200, sector=data, play_cell=cell * (1 + off),
+                                         jitter=cell / 16, seed=rnd.randrange(1 << 30)))
+                bench.send(0, [len(data) - 1])
+                bench.start(1)
+                bench.run(200 + len(disk.out) + round(50 * cell), until=lambda: len(bench.received[0]) == len(data) + 3)
+                got = bench.received[0]
+                crc = crc16_ccitt(data)
+                self.assertEqual([w & 0xFF for w in got[:-1]], [*data, crc >> 8, crc & 0xFF])
+                self.assertTrue(got[-1] >> 12 & 1, "the CRC verdict")
+                self.assertEqual(bench.errors(), [])
+            div = rnd.randrange(1, 9)
+            data = [rnd.choice([0x00, 0xFF, 0xA1, rnd.randrange(256)]) for _ in range(rnd.randrange(1, 41))]
+            with self.subTest(trial=trial, write=True, div=div, n=len(data)):
+                bench = Bench()
+                bench.load(0, (HERE / "mfm_controller.asm").read_text(), clkdiv_int=div)
+                disk = bench.add(MfmDisk(WR, RD, CELL * div))
+                bench.start(1)
+                bench.send(0, [0x8000 | len(data) - 1, *(b << 8 for b in data)])
+                bench.run(CELL * div * 8 * (len(data) + 12))
+                disk.decode(len(data))
+                self.assertEqual(disk.sectors, [(data, True)])
                 self.assertEqual(bench.errors(), [])
 
 
