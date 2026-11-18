@@ -202,7 +202,7 @@ def check_i2c(host: Host, pico: Pico) -> str | None:
     answers NACKed, at each SCL."""
     for hz in I2C_HZ:
         rnd = random.Random(hz)
-        div, frac = divider(hz, 11)
+        div, frac = divider(hz, 20)                     # 20 strobes a bit
         pico.ask("t", f"{TARGET:x}")
         memory = [rnd.randrange(256) for _ in range(256)]
         pico.ask("tw", "0", bytes(memory).hex())
