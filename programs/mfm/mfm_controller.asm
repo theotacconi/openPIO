@@ -1,13 +1,14 @@
 .program mfm_controller
-; A floppy-style disk controller in MFM (the Miller code), a cell (bit) of 2H = 8 strobes, MSB
-; first. A sector on the disk: 0x00 bytes, the address mark 0xA1, the data, their CRC-16/CCITT,
+; A floppy-style disk controller in MFM (the Miller code), a cell (bit) of 2H = 16 strobes, MSB
+; first. It reads a disk up to 3 % fast or slow whose pulses wander up to 1/8 of a half-cell (each
+; time between pulses counts as the nearest whole number of half-cells, so the margin is H / 2). A sector on the disk: 0x00 bytes, the address mark 0xA1, the data, their CRC-16/CCITT,
 ; then a gap. One SM: the dispatcher, the reader and the writer.
 ; TX FIFO: a command word, n - 1 in bits 14:0, bit 15 set to write: then n words, a data byte in
 ; bits 15:8 each. A read pushes the n data bytes and the two CRC bytes (bits 7:0) found after
 ; the next address mark, then STATUS (bit 12: the CRC is good).
 .out_pins 0              ; write data
 .in_pins 1               ; read data
-.pau code=mfm baud=4
+.pau code=mfm baud=8
 .crc width=16 poly=0x1021 init=ones
 .shift_out left
 .shift_in left

@@ -1875,7 +1875,9 @@ def mfm_halves(bits: list[int], level: int = 0) -> list[int]:
 
 class MfmDisk(Device):
     """A disk drive's data lines in MFM, a cell (bit) of `cell` clocks: it records what the
-    controller writes on `wr` and plays a sector on `rd` from clock `play` on.
+    controller writes on `wr` and plays a sector on `rd` from clock `play` on, its cells
+    `play_cell` clocks long (default `cell`: a spindle fast or slow) and each transition up to
+    +- `jitter` clocks off (`seed`: peak shift, the read channel's noise).
 
     Written: every transition must fall on the half-cell grid of the first one (within a
     clock); the cells are decoded (a 1: a transition mid-cell), the MFM rule checked on every
@@ -1883,13 +1885,25 @@ class MfmDisk(Device):
     good)."""
 
     def __init__(self, wr: int, rd: int, cell: int, play: int | None = None,
-                 sector: list[int] = ()) -> None:
+                 sector: list[int] = (), play_cell: float | None = None, jitter: float = 0,
+                 seed: int = 0) -> None:
         super().__init__()
         self.wr, self.rd, self.cell = wr, rd, cell
         self.edges: list[int] = []
         self._prev = None
-        self.out = [h for h in mfm_halves(mfm_sector(list(sector))) for _ in range(cell // 2)] \
-            if play is not None else []
+        self.out = []
+        if play is not None:
+            rnd, half = random.Random(seed), (play_cell or cell) / 2
+            halves = mfm_halves(mfm_sector(list(sector)))
+            end = 0
+            for k, lv in enumerate(halves):              # each half-cell to its next transition
+                t = (k + 1) * half
+                if k + 1 < len(halves) and halves[k + 1] != lv:
+                    t += rnd.uniform(-jitter, jitter)
+                elif k + 1 < len(halves):
+                    continue
+                self.out += [lv] * (round(t) - end)
+                end = round(t)
         self.play = play
         self.sectors: list[tuple[list[int], bool]] = []
         self.drive = {rd: 0}

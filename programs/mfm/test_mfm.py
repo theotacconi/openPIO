@@ -16,7 +16,7 @@ from devices import MfmDisk, crc16_ccitt                 # noqa: E402
 from seeds import seeded                                 # noqa: E402
 
 WR, RD = 0, 1
-CELL = 8                                                 # 2H strobes, CLKDIV 1
+CELL = 16                                                # 2H strobes, CLKDIV 1
 
 
 class MfmController(unittest.TestCase):
