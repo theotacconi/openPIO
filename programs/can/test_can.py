@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """CAN transmitter and receiver against reference CAN nodes on a wired-AND bus: frames, ACK,
-arbitration lost at the exact bit, CRC errors. sigrok's CAN decoder reads the same frames on the
-bus (identifier, data, stuffing, ACK) with no warning."""
+arbitration lost at the exact bit, CRC errors; the receiver over random settings inside what it
+promises (a divider from 4, the sender's oscillator up to 0.75 % off, frames with the most
+stuffing), its ACK within CAN's window.
+sigrok's CAN decoder reads the same frames on the bus (identifier, data, stuffing, ACK) with no
+warning."""
 import sys
 import unittest
 from pathlib import Path
@@ -16,9 +19,9 @@ from seeds import seeded                                 # noqa: E402
 TX, RX, BIT = 0, 1, 8  # pins as in the program
 
 
-def sigrok_frames(bench):
+def sigrok_frames(bench, bit=BIT):
     """[(id, data, acknowledged)] as sigrok reads the bus; no warning."""
-    frames, warnings = sigrok_can(bench, RX, BIT)
+    frames, warnings = sigrok_can(bench, RX, bit)
     assert warnings == [], warnings
     return [(f["id"], f["data"], f["ack"]) for f in frames]
 
@@ -87,17 +90,17 @@ class CanRx(unittest.TestCase):
     def test_frames(self):
         rng = seeded(8)
         frames = [(rng.randrange(0x7F0), [rng.randrange(256) for _ in range(n)]) for n in (0, 3, 8)]
-        sender = CanNode(BIT, send=frames, idle=0)             # waits for 11 idle bits
+        sender = CanNode(4 * BIT, send=frames, idle=0)         # waits for 11 idle bits
         bench = Bench(pullups=1 << RX | 1 << TX)
-        bench.load(0, (HERE / "can_rx.asm").read_text())
+        bench.load(0, (HERE / "can_rx.asm").read_text(), clkdiv_int=4)   # CLKDIV from 4
         bench.add(WiredAndBus([TX], [RX], [sender]))
         bench.start(1)
         irqs = []
         for _ in frames:
-            bench.run(3000, until=lambda: any(bench.chip.sms[0].irq_flags))
+            bench.run(12000, until=lambda: any(bench.chip.sms[0].irq_flags))
             irqs.append(bench.chip.reg_read(0, 0x10))
             bench.write(0, 0x10, 0xFF)
-        bench.run(200)
+        bench.run(800)
         self.assertEqual(bench.errors(), [])
         self.assertEqual(irqs, [1] * len(frames), "IRQ 0: CRC right")
         self.assertEqual(sender.sent, [(f[0], True) for f in frames], "acknowledged by the program")
@@ -106,7 +109,45 @@ class CanRx(unittest.TestCase):
             head, dlc = words.pop(0), words.pop(0) & 0xF
             got.append((head >> 3 & 0x7FF, [words.pop(0) & 0xFF for _ in range(dlc)]))
         self.assertEqual(got, frames)
-        self.assertEqual(sigrok_frames(bench), [(i, d, True) for i, d in frames], "sigrok")
+        self.assertEqual(sigrok_frames(bench, 4 * BIT), [(i, d, True) for i, d in frames], "sigrok")
+
+    def test_sweep(self):
+        """Random settings inside what can_rx.asm promises: a divider from 4 (fractional),
+        a sender whose oscillator is up to 0.75 % fast or slow (crystals: 0.01 %), identifiers 0
+        and 0x7EF and data of 0x00 and 0xFF among the frames (the longest runs, stuffed). Every
+        frame read, its CRC right, acknowledged, the ACK's edges from 1/8 bit early to 1/4 late
+        (CanNode). Measured: frames are read up to 3 % off; from 1 % slow the ACK, timed from
+        the last edge up to 6 bits before, can start more than 1/8 bit early. Found the ACK 1/4
+        bit early at every divider from 4: timed for CLKDIV 1, where the input's 3 clocks of
+        delay made up for 2 strobes."""
+        rnd = seeded(16)
+        for trial in range(4):
+            clkdiv = rnd.choice([4, rnd.randrange(4, 26)])     # 6.25: 1 Mbit/s from 50 MHz
+            frac = rnd.choice([0, rnd.randrange(256)])
+            off = rnd.uniform(-0.0075, 0.0075)
+            frames = [(rnd.choice([0, 0x7EF, rnd.randrange(0x7F0)]),
+                       [rnd.choice([0x00, 0xFF, rnd.randrange(256)]) for _ in range(rnd.randrange(9))])
+                      for _ in range(3)]
+            with self.subTest(trial=trial, clkdiv=clkdiv, frac=frac, off=f"{off:+.2%}"):
+                sender = CanNode(BIT * (clkdiv + frac / 256) * (1 + off), send=frames, idle=0)
+                bench = Bench(pullups=1 << RX | 1 << TX)
+                bench.load(0, (HERE / "can_rx.asm").read_text(), clkdiv_int=clkdiv, clkdiv_frac=frac)
+                bench.add(WiredAndBus([TX], [RX], [sender]))
+                bench.start(1)
+                irqs = []
+                for _ in frames:
+                    bench.run(400 * BIT * (clkdiv + 1), until=lambda: any(bench.chip.sms[0].irq_flags))
+                    irqs.append(bench.chip.reg_read(0, 0x10))
+                    bench.write(0, 0x10, 0xFF)
+                bench.run(30 * BIT * (clkdiv + 1))
+                self.assertEqual(bench.errors(), [])
+                self.assertEqual(irqs, [1] * len(frames), "IRQ 0: CRC right")
+                self.assertEqual(sender.sent, [(f[0], True) for f in frames], "acknowledged")
+                words, got = list(bench.received[0]), []
+                while words:
+                    head, dlc = words.pop(0), words.pop(0) & 0xF
+                    got.append((head >> 3 & 0x7FF, [words.pop(0) & 0xFF for _ in range(dlc)]))
+                self.assertEqual(got, frames)
 
 
 if __name__ == "__main__":

@@ -588,11 +588,14 @@ class CanNode:
     frames (id, data) after 11 idle bits, or joins another node's SOF (hard sync) with a frame
     pending, and stops at a lost arbitration; `sent` gets (id, acked). Bits are sampled in their
     middle, counted from the SOF edge; every bus edge of a frame must fall within a clock of a
-    bit boundary (a transmitter's loop delay through its transceiver and input synchronizer); an
+    bit boundary (a transmitter's loop delay through its transceiver and input synchronizer),
+    and an ACK's, a receiver's, from 1/8 bit early (a node sampling at 7/8 of the bit sees the
+    CRC delimiter recessive) to 1/4 late (the receiver's loop delay; still dominant at 7/8); an
     identifier with bits 10..4 all recessive (0x7F0 up) is an error (ISO 11898-1).
-    idle: recessive clocks already seen at start."""
+    idle: recessive clocks already seen at start. `bit` may be fractional: a node whose
+    oscillator is fast or slow (it hard-syncs on the SOF, and does not resynchronize)."""
 
-    def __init__(self, bit: int, send: list[tuple[int, list[int]]] = (), ack: bool = True,
+    def __init__(self, bit: float, send: list[tuple[int, list[int]]] = (), ack: bool = True,
                  idle: int | None = None) -> None:
         self.bit, self.ack = bit, ack
         self.send = list(send)
@@ -612,17 +615,20 @@ class CanNode:
                 self._start(t + 1, can_wire(*self.send[0]))
                 self.tx = 0
             return
-        k, phase = divmod(t - self._t0, self.bit)
-        if bus != self._bus and 1 < phase < self.bit - 1:
-            self.errors.append(f"t={t}: edge {phase} clocks into bit {k}")
+        k = int((t - self._t0) // self.bit)
+        phase = t - self._t0 - k * self.bit
+        ack = self._end is not None and k in range(self._end, self._end + 3)
+        late, early = (self.bit / 4, self.bit / 8) if ack else (1, 1)
+        if bus != self._bus and late < phase < self.bit - early:
+            self.errors.append(f"t={t}: edge {phase:g} clocks into bit {k}")
         self._bus = bus
-        if phase == self.bit - 1:          # drive bit k + 1 from the next clock
+        if int((t + 1 - self._t0) // self.bit) > k:     # drive bit k + 1 from the next clock
             nxt = k + 1
             if self._wire is not None and nxt < len(self._wire):
                 self.tx = self._wire[nxt]
             else:
                 self.tx = 0 if nxt == self._ack_bit else 1
-        if phase == self.bit // 2:
+        if phase >= self.bit // 2 > phase - 1:          # the clock at (or just past) mid-bit
             self._sample(t, k, bus)
 
     def _crc_end(self, k: int) -> None:
