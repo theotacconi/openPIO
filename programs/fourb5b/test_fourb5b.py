@@ -4,8 +4,10 @@ receiver: every nibble comes back, symbols back to back on the line (no sigrok d
 stream without the K-codes the program does not send). The receive path from a reference BMC
 transmitter: USB Power Delivery messages (preamble, SOP K-codes, header, data objects and
 CRC-32 from zlib.crc32 in 4b5b, EOP) with the transmitter 6 % fast or slow, every symbol in
-order, and the same messages read by sigrok's USB PD decoder, which checks the CRC itself; a
-frame the host does not read in time is flagged (PAU overrun)."""
+order, and the same messages read by sigrok's USB PD decoder, which checks the CRC itself; random
+settings inside what the receiver promises (dividers, a transmitter 10 % fast or slow, its edges
+wandering); a line taken before the preamble; a frame the host does not read in time is flagged
+(PAU overrun)."""
 import sys
 import unittest
 import zlib
@@ -88,6 +90,32 @@ class FourB5BRx(unittest.TestCase):
                 self.assertEqual([w & 0x7FF for w in bench.received[0]], [0] * sum(map(len, frames)))
                 self.assertFalse(bench.chip.sms[0].irq_flags[0])
                 self.assertEqual(sigrok_usb_pd(bench, PIN, bit), ([m[:3] for m in messages], []), "sigrok")
+
+    def test_sweep(self):
+        """Random settings inside what fourb5b_rx.asm promises: a divider from 1 to 8
+        (fractional), a transmitter 10 % fast, 10 % slow and twice at random within (USB PD:
+        270 to 330 kbit/s), each edge up to 1/16 of a half-bit off, three messages of 0 to 7
+        data objects rich in all 0s and all 1s. Every symbol in order. Measured: 15 % fast or
+        slow passes with clean edges; 10 % with edges 1/8 off fails at times."""
+        rnd = seeded(29)
+        for trial in range(4):
+            div = rnd.randrange(1, 9)
+            div += rnd.choice([0, rnd.randrange(256)]) / 256 if div > 1 else 0
+            off = [-0.1, 0.1, rnd.uniform(-0.1, 0.1), rnd.uniform(-0.1, 0.1)][trial]
+            messages = [pd_message(rnd.randrange(1, 16), [rnd.choice([0, (1 << 32) - 1, rnd.randrange(1 << 32)])
+                                                          for _ in range(rnd.randrange(8))], k) for k in range(3)]
+            frames = [m[3] for m in messages]
+            bit = 16 * div * (1 + off)
+            with self.subTest(trial=trial, div=div, off=f"{off:+.2%}"):
+                bench = Bench()
+                bench.load(0, (HERE / "fourb5b_rx.asm").read_text(), clkdiv_int=int(div),
+                           clkdiv_frac=round(div % 1 * 256))
+                tx = bench.add(BmcTx(PIN, bit, [line_bits(f) for f in frames], start=40, gap=6, end_edge=True,
+                                     jitter=bit / 32, seed=rnd.randrange(1 << 30)))
+                bench.start(1)
+                bench.run(tx.end + round(25 * 16 * div))
+                self.assertEqual([w >> 11 for w in bench.received[0]], [s for f in frames for s in f])
+                self.assertFalse(bench.chip.sms[0].irq_flags[0])
 
     def test_line_taken_before_the_preamble(self):
         """The line idles high (a pull-up) while the receiver listens; the transmitter takes it
