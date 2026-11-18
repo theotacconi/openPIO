@@ -138,6 +138,8 @@ def run(seed: int, cycles: int) -> None:
             host.read(n, rng.choice([rng.randrange(0x2A), rng.randrange(0x30, 0x3E)]), rng.randrange(1, 4))
         elif k < .7:
             host.read(n, 0x26)
+        elif k < .72:                                    # instructions back through MISO
+            top.spi(header(OP_IMEM_RD, n, 0), [rng.randrange(256)] + [0] * rng.randrange(1, 4))
         else:
             top.step(rng.randrange(1, 100))
         if rng.random() < .3:

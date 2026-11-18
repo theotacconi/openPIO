@@ -24,8 +24,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "sim" / "model"))
 from vsim import VSim                                                   # noqa: E402
 
 from asm import IMEM_WORDS, PAU_CODES, AssemblerError, assemble  # noqa: E402
-from chip import (CTRL, GPIO, IRQ, OP_IMEM_RD, OP_IMEM_WR, OP_REG_RD, OP_REG_WR, PAU_MODE_BITS,  # noqa: E402
-                  OP_RX_POP, OP_TX_PUSH, PADS_BIDIR, TT_PADS, FIFO_SPLIT, PAU_CFG, PAU_CODE, Chip)
+from chip import (CLKDIV, COUNTS, CTRL, GPIO, IRQ, ISR, OP_IMEM_RD, OP_IMEM_WR, OP_REG_RD,  # noqa: E402
+                  OP_REG_WR, OP_RX_POP, OP_TX_PUSH, OSR, PADS_BIDIR, PAU_MODE_BITS, TT_PADS, FIFO_SPLIT,
+                  PAU_CFG, PAU_CODE, X, Y, Chip)
 from host import Host                                                   # noqa: E402
 
 SOURCES = ["pau.v", "openpio_sm.v", "fifo.v", "openpio.v"]
@@ -148,11 +149,26 @@ class LockstepChip(Chip):
 # ---------------------------------------------------------------------- fuzz
 
 def random_source(rng: random.Random) -> str:
-    """A random program in assembler: PAU traffic, FIFOs, peer IRQs, pins, waits."""
-    lines = []
+    """A random program in assembler: PAU traffic, FIFOs, peer IRQs, pins, waits; at times with
+    a side-set (on pins or pin directions) and the rarer forms the RTL's coverage found no bench
+    reaching (test/lockstep/coverage.py): OUT PINDIRS, PULL IFEMPTY, timed WAITs and their
+    timeout of 0, SET DLYMUL 0 and PAU_BAUD, the reserved JMP condition (FAR, a NOP)."""
+    side = rng.random() < .25
+    lines = [f".side_set 1 opt{rng.choice(['', ' pindirs'])}"] if side else []
     for _ in range(rng.randrange(6, 30)):
         k = rng.random()
         n = rng.randrange(1, 17)
+        if rng.random() < .15:
+            lines.append(rng.choice([
+                f"out pindirs, {n}",
+                f"pull ifempty {rng.choice(['block', 'noblock'])}",
+                f"set timeout_val, {rng.choice([0, 1, rng.randrange(32)])}",
+                f"wait {rng.randrange(2)} {rng.choice(['irq', 'gpio', 'pau'])} {rng.randrange(8)} timeout",
+                f"set dlymul, {rng.choice([0, 1, rng.randrange(32)])}",
+                f"set pau_baud, {rng.randrange(32)}",
+                f".word {0x20 | rng.randrange(32):#06x}",
+                f"nop side {rng.randrange(2)}" if side else "nop"]))
+            continue
         lines.append(
             f"out pins, {n} auto" if k < .1 else
             f"in pins, {n} auto" if k < .2 else
@@ -185,7 +201,7 @@ def random_load(chip: LockstepChip, host: Host, n: int, rng: random.Random) -> N
             break
         except AssemblerError:                           # more than 4 conditions: again
             pass
-    host.load(n, prog, clkdiv_int=rng.choice([1, 1, 2, 3]), clkdiv_frac=rng.choice([0, 0, rng.randrange(256)]),
+    host.load(n, prog, clkdiv_int=rng.choice([1, 1, 2, 3]), sideset_base=rng.randrange(16), clkdiv_frac=rng.choice([0, 0, rng.randrange(256)]),
               in_base=rng.randrange(16), out_base=rng.randrange(16), set_base=rng.randrange(16),
               shift_in_right=rng.random() < .5, shift_out_right=rng.random() < .5,
               push_thresh=rng.randrange(16), pull_thresh=rng.randrange(16),
@@ -221,6 +237,9 @@ def run(seed: int, cycles: int) -> None:
             chip.host(OP_REG_RD, n, rng.choice([rng.randrange(0x2A), rng.randrange(0x30, 0x40)]))
         elif k < .53:
             chip.host(OP_REG_WR, n, IRQ, rng.randrange(1 << 16))
+        elif k < .535:                                   # X, Y, ISR, OSR, the shift counts,
+            addr = rng.choice([X, Y, ISR, OSR, COUNTS, CLKDIV])     # CLKDIV (0: 1)
+            chip.host(OP_REG_WR, n, addr, rng.choice([0, rng.randrange(1 << 16)]))
         elif k < .55:
             reset = rng.randrange(4) if rng.random() < .3 else 0
             step = rng.randrange(4) if rng.random() < .3 else 0
