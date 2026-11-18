@@ -3,7 +3,9 @@
 ; burst, idle high). 1 strobe = 1 us (CLKDIV = clock in MHz).
 ; Leader: a burst of at least 7.7 ms (9 ms), then a space: 4.5 ms for a frame, 2.25 ms for a
 ; repeat code (key held). Bits: a 562 us burst, then a space of 562 us (0) or 1687 us (1),
-; sampled 838 us into it. Shorter bursts outside a frame are ignored.
+; sampled 900 us into it: after a 0's space (up to 778 us, 10 % slow with a module's marks
+; 160 us short) and before the next burst ends (1012 us, 10 % fast), with about 110 us to
+; spare each way. Shorter bursts outside a frame are ignored.
 ; RX FIFO, a frame: two words, as sent LSB first: address | ~address << 8, command | ~command
 ; << 8 (the host checks the complements). A repeat code raises IRQ 0.
 .in_pins 0
@@ -29,7 +31,7 @@ word:
 bit:
     wait 0 in_base 0            ; burst
     wait 1 in_base 0            ; space
-    nop [27]                    ; 838 us into it
+    nop [29]                    ; 900 us into it
     in pins, 1                  ; still high: 1
     jmp y--, bit
     push noblock

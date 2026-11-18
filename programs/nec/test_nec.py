@@ -55,8 +55,9 @@ class Nec(unittest.TestCase):
         strobe is 1 us), every time of the remote 10 % longer or shorter, the receiver module's
         marks 160 us longer or shorter (a TSOP's output pulse width error, its spaces as much
         shorter or longer), each edge up to 20 us off, keys 0x00 and 0xFF among random ones,
-        frames 2 to 40 ms apart. Every key read and the repeat code seen. Measured: marks 200
-        us short at 10 % slow fail, with the bit sampled 838 us into a space."""
+        frames 2 to 40 ms apart. Every key read and the repeat code seen. Measured, at 10 %
+        slow: marks 240 us short to 400 us long pass (200 us short with the bit sampled at
+        838 us, as before); at 10 % fast, 400 us short to 400 us long."""
         rnd = seeded(20)
         for trial in range(3):
             clkdiv, frac = rnd.randrange(1, 5), rnd.choice([0, rnd.randrange(256)])
