@@ -4,7 +4,7 @@ forward frames at 1200 baud from a 50 MHz clock (CLKDIV 1302 + 21 / 256), Manche
 PAU with INV; backward frames received by the PAU 5.5 ms and 10.5 ms after the forward frame
 (the settling window of IEC 62386-101), no answer, and two gear answering at once; random
 settings inside what the master promises (a divider, gear whose half-bits are 20 % short or
-long and jittered, any time in the window). sigrok's DALI decoder reads the same forward and
+long and jittered, any time in the window, slow rising edges). sigrok's DALI decoder reads the same forward and
 backward frames on the bus."""
 import sys
 import unittest
@@ -67,7 +67,9 @@ class DaliMaster(unittest.TestCase):
         """Random settings inside what dali_master.asm promises: a divider from 2 (fractional),
         gear whose backward half-bits are up to 20 % short or long (a receiver takes 333.3 to
         500 us, IEC 62386-101), each edge up to 1/16 half-bit off, answering at any time in the
-        5.5 to 10.5 ms window; answers 0x00, 0xFF and random. Every answer read, no IRQ.
+        5.5 to 10.5 ms window; answers 0x00, 0xFF and random; the bus rising up to 1/10
+        half-bit late (42 us at 1200 baud), as a bus supply's limited current makes it.
+        Every answer read, no IRQ.
         Measured: 25 % either way passes; with PAU_BAUD 8 for both ways, 19 % short failed."""
         rnd = seeded(19)
         for trial in range(4):
@@ -76,12 +78,13 @@ class DaliMaster(unittest.TestCase):
             te = HALF * (clkdiv + frac / 256)
             queries = [rnd.randrange(0x10000) | 0x0100 for _ in range(3)]
             answers = {q: rnd.choice([0x00, 0xFF, rnd.randrange(256)]) for q in queries}
-            with self.subTest(trial=trial, clkdiv=clkdiv, frac=frac, off=f"{off:+.1%}"):
+            rise = [round(te / 10), round(rnd.uniform(0, te / 10))][trial % 2]   # the limit too
+            with self.subTest(trial=trial, clkdiv=clkdiv, frac=frac, off=f"{off:+.1%}", rise=rise):
                 gear = DaliGear(te, answers=answers, settle=round(rnd.uniform(5.6, 10.4) * MS * te),
                                 answer_te=te * (1 + off), jitter=te / 16, seed=rnd.randrange(1 << 30))
                 bench = Bench()
                 bench.load(0, (HERE / "dali_master.asm").read_text(), clkdiv_int=clkdiv, clkdiv_frac=frac)
-                bench.add(DaliBus(TX, RX, [gear]))
+                bench.add(DaliBus(TX, RX, [gear], rise=rise))
                 bench.send(0, queries)
                 bench.start(1)
                 bench.run(int(len(queries) * 100 * te), until=lambda: len(bench.received[0]) == len(queries))

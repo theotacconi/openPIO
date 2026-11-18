@@ -1412,12 +1412,18 @@ class DaliGear:
         self._prev = 1
         self._t0: int | None = None
         self._send: list[tuple[int, int]] = []           # (clock, level) of a backward frame
+        self._own = False                                # until the bus is high after it
 
     def step(self, t: int, bus: int) -> None:
         if self._send:
             while self._send and self._send[0][0] <= t + 1:
                 self.tx = self._send.pop(0)[1]
             self._prev = 1
+            self._own = True
+            return
+        if self._own:                                    # its own frame's last rise, slow
+            self._own = not bus
+            self._prev = bus
             return
         if self._t0 is None:
             if self._prev and not bus:
@@ -1459,16 +1465,21 @@ class DaliGear:
 class DaliBus(Device):
     """DALI bus through the master's inverting transceiver: pin `tx` high pulls the bus low,
     pin `rx` reads the bus inverted. The gear (DaliGear) pull it low too; the bus is high
-    otherwise (the bus power supply)."""
+    otherwise (the bus power supply), `rise` clocks after the last one lets go: the supply's
+    limited current makes a rising edge slow (IEC 62386-101 bounds rise and fall times; the
+    value is the test's), and a receiver sees it when it crosses its threshold."""
 
-    def __init__(self, tx: int, rx: int, gear: list[DaliGear]) -> None:
+    def __init__(self, tx: int, rx: int, gear: list[DaliGear], rise: int = 0) -> None:
         super().__init__()
-        self.tx, self.rx, self.gear = tx, rx, gear
+        self.tx, self.rx, self.gear, self.rise = tx, rx, gear, rise
         self.wave: list[int] = []
         self.drive = {rx: 0}
+        self._free = rise                                # clocks since every driver let go
 
     def tick(self, t: int, levels: int) -> None:
-        bus = int(not _bit(levels, self.tx) and all(g.tx for g in self.gear))
+        free = not _bit(levels, self.tx) and all(g.tx for g in self.gear)
+        self._free = self._free + 1 if free else 0
+        bus = int(free and self._free > self.rise)
         self.wave.append(bus)
         for g in self.gear:
             g.step(t, bus)
