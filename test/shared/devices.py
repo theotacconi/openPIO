@@ -1489,10 +1489,13 @@ class SentTx(Device):
     within +-20 %). Every pulse is a falling edge, `low` ticks low (4 or more), then released
     until the next falling edge: sync 56 ticks, then the status nibble, the data nibbles and the
     CRC, each 12 + value ticks. A frame is (status, [data nibbles]), or (status, [data], crc)
-    to send a wrong CRC."""
+    to send a wrong CRC. `jitter` moves each falling edge by a uniform random time within
+    +- jitter clocks (`seed`)."""
 
-    def __init__(self, pin: int, frames: list, tick: float, start: int = 0, low: int = 5):
+    def __init__(self, pin: int, frames: list, tick: float, start: int = 0, low: int = 5,
+                 jitter: float = 0, seed: int = 0):
         super().__init__()
+        rng = random.Random(seed)
         self.pin = pin
         self.schedule: list[tuple[int, int | None]] = []
         t = start
@@ -1500,7 +1503,8 @@ class SentTx(Device):
             status, data = frame[0], frame[1]
             crc = frame[2] if len(frame) > 2 else sent_crc4(data)
             for ticks in [56] + [12 + v for v in [status, *data, crc]]:
-                self.schedule += [(round(t), 0), (round(t + low * tick), None)]
+                f = t + rng.uniform(-jitter, jitter)
+                self.schedule += [(round(f), 0), (round(f + low * tick), None)]
                 t += ticks * tick
         self.schedule.append((round(t), 0))               # the next frame's falling edge
         self.schedule.append((round(t + low * tick), None))

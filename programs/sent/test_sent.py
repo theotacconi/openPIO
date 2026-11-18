@@ -2,8 +2,9 @@
 """SENT (SAE J2716) receiver fed by the reference SENT sensor: fast-channel frames of a status
 nibble, six data nibbles and the CRC4, back to back, the sensor's tick nominal (3 us), 20 %
 fast or slow, with low times of 5 and 4 ticks; every nibble decoded on the chip, the CRC
-checked on the chip (good frames and frames with a wrong CRC). A protocol written after the
-ISA was frozen (2026-10-28), without changing the hardware."""
+checked on the chip (good frames and frames with a wrong CRC); random settings inside what the
+program promises (ticks of 8 to 12 strobes at any divider, low times, edges jittered). A
+protocol written after the ISA was frozen (2026-10-28), without changing the hardware."""
 import sys
 import unittest
 from pathlib import Path
@@ -33,10 +34,11 @@ def frames_from(words: list[int]) -> list[tuple[int, int, list[int], int, bool]]
 
 class Sent(unittest.TestCase):
 
-    def run_sensor(self, frames, scale=1.0, low=5):
+    def run_sensor(self, frames, scale=1.0, low=5, clkdiv=15, jitter=0, seed=0):
         bench = Bench(pullups=1 << LINE)
-        bench.load(0, (HERE / "sent_rx.asm").read_text())
-        sensor = bench.add(SentTx(LINE, frames, TICK * scale, start=2000, low=low))
+        bench.load(0, (HERE / "sent_rx.asm").read_text(), clkdiv_int=clkdiv)
+        sensor = bench.add(SentTx(LINE, frames, TICK * clkdiv / 15 * scale, start=2000, low=low,
+                                  jitter=jitter, seed=seed))
         bench.start(1)
         bench.run(sensor.end + 2000)
         self.assertEqual(bench.errors(), [])
@@ -53,6 +55,23 @@ class Sent(unittest.TestCase):
                                  [(s, d, sent_crc4(d), True) for s, d in frames])
                 for sync, *_ in got:                     # 8 x the sync in strobes (15 clocks)
                     self.assertAlmostEqual(sync / 8, 56 * TICK * scale / 15, delta=2)
+
+    def test_sweep(self):
+        """Random settings inside what sent_rx.asm promises: a divider of 8 to 40 (the
+        sensor's nominal tick 10 strobes), the tick 20 % fast or slow, low times of 4 or 5
+        ticks, every falling edge moved by up to 1/8 tick, nibbles 0 and 15 among the data.
+        Measured: an edge 1/4 tick off fails, as it must: a nibble is the time between two
+        edges, half a tick off."""
+        rnd = seeded(17)
+        for trial in range(4):
+            clkdiv, scale, low = rnd.randrange(8, 41), rnd.uniform(0.8, 1.2), rnd.choice([4, 5])
+            frames = [(rnd.randrange(16), [rnd.choice([0, 15, rnd.randrange(16)]) for _ in range(6)])
+                      for _ in range(4)]
+            tick = TICK * clkdiv / 15 * scale
+            with self.subTest(trial=trial, clkdiv=clkdiv, scale=f"{scale:.3f}", low=low):
+                got = self.run_sensor(frames, scale, low, clkdiv, tick / 8, rnd.randrange(1 << 30))
+                self.assertEqual([(s, d, c, ok) for _, s, d, c, ok in got],
+                                 [(s, d, sent_crc4(d), True) for s, d in frames])
 
     def test_every_value_and_a_wrong_crc(self):
         frames = [(v, [v, 15 - v, v, 15 - v, v, 15 - v]) for v in range(16)]
