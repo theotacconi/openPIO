@@ -51,7 +51,8 @@ bit:
 short:
     irq 0
 done:
-    set pau_ctl, 0
+    set pau_ctl, 0 [24]     ; 62 + 48 strobes after the answer's last bit: 2.4 ms (5.76 Te)
+                            ; of idle bus before the next forward frame, at least
 none:
     set pau_baud, 16        ; for the next forward frame
     push                    ; ISR: 0x0100 | answer, or 0 (cleared by the last push)
