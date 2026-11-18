@@ -1,6 +1,7 @@
 .program can_rx
 ; CAN 2.0A frame receiver. RX = in_base, TX = set_base (to acknowledge).
-; 8 strobes a bit (PAU half-bit 4); the PAU unstuffs and checks the CRC15.
+; 8 strobes a bit (PAU half-bit 4): CLKDIV = clk / (8 x bit rate), 6.25 for 1 Mbit/s from
+; 50 MHz, at least 4; the PAU unstuffs and checks the CRC15.
 ; RX FIFO, per frame: SOF, ID, RTR, IDE, r0 (bits 14:0); DLC (bits 3:0); one data byte a word
 ; (bits 7:0). Then IRQ 0 and an ACK if the CRC is right, IRQ 1 if not.
 .set_pins 0 1            ; TX
@@ -30,8 +31,10 @@ next:
     in pins, 15             ; CRC
     set pau_ctl, rx|stuff   ; the delimiter does not feed the CRC (it comes 2 bit-halves later)
     jmp !pau crc_ok, bad
-    in pins, 1              ; CRC delimiter (a stuffed bit before it is still dropped)
-    set pins, 0 [7]         ; ACK slot: dominant for one bit, as soon as the delimiter is seen
+    in pins, 1 [2]          ; CRC delimiter (a stuffed bit before it is still dropped), taken
+                            ; mid-bit: 2 strobes on, the ACK starts at its end (CLKDIV from 4;
+                            ; below, the input's 3 clocks of delay make it 1/8 bit late or more)
+    set pins, 0 [7]         ; ACK slot: dominant for one bit
     set pins, 1
     irq 0
 .wrap
