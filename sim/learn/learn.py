@@ -768,22 +768,30 @@ def believed(found: list[tuple[Crc, int]]) -> Crc | None:
 def infer_frames(cap: Capture, gap: float = 10) -> Frames:
     """The self-clocked framing that explains every burst of the recording, or ValueError.
     Bursts are apart by more than `gap` times the narrowest pulse; when no line code explains
-    them so, by a shorter pause (pauses: from 2 narrowest pulses up), tried from the longest:
-    DALI's next forward frame comes 6 half-bits after a backward frame. A burst the recording
-    may have cut is left out (Capture.settled). Spikes are merged first (Capture.despiked)."""
+    them so, by a shorter pause (pauses: from 2 narrowest pulses up): DALI's next forward
+    frame comes 6 half-bits after a backward frame. Every pause is tried, and the best
+    explanation kept (the longest pause of equals): a level code with stuffing can explain a
+    burst a transition code cannot only because it merged two frames (NRZ stuffed after two
+    equal bits is Manchester's halves, and explains a pause of whole half-bits too). A burst the
+    recording may have cut is left out (Capture.settled). Spikes are merged first
+    (Capture.despiked)."""
     cap = cap.despiked()
     widths = cap.widths()
     if not widths:
         raise ValueError("no edges: nothing to learn")
     shortest = sorted(widths)[:max(1, len(widths) // 10)]
     unit = sum(shortest) / len(shortest)                 # a half-bit, or a bit of a level code
-    for cut in [gap * unit] + pauses(widths, 2 * unit, gap * unit):
+    best = None                                          # (score, -rank of the cut, bursts, found)
+    for i, cut in enumerate([gap * unit] + pauses(widths, 2 * unit, gap * unit)):
         bs = bursts(cap.window(*cap.settled(cut)), cut)
         found = _explained(bs, unit)
         if found:
-            break
-    else:
+            top = max(f[0] for f in found)
+            if best is None or top > best[0]:
+                best = (top, -i, bs, found)
+    if best is None:
         raise ValueError("no line code explains every burst of the recording")
+    _, _, bs, found = best
     p = max(found, key=lambda f: f[0])[1]
     if not p.crc:                   # none a CRC every frame ends with: maybe all frames but one
         p = max(_explained(bs, unit, 1), key=lambda f: f[0])[1]

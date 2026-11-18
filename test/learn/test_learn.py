@@ -259,11 +259,11 @@ def hdlc_bits(data: list[int]) -> list[int]:
 
 
 def dali_wave(frames: list[int], answers: dict[int, int]) -> list[int]:
-    """The DALI bus as programs/dali/dali_master.asm sends the forward frames (24 clocks a
+    """The DALI bus as programs/dali/dali_master.asm sends the forward frames (16 clocks a
     half-bit) and a gear answers the queries in `answers` 5.5 ms after."""
-    te = 24
+    te = 16
     bench = Bench()
-    bench.load(0, (ROOT / "programs/dali/dali_master.asm").read_text(), clkdiv_int=3)
+    bench.load(0, (ROOT / "programs/dali/dali_master.asm").read_text())    # 16 strobes
     bus = bench.add(DaliBus(0, 1, [DaliGear(te, answers, settle=round(5.5 * 2.4 * te))]))
     bench.send(0, frames)
     bench.start(1)
@@ -581,7 +581,7 @@ class LearnFrames(unittest.TestCase):
         frames = [0x0105, 0x0190, 0x03A0, 0x05A1, 0xFF90, 0x1234]
         p = self.learn(dali_wave(frames, answers), 0)
         self.check(p, "manchester", None, None, [1])
-        self.assertEqual((p.inv, round(p.half)), (0, 24))
+        self.assertEqual((p.inv, round(p.half)), (0, 16))
         self.assertEqual(p.frames, dali_frames(frames, answers))
 
         frames = [0x0190, 0x2B05, 0xFF90, 0x03A0]
