@@ -34,9 +34,12 @@ good:
     irq 0
     jmp 0
 take:
-    in pins, 1
-    jmp x--, bit
-    push                    ; a byte
-    mov y, status           ; CRC == CRC_RES (STATUS bit 12) as the byte ends
+    jmp x--, more           ; bits 1..7 of a byte
+    mov y, status           ; the 8th: CRC == CRC_RES (STATUS bit 12), fed as the bit was decoded;
+    in pins, 1              ; at most 4 strobes after that, before SE0's first bit (the 8th
+    push                    ; a byte                   sampled H after an edge, SE0's 2H after)
     set x, 7
+    jmp bit
+more:
+    in pins, 1
     jmp bit
