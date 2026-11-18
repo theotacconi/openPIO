@@ -4,7 +4,8 @@ five 1s (also inside the FCS), FCS against CRC-16/X.25, frames of 1 to 20 bytes,
 bytes that look like flags; a frame the host cancels is aborted at once (seven 1s), the next
 one goes out once the host has loaded the program again. The receiver program on the other SM gets the same frames from
 the line, with the FCS verdict, and flags a corrupted frame; frames after an idle line of any
-length (found on the FPGA board)."""
+length (found on the FPGA board); random settings inside what the receiver promises (a
+divider, a line 4 % fast or slow with jittered edges, flags and idle between frames)."""
 import sys
 import unittest
 from pathlib import Path
@@ -86,6 +87,34 @@ class Hdlc(unittest.TestCase):
         bench.run(len(bits) * BIT + 100)
         self.assertEqual(received(bench.received[1]), [(good + crc_bytes(good), True)] * 24)
 
+    def test_receiver_sweep(self):
+        """Random settings inside what hdlc_rx.asm promises: any divider (fractional from 2),
+        a line up to 4 % fast or slow, every edge up to 1/16 bit off, frames of 1 to 20 bytes
+        rich in 0x00, 0xFF and 0x7E, back to back, with extra flags or an idle line between.
+        Measured: 5 % fast and 7 % slow pass at every divider (the PAU samples a level code
+        H strobes after the strobe that saw an edge: after the bit's middle); 6 % fast fails
+        on a flag's six 1s."""
+        rnd = seeded(18)
+        for trial in range(4):
+            clkdiv = rnd.choice([1, 2, rnd.randrange(3, 20)])
+            frac = rnd.choice([0, rnd.randrange(256)]) if clkdiv > 1 else 0
+            off = rnd.uniform(-0.04, 0.04)
+            frames = [[rnd.choice([0x00, 0xFF, 0x7E, rnd.randrange(256)])
+                       for _ in range(rnd.randrange(1, 21))] for _ in range(4)]
+            bits = idle(rnd.randrange(7, 40))
+            for f in frames:
+                bits += flag() + stuffed(f + crc_bytes(f)) + flag()
+                bits += flag() * rnd.choice([0, 0, 1, 2]) + idle(rnd.choice([0, 0, rnd.randrange(7, 30)]))
+            bits += idle(10)
+            bit = BIT * (clkdiv + frac / 256) * (1 + off)
+            with self.subTest(trial=trial, clkdiv=clkdiv, frac=frac, off=f"{off:+.2%}"):
+                bench = Bench()
+                bench.load(1, (HERE / "hdlc_rx.asm").read_text(), clkdiv_int=clkdiv, clkdiv_frac=frac)
+                bench.add(Script(nrzi(bits, bit=bit, jitter=bit / 16, rnd=rnd)))
+                bench.start(0b10)
+                bench.run(int(len(bits) * bit) + 100)
+                self.assertEqual(received(bench.received[1]), [(f + crc_bytes(f), True) for f in frames])
+
 
 def crc_bytes(data):
     fcs = crc16_x25(data)
@@ -123,13 +152,14 @@ def stuffed(data):
     return bits
 
 
-def nrzi(bits, start=10):
-    """Script steps: a 0 is a transition."""
+def nrzi(bits, start=10, bit=BIT, jitter=0, rnd=None):
+    """Script steps: a 0 is a transition; `bit` clocks a bit (fractional: a line fast or slow),
+    each edge moved by up to +- `jitter` clocks (`rnd`)."""
     steps, level, t = [(0, {LINE: 1})], 1, start
     for b in bits:
         level ^= 1 - b
-        steps.append((t, {LINE: level}))
-        t += BIT
+        steps.append((round(t + (rnd.uniform(-jitter, jitter) if jitter else 0)), {LINE: level}))
+        t += bit
     return steps
 
 

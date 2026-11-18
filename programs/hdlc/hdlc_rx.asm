@@ -5,6 +5,8 @@
 ; A flag is the one byte with six 1s: it sets stuff_err (and arrives whole). Hunting, the program
 ; compares the last 8 bits with a flag; in a frame it reads bytes until one sets stuff_err. The
 ; CRC then holds 0x53C5: CRC-16/X.25's residue 0x1D0F after the FCS, advanced by the flag's bits.
+; A line up to 5 % fast or 7 % slow is read (a flag's six 1s, 7 bits between edges, are the
+; longest run; the PAU samples a little after each bit's middle).
 ; RX FIFO: the frame's bytes, FCS included, one a word (bits 15:8, bits 7:0 = 0); then an end
 ; word 0x7E01 (FCS wrong) or 0x7E03 (right). Flags back to back (empty frames) give nothing.
 .pau code=nrzi stuff=5 baud=4
