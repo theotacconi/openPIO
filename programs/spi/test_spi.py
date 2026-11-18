@@ -4,8 +4,9 @@ CS_N around each word, SCK idle level, MOSI setup and hold around every sampling
 MISO arrives through the input synchronizer with the least margin. SPI target driven by the
 reference SPI master at clk / 28: random words both ways in transfers of several words, the
 answer 0xFF when the host has none, MISO released while CS_N is high, a word cut by CS_N rising
-dropped, IRQ 0 when the RX FIFO overflows, 12-bit words by the push threshold alone. sigrok's
-SPI decoder reads the same words both ways."""
+dropped, IRQ 0 when the RX FIFO overflows, 12-bit words by the push threshold alone; random
+settings inside what the target promises (SCK, CS_N timing, word lengths). sigrok's SPI decoder
+reads the same words both ways."""
 import sys
 import unittest
 from pathlib import Path
@@ -83,6 +84,31 @@ class SpiTargetTest(unittest.TestCase):
         bench, master = self.run_target([[0x12, (0x34, 5)], [0x56]], [0xA1, 0xA2, 0xA3])
         self.assertEqual([w & 0xFF for w in bench.received[0]], [0x12, 0x56])
         self.assertEqual(master.received, [[0xA1], [0xA3]], "the cut word's answer is used up")
+
+    def test_sweep(self):
+        """Random settings inside what spi_target.asm promises: SCK half periods of 14 to 40
+        clocks, the first edge 0 to 14 clocks after CS_N falls, CS_N high 2 to 40 clocks
+        between transfers, words of 1 to 16 bits rich in all 0s and all 1s, 1 to 5 a transfer.
+        Every word read, every answer on MISO, which settles within 9 clocks of the shift edge
+        (the master checks it from there). Measured: half periods of 10 clocks pass."""
+        rnd = seeded(24)
+        for trial in range(4):
+            half, lead, gap, bits = rnd.randrange(14, 41), rnd.randrange(15), rnd.randrange(2, 41), rnd.randrange(1, 17)
+            ones = (1 << bits) - 1
+            transfers = [[rnd.choice([0, ones, rnd.randrange(ones + 1)]) for _ in range(rnd.randrange(1, 6))]
+                         for _ in range(3)]
+            answers = [rnd.choice([0, ones, rnd.randrange(ones + 1)]) for _ in range(sum(map(len, transfers)))]
+            with self.subTest(trial=trial, half=half, lead=lead, gap=gap, bits=bits):
+                bench = Bench(pullups=1 << self.MISO)
+                bench.load(0, (HERE / "spi_target.asm").read_text(), push_thresh=bits & 15)
+                master = bench.add(SpiMaster(self.SCK, self.MOSI, self.MISO, self.CS, transfers, half=half,
+                                             start=50, lead=lead, gap=gap, bits=bits, setup=half - 9))
+                bench.send(0, [a << (16 - bits) for a in answers])
+                bench.start(1)
+                bench.run(master.end + 50)
+                self.assertEqual(bench.errors(), [])
+                self.assertEqual([w & ones for w in bench.received[0]], sum(transfers, []), "MOSI")
+                self.assertEqual(sum(master.received, []), answers, "MISO")
 
     def test_rx_fifo_overflow(self):
         bench, master = self.run_target([[k & 0xFF for k in range(140)]], [], host_word_clocks=10 ** 9)
