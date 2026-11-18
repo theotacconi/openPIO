@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """USB low-speed transmitter and receiver judged by the reference USB devices: NRZI, stuffing
 in its own bit time, CRC16 against CRC-16/USB, EOP timing, CRC errors, a packet broken by SE1
-(an illegal line state) dropped and the next one received. sigrok's USB decoders read the
-same packets, and check their CRC16 themselves."""
+(an illegal line state) dropped and the next one received; the receiver over random settings
+inside what it promises (a divider, the transmitter up to 2 % off, edges off by up to 1/16 bit,
+payloads of 0 to 8 bytes rich in 0x00 and 0xFF). sigrok's USB decoders read the same packets,
+and check their CRC16 themselves."""
 import sys
 import unittest
 from pathlib import Path
@@ -84,6 +86,40 @@ class UsbRxTest(unittest.TestCase):
                          "IRQ 2 for the SE1, IRQ 0 for the next packet")
         self.assertEqual([w >> 8 for w in bench.received[0]][-5:], [0x80, DATA1, 0x9A] + [
             crc16_usb([0x9A]) & 0xFF, crc16_usb([0x9A]) >> 8])
+
+    def test_sweep(self):
+        """Random settings inside what usb_rx.asm promises: any divider (fractional from 2 up),
+        a transmitter up to 2 % fast or slow (USB low speed allows 1.5 %), every state's edge off
+        by up to 1/16 bit, payloads of 0 to 8 bytes rich in 0x00 (a transition every bit) and
+        0xFF (stuffed bits). Every byte and every CRC verdict right. The limit is the longest
+        run, 6 bits with no edge, sampled 4 strobes after the last edge: edges off by 1/8 bit
+        (1 strobe) and 1.6 % fast lose a bit there now and then."""
+        rnd = seeded(14)
+        for trial in range(5):
+            clkdiv = rnd.choice([1, 2, rnd.randrange(3, 12)])
+            frac = rnd.choice([0, rnd.randrange(256)]) if clkdiv > 1 else 0
+            off = rnd.uniform(-0.02, 0.02)
+            bit = BIT * (clkdiv + frac / 256)
+            packets = [(rnd.choice([DATA0, DATA1]),
+                        [rnd.choice([0x00, 0xFF, rnd.randrange(256)]) for _ in range(rnd.randrange(9))])
+                       for _ in range(4)]
+            with self.subTest(trial=trial, clkdiv=clkdiv, frac=frac, off=f"{off:+.2%}"):
+                bench = Bench()
+                bench.load(0, (HERE / "usb_rx.asm").read_text(), clkdiv_int=clkdiv, clkdiv_frac=frac)
+                tx = bench.add(UsbTx(DM, DP, bit * (1 + off), packets, start=20 + 3 * (clkdiv + 1),
+                                     gap=8, jitter=bit / 16, seed=rnd.randrange(1 << 30)))
+                bench.start(1)
+                verdicts = []
+                while bench.t < tx.end + 50 + 2 * bit:
+                    bench.run(1)
+                    flags = bench.chip.reg_read(0, IRQ)
+                    if flags:
+                        verdicts.append(flags)
+                        bench.write(0, IRQ, flags)
+                self.assertEqual(verdicts, [1] * len(packets), "IRQ 0: every CRC16 right")
+                self.assertEqual([w >> 8 for w in bench.received[0]],
+                                 [x for pid, p in packets
+                                  for x in [0x80, pid] + p + [crc16_usb(p) & 0xFF, crc16_usb(p) >> 8]])
 
     def test_loopback(self):
         """The transmitter program into the receiver program, on two SMs."""

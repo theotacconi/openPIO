@@ -373,20 +373,22 @@ def usb_states(pid: int, payload: list[int], crc: int | None = None) -> list[str
 class UsbTx(Device):
     """Low-speed USB transmitter on D- / D+ (J = D- high): sends `packets` [(pid, payload),
     (pid, payload, crc), or a list of line states] from clock `start`, `gap` idle bit times
-    apart; idles at J."""
+    apart; idles at J. `bit` may be fractional (a fast or slow transmitter); `jitter` moves
+    each bit's start by a uniform random time within +- jitter clocks (`seed`)."""
 
-    def __init__(self, dm: int, dp: int, bit: int, packets: list[tuple], start: int = 0,
-                 gap: int = 4) -> None:
+    def __init__(self, dm: int, dp: int, bit: float, packets: list[tuple], start: int = 0,
+                 gap: int = 4, jitter: float = 0, seed: int = 0) -> None:
         super().__init__()
+        rng = random.Random(seed)
         self.dm, self.dp = dm, dp
         self.schedule: list[tuple[int, str]] = []
         t = start
         for p in packets:
             for s in p if isinstance(p, list) else usb_states(*p):
-                self.schedule.append((t, s))
+                self.schedule.append((round(t + rng.uniform(-jitter, jitter)), s))
                 t += bit
             t += gap * bit
-        self.end = t
+        self.end = round(t)
         self._set(J)
 
     def _set(self, s: str) -> None:
