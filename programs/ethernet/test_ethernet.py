@@ -6,7 +6,8 @@ at 60 MHz a 1518-byte frame streamed by that host while it is sent. Receiver at 
 reference Manchester transmitter: frames of 64 to 1518 bytes with their FCS verdicts, a
 corrupted frame, a 1518-byte frame drained by an SPI-speed host through the 253-word RX FIFO
 (FIFO_SPLIT 1), a transmitter 100 ppm fast or slow with its edges jittered by +-0.45 clock (an
-unsynchronized source), and the chip receiving its own transmitter."""
+unsynchronized source), random settings inside that (rate, jitter, frame lengths), and the chip
+receiving its own transmitter."""
 import sys
 import unittest
 import zlib
@@ -168,6 +169,20 @@ class EthernetRx(unittest.TestCase):
             with self.subTest(ppm=ppm):
                 self.receive(frames(seeded(10 + seed), (64, 1518, 64)),
                              bit=6 * (1 + ppm * 1e-6), jitter=0.45, seed=seed)
+
+    def test_sweep(self):
+        """Random settings inside what eth_rx.asm promises at 60 MHz: a transmitter up to 100 ppm
+        fast or slow (10BASE-T allows 100 ppm), every edge off by up to 0.45 clock, three frames
+        of 64 to 1518 bytes back to back. Measured: 1000 ppm passes too; edges off by 0.6 clock
+        (10 ns) fail, the limit of 3 clocks a half-bit."""
+        rnd = seeded(15)
+        for trial in range(2):
+            ppm = rnd.uniform(-100, 100)
+            jitter = rnd.uniform(0, 0.45)
+            sizes = [rnd.choice([64, rnd.randrange(64, 1519)]) for _ in range(3)]
+            with self.subTest(trial=trial, ppm=round(ppm), jitter=round(jitter, 2), sizes=sizes):
+                self.receive(frames(rnd, sizes), bit=6 * (1 + ppm * 1e-6), jitter=jitter,
+                             seed=rnd.randrange(1 << 30))
 
     def test_own_transmitter(self):
         """eth_tx on SM 1 at 60 MHz drives pin 0, eth_rx on SM 0 receives it."""
