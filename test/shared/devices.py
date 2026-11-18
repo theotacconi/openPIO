@@ -1030,30 +1030,37 @@ class BmcTx(Device):
     frames the line holds its level. `bit` may be fractional (a fast or slow transmitter).
     end_edge: one more transition after each frame's last bit, which ends it, as USB PD ends a
     frame after its EOP (a receiver that ends a frame at a missing boundary transition reads
-    it as one more 0)."""
+    it as one more 0). Each transition moves by up to +- `jitter` clocks (`seed`). take: the
+    clock it starts to drive the line low (before it the line is released: a pull-up idles it
+    high); by default it drives from the start."""
 
     def __init__(self, pin: int, bit: float, frames: list[list[int]], start: int = 0,
-                 gap: float = 8, end_edge: bool = False) -> None:
+                 gap: float = 8, end_edge: bool = False, jitter: float = 0, seed: int = 0,
+                 take: int | None = None) -> None:
         super().__init__()
-        self.pin = pin
+        self.pin, self.take = pin, take
         self.schedule: list[tuple[int, int]] = []
+        rnd = random.Random(seed)
+        at = lambda u: round(u + (rnd.uniform(-jitter, jitter) if jitter else 0))
         t, level = start, 0
         for bits in frames:
             for b in bits:
                 level ^= 1
-                self.schedule.append((round(t), level))
+                self.schedule.append((at(t), level))
                 if b:
                     level ^= 1
-                    self.schedule.append((round(t + bit / 2), level))
+                    self.schedule.append((at(t + bit / 2), level))
                 t += bit
             if end_edge:                           # the edge that ends the last bit
                 level ^= 1
-                self.schedule.append((round(t), level))
+                self.schedule.append((at(t), level))
             t += gap * bit
         self.end = round(t)
-        self.drive = {pin: 0}
+        self.drive = {pin: 0} if take is None else {}
 
     def tick(self, t: int, levels: int) -> None:
+        if self.take is not None and t + 1 >= self.take and not self.drive:
+            self.drive = {self.pin: 0}
         while self.schedule and self.schedule[0][0] <= t + 1:
             self.drive = {self.pin: self.schedule.pop(0)[1]}
 

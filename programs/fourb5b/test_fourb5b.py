@@ -89,6 +89,21 @@ class FourB5BRx(unittest.TestCase):
                 self.assertFalse(bench.chip.sms[0].irq_flags[0])
                 self.assertEqual(sigrok_usb_pd(bench, PIN, bit), ([m[:3] for m in messages], []), "sigrok")
 
+    def test_line_taken_before_the_preamble(self):
+        """The line idles high (a pull-up) while the receiver listens; the transmitter takes it
+        low 1 to 6 bits before its preamble starts. The edge and the silence after it decode as
+        0s; they are not taken for Sync-1. Every symbol in order."""
+        frames = [pd_message(1)[3], pd_message(2, [0x1304B12C], 1)[3]]
+        for lead in (1, 2, 3.5, 6):
+            with self.subTest(lead=lead):
+                bench = Bench(pullups=1 << PIN)
+                bench.load(0, (HERE / "fourb5b_rx.asm").read_text(), clkdiv_int=4)
+                tx = bench.add(BmcTx(PIN, 32, [line_bits(f) for f in frames], start=round(100 + lead * 32),
+                                     gap=6, end_edge=True, take=100))
+                bench.start(1)
+                bench.run(tx.end + 200)
+                self.assertEqual([w >> 11 for w in bench.received[0]], [s for f in frames for s in f])
+
     def test_overrun(self):
         """The host reads a word every 400 clocks, a symbol comes every 160: the RX FIFO fills,
         then the PAU's queue overflows. Flagged once the frame is over and the FIFO drained."""
