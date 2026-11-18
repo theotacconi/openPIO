@@ -70,12 +70,15 @@ class UartRx(Device):
 class UartTx(Device):
     """UART transmitter: sends `data` frames from clock `start`, each followed by `gap` idle bit
     times (one number, or one per frame). stop_low: send a 0 stop bit (framing error) for the
-    frames whose index is in it."""
+    frames whose index is in it. `bit` may be fractional (a fast or slow transmitter); `jitter`
+    moves each bit's start by a uniform random time within +- jitter clocks (`seed`)."""
 
     def __init__(self, pin: int, bit: float, data: list[int], start: int = 0,
                  gap: float | list[float] = 0, data_bits: int = 8, parity: str | None = None,
-                 stop_bits: int = 1, stop_low: set[int] = frozenset()) -> None:
+                 stop_bits: int = 1, stop_low: set[int] = frozenset(), jitter: float = 0,
+                 seed: int = 0) -> None:
         super().__init__()
+        rng = random.Random(seed)
         self.pin = pin
         self.schedule: list[tuple[int, int]] = []      # (clock, level)
         gaps = gap if isinstance(gap, list) else [gap] * len(data)
@@ -86,7 +89,7 @@ class UartTx(Device):
                 bits.append((sum(bits[1:]) + (parity == "odd")) % 2)
             bits += [0 if i in stop_low else 1] * stop_bits
             for b in bits:
-                self.schedule.append((round(t), b))
+                self.schedule.append((round(t + rng.uniform(-jitter, jitter)), b))
                 t += bit
             self.schedule.append((round(t), 1))
             t += gaps[i] * bit

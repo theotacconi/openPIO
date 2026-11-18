@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """UART transmitter and receiver judged by the reference UART devices: random bytes back to
 back; TX at integer and fractional dividers (bit edges on time), RX with a transmitter 3 % fast
-or slow and with framing errors. Full duplex on one SM through the PAU: both directions at
+or slow and with framing errors, and over random settings inside what it promises (a divider,
+the transmitter up to 3 % off, edges off by up to 1/16 bit, gaps from none, the bytes with the
+longest runs). Full duplex on one SM through the PAU: both directions at
 once, bit edges on time, a framing error. Autobaud: the rate learned from a leading 0x55, then
 random bytes back to back, at bit times from 12 to 61 clocks that are not whole strobes. Every
 line, sent or received, is read by sigrok's UART decoder as well: the same bytes."""
@@ -47,13 +49,16 @@ class UartTxTest(unittest.TestCase):
 
 class UartRxTest(unittest.TestCase):
 
-    def run_rx(self, clkdiv, data, gap=0.0, stop_low=frozenset(), tx_bit=None):
+    def run_rx(self, clkdiv, data, gap=0.0, stop_low=frozenset(), tx_bit=None, clkdiv_frac=0,
+               jitter=0.0, seed=0):
         bench = Bench(pullups=1 << 3)
-        bench.load(0, (HERE / "uart_rx.asm").read_text(), clkdiv_int=clkdiv)
-        tx = bench.add(UartTx(3, tx_bit or 8 * clkdiv, data, start=20, gap=gap, stop_low=stop_low))
+        bench.load(0, (HERE / "uart_rx.asm").read_text(), clkdiv_int=clkdiv, clkdiv_frac=clkdiv_frac)
+        bit = tx_bit or 8 * (clkdiv + clkdiv_frac / 256)
+        start = 20 + 3 * (clkdiv + 1)                    # after the program's first wait 1
+        tx = bench.add(UartTx(3, bit, data, start=start, gap=gap, stop_low=stop_low, jitter=jitter,
+                              seed=seed))
         bench.start(1)
-        bench.run(tx.end + 40)
-        bit = tx_bit or 8 * clkdiv
+        bench.run(tx.end + 40 + round(2 * bit))
         self.assertEqual(sigrok_bytes(bench, 3, bit), data, "sigrok")
         self.assertEqual(len(sigrok_bytes(bench, 3, bit, warnings=True)), len(stop_low),
                          "sigrok: a framing error for each low stop bit")
@@ -73,6 +78,27 @@ class UartRxTest(unittest.TestCase):
         for tx_bit in (31, 33):                       # receiver: 32 clocks a bit
             with self.subTest(tx_bit=tx_bit):
                 bench, got = self.run_rx(4, data, gap=0.5, tx_bit=tx_bit)
+                self.assertEqual(got, data)
+                self.assertFalse(bench.chip.sms[0].irq_flags[0])
+
+    def test_sweep(self):
+        """Random settings inside what uart_rx.asm promises: any divider (fractional from 2 up),
+        a transmitter up to 3 % fast or slow, every bit's edge off by up to 1/16 bit, back to
+        back or with gaps, 0x00 and 0xFF (the longest runs) among the bytes. Every byte read, no
+        framing error. Found the receiver back in its wait too late for back-to-back bytes from
+        a transmitter 1.5 % fast: it lost them."""
+        rnd = seeded(13)
+        for trial in range(6):
+            clkdiv = rnd.choice([1, 2, 3, rnd.randrange(4, 40)])
+            frac = rnd.choice([0, rnd.randrange(256)]) if clkdiv > 1 else 0
+            off = rnd.uniform(-0.03, 0.03)
+            bit = 8 * (clkdiv + frac / 256)
+            data = [0x00, 0xFF] + [rnd.randrange(256) for _ in range(rnd.randrange(4, 16))]
+            rnd.shuffle(data)
+            gap = [rnd.choice([0, 0, 0.25, 2]) for _ in data]
+            with self.subTest(trial=trial, clkdiv=clkdiv, frac=frac, off=f"{off:+.2%}"):
+                bench, got = self.run_rx(clkdiv, data, gap=gap, tx_bit=bit * (1 + off),
+                                         clkdiv_frac=frac, jitter=bit / 16, seed=rnd.randrange(1 << 30))
                 self.assertEqual(got, data)
                 self.assertFalse(bench.chip.sms[0].irq_flags[0])
 
