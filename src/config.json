@@ -17,9 +17,13 @@
   "//": "overflows after repair and a slower detailed route).",
   "PL_TARGET_DENSITY_PCT": 53,
 
-  "//": "CLOCK_PERIOD - Increase this in case you are getting setup time violations.",
-  "//": "The value is in nanoseconds, so 20ns == 50MHz.",
-  "CLOCK_PERIOD": 20,
+  "//": "Built for 16.667 ns (60 MHz), signed off at 22 ns (45 MHz) in every corner (signoff.sdc):",
+  "//": "OpenROAD repairs the typical corner only, and the slow corner (1.08 V, 125 C) is about",
+  "//": "1.57 times slower; built for a looser clock it only falls further behind (built for 20,",
+  "//": "21, 24 ns: the slow corner wanted 24.0, 26.4, 29.0 ns). The shuttle's action checks setup",
+  "//": "in every corner (TIMING_VIOLATION_CORNERS ['*']).",
+  "CLOCK_PERIOD": 16.667,
+  "SIGNOFF_SDC_FILE": "dir::signoff.sdc",
 
   "//": "Hold slack margin - Increase them in case you are getting hold violations.",
   "//": "0.2 ns: at TT's 0.1 / 0.05 the routed fast corner had 49 hold violations (-0.12 ns).",
@@ -43,6 +47,9 @@
   "//": "estimates put the slow corner at ~0 ns, routed it was -9.7 ns; with this -5.5 ns, typical",
   "//": "+1.3 -> +3.7 ns, for 0.2 % more cell area.",
   "RUN_POST_GRT_RESIZER_TIMING": 1,
+  "//": "No buffer removal there: built for 16.667 ns it stripped two x1 gates of the buffers the",
+  "//": "design repair gave them (0.38 pF on 0.3, 3.5 ns of slew on 2.5, typical corner).",
+  "GRT_RESIZER_SETUP_BUFFER_REMOVAL": false,
 
   "//": "Routing from Metal1 (the PDK starts at Metal2): with TT's cap at Metal4, Metal3 is the only",
   "//": "other horizontal layer, and v2 overflowed it (85 %, 2207 overflows; with Metal1 3, and",
