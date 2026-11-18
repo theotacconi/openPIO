@@ -216,11 +216,12 @@ CODES = [0b11110, 0b01001, 0b10100, 0b10101, 0b01010, 0b01011, 0b01110, 0b01111,
 
 
 def check_fourb5b(host: Host) -> str | None:
-    """fourb5b_tx on pin 3 into fourb5b_rx, BMC at CLKDIV 4 (844 kbit/s). The preamble is made of
+    """fourb5b_tx on pin 3 into fourb5b_rx, BMC at 844 kbit/s (CLKDIV 4 for the transmitter's 8
+    strobes a bit, 2 for the receiver's 16). The preamble is made of
     nibbles 4 and 3 (01010, 10101: alternating bits); nibble 2 (10100) starts with the two 0s
     that start the symbols."""
     host.load(0, program("fourb5b/fourb5b_tx.asm"), clkdiv_int=4, out_base=3, set_base=3)
-    host.load(1, program("fourb5b/fourb5b_rx.asm"), clkdiv_int=4, in_base=3)
+    host.load(1, program("fourb5b/fourb5b_rx.asm"), clkdiv_int=2, in_base=3)
     rnd = random.Random(9)
     data = list(range(16)) + [rnd.randrange(16) for _ in range(24)]
     host.push(0, [2 * n for n in [4, 3] * 16 + [2] + data])

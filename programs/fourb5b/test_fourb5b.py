@@ -68,7 +68,7 @@ class FourB5BRx(unittest.TestCase):
 
     def run_rx(self, frames, bit=32, host_word_clocks=0):
         bench = Bench(host_word_clocks=host_word_clocks)
-        bench.load(0, (HERE / "fourb5b_rx.asm").read_text(), clkdiv_int=4)       # 32 clocks a bit
+        bench.load(0, (HERE / "fourb5b_rx.asm").read_text(), clkdiv_int=2)       # 32 clocks a bit
         tx = bench.add(BmcTx(PIN, bit, [line_bits(f) for f in frames], start=40, gap=6, end_edge=True))
         bench.start(1)
         bench.run(tx.end + 200)
@@ -97,7 +97,7 @@ class FourB5BRx(unittest.TestCase):
         for lead in (1, 2, 3.5, 6):
             with self.subTest(lead=lead):
                 bench = Bench(pullups=1 << PIN)
-                bench.load(0, (HERE / "fourb5b_rx.asm").read_text(), clkdiv_int=4)
+                bench.load(0, (HERE / "fourb5b_rx.asm").read_text(), clkdiv_int=2)
                 tx = bench.add(BmcTx(PIN, 32, [line_bits(f) for f in frames], start=round(100 + lead * 32),
                                      gap=6, end_edge=True, take=100))
                 bench.start(1)
