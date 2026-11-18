@@ -1004,13 +1004,18 @@ def lin_checksum(pid: int, data: list[int]) -> int:
 class LinSlave:
     """Reference LIN slave (a node of WiredAndBus). Detects a break (11 dominant bits or more;
     the master must send 13), then decodes UART bytes in the middle of their bits: sync (0x55),
-    protected ID (parity checked). For an ID in `publish` it sends the data and checksum one bit
-    after the ID; for an ID in `subscribe` (data length) it receives the master's data and checks
-    the checksum. `frames` lists (ID, data, checksum ok)."""
+    protected ID (parity checked). For an ID in `publish` it sends the data and checksum
+    `space` bits after the ID (the response space; 1 by default) with `spaces` bits between
+    bytes (the inter-byte space; 0 by default; a number, or a function of nothing for one per
+    byte), its bits `send_bit` clocks long (default `bit`: a slave whose clock is off after
+    synchronizing); for an ID in `subscribe` (data length) it receives the master's data and
+    checks the checksum. `frames` lists (ID, data, checksum ok)."""
 
     def __init__(self, bit: int, publish: dict[int, list[int]] = None,
-                 subscribe: dict[int, int] = None) -> None:
-        self.bit = bit
+                 subscribe: dict[int, int] = None, space: float = 1, spaces=0,
+                 send_bit: float | None = None) -> None:
+        self.bit, self.space, self.spaces = bit, space, spaces
+        self.send_bit = send_bit or bit
         self.publish, self.subscribe = publish or {}, subscribe or {}
         self.tx = 1
         self.frames: list[tuple[int, list[int], bool]] = []
@@ -1056,13 +1061,14 @@ class LinSlave:
             ident = b[1] & 0x3F
             if lin_pid(ident) != b[1]:
                 self.errors.append(f"t={t}: PID parity {b[1]:#x}")
-            if ident in self.publish:     # respond one bit after the PID's stop bit
-                data = self.publish[ident]
-                start = self._t0 + 10 * self.bit + self.bit
+            if ident in self.publish:     # respond `space` bits after the PID's stop bit
+                data, bit = self.publish[ident], self.send_bit
+                start = self._t0 + 10 * self.bit + self.space * bit
                 for byte in data + [lin_checksum(b[1], data)]:
                     for lv in [0] + [byte >> i & 1 for i in range(8)] + [1]:
-                        self._send.append((start, lv))
-                        start += self.bit
+                        self._send.append((round(start), lv))
+                        start += bit
+                    start += (self.spaces() if callable(self.spaces) else self.spaces) * bit
                 self._expect = len(data) + 1
             else:
                 self._expect = self.subscribe.get(ident, 0) + 1
