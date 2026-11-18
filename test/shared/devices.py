@@ -1397,10 +1397,15 @@ class DaliGear:
     two equal halves are the stop condition. Forward frames (start bit and 16 bits, MSB first) go
     to `frames`; frames of 9 bits (backward frames of other gear) are ignored. A forward frame in
     `answers` is answered `settle` clocks after its last bit with a backward frame: start bit and
-    8 bits. Checks: start bit 1, frame length, every edge within te / 8 of the half-bit grid."""
+    8 bits. Checks: start bit 1, frame length, every edge within te / 8 of the half-bit grid.
+    A backward frame's half-bit is `answer_te` clocks (default te: a gear whose own oscillator
+    is fast or slow), each of its edges moved by up to +- `jitter` clocks (`seed`)."""
 
-    def __init__(self, te: int, answers: dict[int, int] = None, settle: int = 0) -> None:
+    def __init__(self, te: float, answers: dict[int, int] = None, settle: int = 0,
+                 answer_te: float | None = None, jitter: float = 0, seed: int = 0) -> None:
         self.te, self.answers, self.settle = te, dict(answers or {}), settle
+        self.answer_te, self.jitter = answer_te or te, jitter
+        self._rng = random.Random(seed)
         self.tx = 1
         self.frames: list[int] = []
         self.errors: list[str] = []
@@ -1419,12 +1424,13 @@ class DaliGear:
                 self._t0, self._bits = t, []
         else:
             rel, te = t - self._t0, self.te
-            if bus != self._prev and min(rel % te, te - rel % te) > te // 8:
-                self.errors.append(f"t={t}: edge {rel % te} clocks off the half-bit grid")
-            k, phase = divmod(rel, 2 * te)
-            if phase == te // 2:
+            if bus != self._prev and min(rel % te, te - rel % te) > te / 8:
+                self.errors.append(f"t={t}: edge {rel % te:g} clocks off the half-bit grid")
+            k = int(rel // (2 * te))
+            phase = rel - k * 2 * te
+            if phase >= te / 2 > phase - 1:              # the clock at (or just past) a middle
                 self._first = bus
-            elif phase == te + te // 2:
+            elif phase >= 1.5 * te > phase - 1:
                 if bus != self._first:
                     self._bits.append(bus)
                 else:
@@ -1441,11 +1447,13 @@ class DaliGear:
         frame = sum(b << (15 - i) for i, b in enumerate(bits[1:]))
         self.frames.append(frame)
         if frame in self.answers:
-            t = end + self.settle
+            t, te = end + self.settle, self.answer_te
+            jit = lambda: self._rng.uniform(-self.jitter, self.jitter)   # noqa: E731
             for b in [1] + [self.answers[frame] >> i & 1 for i in range(7, -1, -1)]:
-                self._send += [(t, 1 - b), (t + self.te, b)]
-                t += 2 * self.te
-            self._send.append((t, 1))
+                self._send += [(round(t + jit()), 1 - b), (round(t + te + jit()), b)]
+                t += 2 * te
+            self._send.append((round(t + jit()), 1))
+            self._send.sort()
 
 
 class DaliBus(Device):
