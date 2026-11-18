@@ -2,7 +2,8 @@
 """Modbus RTU receiver fed by the reference UART transmitter: frames of 11-bit characters at
 9600 baud from a 50 MHz clock (CLKDIV 651 + 11 / 256), ended by 3.5 characters of silence; gaps
 of 1.5 characters inside a frame; CRC-16/MODBUS checked on the chip (good and corrupted frames);
-a transmitter 2 % fast or slow; a framing error. A slave on two SMs: the receiver releases the
+a transmitter 2 % fast or slow; random settings inside that (dividers, jitter, gaps, frames
+from 3.5 characters apart); a framing error. A slave on two SMs: the receiver releases the
 transmitter on the peer SM through its IRQ (irq clear peer), so a reply the host queued before the
 request arrived goes out after the request's 3.5 characters of silence, with DE around it.
 sigrok's UART decoder reads the same characters on every line, and its Modbus decoder the
@@ -33,18 +34,21 @@ def words(frame, mark):
     return [b << 8 for b in frame] + [mark]
 
 
-def run(frames, clkdiv=(4, 0), bit=None, inner_gap=0.0, stop_low=frozenset()):
-    """Send the frames as one line: characters back to back (plus inner_gap characters), frames
-    4 characters apart. Returns the bench and the words of the RX FIFO."""
+def run(frames, clkdiv=(4, 0), bit=None, inner_gap=0.0, stop_low=frozenset(), frame_gap=4.0,
+        jitter=0.0, seed=0):
+    """Send the frames as one line: characters back to back (plus inner_gap characters: a number,
+    or a function of nothing for one per gap), frames frame_gap characters apart, each bit's
+    start up to +- jitter clocks off. Returns the bench and the words of the RX FIFO."""
     div = clkdiv[0] + clkdiv[1] / 256
     bit = bit or 8 * div
     data, gaps = [], []
     for f in frames:
         data += f
-        gaps += [inner_gap * 11] * (len(f) - 1) + [4 * 11]
+        gaps += [(inner_gap() if callable(inner_gap) else inner_gap) * 11 for _ in f[1:]] + [frame_gap * 11]
     bench = Bench(pullups=1 << RX)
     bench.load(0, (HERE / "modbus_rx.asm").read_text(), clkdiv_int=clkdiv[0], clkdiv_frac=clkdiv[1])
-    tx = bench.add(UartTx(RX, bit, data, start=round(20 * div), gap=gaps, stop_bits=2, stop_low=stop_low))
+    tx = bench.add(UartTx(RX, bit, data, start=round(20 * div), gap=gaps, stop_bits=2, stop_low=stop_low,
+                          jitter=jitter, seed=seed))
     bench.start(1)
     bench.run(tx.end + round(8 * div))
     k = min(stop_low, default=len(data) - 1) + 1     # past a low stop bit no receiver keeps step
@@ -76,6 +80,26 @@ class ModbusRx(unittest.TestCase):
             with self.subTest(bit=bit):
                 bench, got = run([frame, frame], bit=bit)
                 self.assertEqual(got, 2 * words(frame, GOOD))
+
+    def test_sweep(self):
+        """Random settings inside what modbus_rx.asm promises: a divider from 4 (fractional),
+        a transmitter up to 2 % fast or slow with each bit up to 1/16 bit off, frames of 1 to
+        30 bytes rich in 0x00 and 0xFF, characters back to back or up to 1.5 characters apart,
+        frames 3.5 (the least Modbus allows, in the first two trials) to 8 characters apart.
+        Every byte read, every CRC verdict right."""
+        rnd = seeded(25)
+        for trial in range(4):
+            clkdiv = (rnd.randrange(4, 30), rnd.choice([0, rnd.randrange(256)]))
+            off = [-0.02, 0.02, rnd.uniform(-0.02, 0.02), rnd.uniform(-0.02, 0.02)][trial]
+            frames = [adu(*[rnd.choice([0x00, 0xFF, rnd.randrange(256)]) for _ in range(rnd.randrange(1, 29))])
+                      for _ in range(3)]
+            bad = rnd.randrange(3)
+            frames[bad][rnd.randrange(len(frames[bad]))] ^= 1 << rnd.randrange(8)
+            bit = 8 * (clkdiv[0] + clkdiv[1] / 256) * (1 + off)
+            with self.subTest(trial=trial, clkdiv=clkdiv, off=f"{off:+.2%}"):
+                bench, got = run(frames, clkdiv, bit, inner_gap=lambda: rnd.choice([0, rnd.uniform(0, 1.5)]),
+                                 frame_gap=[3.5, 3.5, rnd.uniform(3.5, 8), rnd.uniform(3.5, 8)][trial], jitter=bit / 16, seed=rnd.randrange(1 << 30))
+                self.assertEqual(got, [w for k, f in enumerate(frames) for w in words(f, BAD if k == bad else GOOD)])
 
     def test_framing_error(self):
         frame = adu(0x01, 0x05, 0x00, 0x13, 0xFF, 0x00)
