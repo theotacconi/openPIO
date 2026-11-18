@@ -10,9 +10,30 @@
 .out_pins 0
 .in_pins 1               ; RX
 .pull_thresh 8
+.push_thresh 8
 
     set pins, 1             ; recessive
     set pindirs, 1
+    jmp start
+; the bytes after the header first: their labels are return addresses (SET: 0..31)
+pbyte:
+    pull block
+    set y, pnext
+    jmp send
+pnext:
+    jmp x--, pbyte
+    jmp start
+rbyte:
+    wait 0 in_base 0 [10]   ; start edge, then the middle of bit 0
+    set y, 7
+rbit:
+    in pins, 1 auto [6]     ; a byte pushed with its 8th bit
+    jmp y--, rbit
+    jmp in_base 0, rnext    ; the stop bit high: on to the next start bit at once (a slave 2 %
+    wait 1 in_base 0        ; fast starts it a strobe and a half early); low: wait for idle
+rnext:
+    jmp x--, rbyte
+    jmp start
 start:
     pull block
     mov isr, osr            ; keep the header
@@ -28,43 +49,24 @@ start:
     mov osr, x
     set y, pid
     jmp send
-pid:
-    mov osr, isr            ; protected ID: header bits 7:0
-    set y, resp
-    jmp send
-resp:
-    mov osr, isr
-    out null, 8
+pid:                        ; the response decided before the protected ID goes out, so that
+    mov osr, isr            ; the program waits for a slave's start bit before the ID's stop
+    out null, 8             ; bit ends: a response may follow the header at once
     out x, 4                ; n
     out y, 4                ; bit 3: the master sends the response
-    mov isr, null
-    jmp !y 3, receive
-    jmp pnext
-pbyte:
-    pull block
+    mov osr, isr            ; protected ID: header bits 7:0
+    jmp !y 3, pid_rx
     set y, pnext
     jmp send
-pnext:
-    jmp x--, pbyte
-    jmp start
-receive:
-    jmp rnext
-rbyte:
-    wait 0 in_base 0 [10]   ; start edge, then the middle of bit 0
-    set y, 7
-rbit:
-    in pins, 1 [6]
-    jmp y--, rbit
-    push
-    wait 1 in_base 0        ; stop bit
-rnext:
-    jmp x--, rbyte
-    jmp start
+pid_rx:
+    mov isr, null
+    set y, rnext
+    jmp send
 send:                       ; the byte in the OSR, LSB first; return address in Y
     set pins, 0 [7]         ; start bit
 bit:
     out pins, 1 [6]
     jmp !osre, bit
-    set pins, 1 [6]         ; stop bit
-    mov osr, y
+    set pins, 1 [2]         ; stop bit: 8 strobes or more with what follows (a slave's start
+    mov osr, y              ; bit is waited for from strobe 6)
     out pc, 6               ; return

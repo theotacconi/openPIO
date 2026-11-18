@@ -183,8 +183,8 @@ class Learn(unittest.TestCase):
 
     def test_lin_breaks(self):
         """A LIN bus recorded from the chip's master: characters once the breaks, 13 bits low
-        before each frame, are left out (asked for: a break fits no format); 8N2, as this
-        master leaves two bit times after every character. The learned receiver gives each
+        before each frame, are left out (asked for: a break fits no format); 8N1, as this
+        master leaves 1.1 bit times after a character it sends on. The learned receiver gives each
         break as a word of zeros with a framing error, then the frame's characters from the
         sync byte on, not characters read from the break's middle."""
         rnd = seeded(22)
@@ -192,7 +192,7 @@ class Learn(unittest.TestCase):
         cap = Capture.from_levels(self.lin(frames))
         self.assertRaises(ValueError, infer_async, cap)
         p = infer_async(cap, breaks=True)
-        self.check(p, (8, None, 2, 1, 8))
+        self.check(p, (8, None, 1, 1, 8))
         self.assertEqual(p.breaks, len(frames))
         want = lambda fs: [[0x55, lin_pid(0x21 + k), *d, lin_checksum(lin_pid(0x21 + k), d)]  # noqa: E731
                            for k, d in enumerate(fs)]
