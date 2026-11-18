@@ -5,8 +5,9 @@ and the terminal's status word; a transmit command answered by the status word a
 one of them with a wrong parity (flagged); response times of 4 and 12 us; a command to an
 absent terminal (no response by 14 us). The terminal checks every word's sync, each mid-bit
 transition within 2 clocks (40 ns) of its place, TX against TXB, odd parity, and that nothing
-drives the bus while the other does. A protocol written after the ISA was frozen (2026-10-28),
-without changing the hardware."""
+drives the bus while the other does. Random settings inside what the controller promises (a
+terminal fast or slow, its zero crossings off, any response time, 1 to 32 words). A protocol
+written after the ISA was frozen (2026-10-28), without changing the hardware."""
 import sys
 import unittest
 from pathlib import Path
@@ -16,6 +17,7 @@ sys.path.insert(0, str(HERE.parents[1] / "test" / "shared"))
 sys.path.insert(0, str(HERE.parents[1] / "sim" / "model"))
 from bench import Bench                                  # noqa: E402
 from devices import Mil1553Rt                            # noqa: E402
+from seeds import seeded                                 # noqa: E402
 
 TX, TXB, INH, RX = 0, 1, 2, 3                            # pins as in the program
 RT = 5
@@ -69,6 +71,35 @@ class Mil1553(unittest.TestCase):
         self.assertEqual(rt.errors, [])
         self.assertEqual(got, [2], "three words missing (3 - 1), none received")
         self.assertEqual(rt.commands, [command(9, 1, 1, 2)])
+
+    def test_sweep(self):
+        """Random settings inside what mil1553_bc.asm promises: a terminal 1 % fast or slow
+        (1553B allows 0.1 %), each of its zero crossings up to 100 ns off (5 clocks; the
+        intervals between crossings then within 200 ns of ideal, past the 150 ns a receiver
+        must take when they are measured from the previous crossing), answering 4 to 12 us
+        after the command, 1 to 32 data words rich in 0x0000 and 0xFFFF, some with a wrong
+        parity. Every word read, its parity verdict right. Measured: crossings 120 ns off pass,
+        150 ns fail (an interval 300 ns long is past the decoder's 1.5 half-bits); 5 % fast
+        or slow passes."""
+        rnd = seeded(23)
+        for trial in range(3):
+            off = [-0.01, 0.01, rnd.uniform(-0.01, 0.01)][trial]
+            n = rnd.randrange(1, 33)
+            data = [rnd.choice([0x0000, 0xFFFF, rnd.randrange(1 << 16)]) for _ in range(n)]
+            bad = [i for i in range(n) if rnd.random() < 0.1]
+            response = rnd.uniform(4, 12)
+            with self.subTest(trial=trial, off=f"{off:+.2%}", words=n, response=f"{response:.1f}"):
+                bench = Bench(pullups=1 << INH)
+                bench.load(0, (HERE / "mil1553_bc.asm").read_text())
+                rt = bench.add(Mil1553Rt(TX, TXB, INH, RX, RT, data, response=response, bad=bad,
+                                         send_bit=50 * (1 + off), jitter=5, seed=rnd.randrange(1 << 30)))
+                bench.start(1)
+                got = self.message(bench, [command(RT, 1, rnd.randrange(1, 31), n)], n + 1)
+                self.assertEqual(rt.errors, [])
+                self.assertEqual(got[0:-1:2], [RT << 11, *data])
+                self.assertEqual([bool(st & PARITY_OK) for st in got[1:-1:2]],
+                                 [True] + [i not in bad for i in range(n)])
+                self.assertEqual(got[-1], 0xFFFF, "every word came")
 
 
 if __name__ == "__main__":

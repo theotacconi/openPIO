@@ -1716,19 +1716,27 @@ class IsoCard(Device):
 
 # ---------------------------------------------------------------------------------- MIL-STD-1553
 
-def mil1553_levels(words: list[tuple[str, int, bool]], half: int) -> list[int]:
-    """Bus levels (+1 / -1), a half-bit of `half` clocks each, of contiguous 1553 words:
-    (sync "cmd" or "data", 16-bit value, wrong parity). Sync: 1.5 bits +1 then 1.5 bits -1 for
-    a command or status word, the opposite for data; bits MSB first, 1 = +1 then -1; odd
-    parity."""
-    out = []
+def mil1553_levels(words: list[tuple[str, int, bool]], half: float, jitter: float = 0,
+                   rnd: random.Random | None = None) -> list[int]:
+    """Bus levels (+1 / -1) a clock, a half-bit of `half` clocks each (fractional: a
+    transmitter fast or slow), of contiguous 1553 words: (sync "cmd" or "data", 16-bit value,
+    wrong parity). Sync: 1.5 bits +1 then 1.5 bits -1 for a command or status word, the
+    opposite for data; bits MSB first, 1 = +1 then -1; odd parity. Each zero crossing moves by
+    up to +- `jitter` clocks (`rnd`)."""
+    halves = []                                          # (level, length in half-bits)
     for sync, value, bad in words:
         s = 1 if sync == "cmd" else -1
-        out += [s] * 3 * half + [-s] * 3 * half
+        halves += [(s, 3), (-s, 3)]
         bits = [value >> (15 - i) & 1 for i in range(16)]
         bits.append((sum(bits) + 1) % 2 ^ bad)
         for b in bits:
-            out += [1 if b else -1] * half + [-1 if b else 1] * half
+            halves += [(1 if b else -1, 1), (-1 if b else 1, 1)]
+    out, t, end = [], 0.0, 0
+    for k, (level, n) in enumerate(halves):
+        t += n * half
+        cross = t + (rnd.uniform(-jitter, jitter) if jitter and k + 1 < len(halves) else 0)
+        out += [level] * (round(cross) - end)
+        end = round(cross)
     return out
 
 
@@ -1743,13 +1751,16 @@ class Mil1553Rt(Device):
     the middle of the last word's parity bit to the middle of the status sync, 4..12 us): a
     receive command (T/R = 0) once its data words are in, with the status word; a transmit
     command with the status word and `data` (word count words; indices in `bad` with the
-    wrong parity). Nothing may drive the bus while the other does."""
+    wrong parity), its bits `send_bit` clocks long (default `bit`) and each zero crossing up to
+    +- `jitter` clocks off (`seed`). Nothing may drive the bus while the other does."""
 
     def __init__(self, tx: int, txb: int, inh: int, rx: int, address: int, data: list[int],
-                 bit: int = 50, response: float = 4, bad=()) -> None:
+                 bit: int = 50, response: float = 4, bad=(), send_bit: float | None = None,
+                 jitter: float = 0, seed: int = 0) -> None:
         super().__init__()
         self.tx, self.txb, self.inh, self.rx = tx, txb, inh, rx
         self.address, self.data, self.bit, self.response = address, data, bit, response
+        self.send_bit, self.jitter, self._rnd = send_bit or bit, jitter, random.Random(seed)
         self.bad = set(bad)
         self.bc: dict[int, int] = {}                     # clock -> controller's level
         self.start = None                                # the controller's word in progress
@@ -1822,8 +1833,8 @@ class Mil1553Rt(Device):
         words = [("cmd", self.address << 11, False)]
         if transmit:
             words += [("data", self.data[i], i in self.bad) for i in range(count)]
-        self.out = mil1553_levels(words, self.bit // 2)
-        self.out_t = parity_mid + round(self.response * self.bit) - 3 * self.bit // 2
+        self.out = mil1553_levels(words, self.send_bit / 2, self.jitter, self._rnd)
+        self.out_t = parity_mid + round(self.response * self.bit - 1.5 * self.send_bit)
 
 
 # ---------------------------------------------------------------------------------- MFM
