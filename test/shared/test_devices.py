@@ -8,7 +8,7 @@ import unittest
 
 from bench import Bench, Script
 from seeds import seeded
-from devices import (BmcRx, BmcTx, DaliBus, DaliGear, WiredAndBus, CanNode, HdlcRx, I2cTarget,
+from devices import (BmcRx, BmcTx, DaliBus, DaliGear, WiredAndBus, CanNode, HdlcRx, I2cTarget, I2cTiming,
                      I2sCodec, SpiMaster, SpiSlave, UartRx, UartTx, Ws2812Chain, can_crc15, crc7_sd,
                      crc8_maxim, crc16_ccitt, crc16_modbus, crc16_usb, crc16_x25)
 
@@ -29,11 +29,13 @@ def spi_master(mode, words, half=3, sck=0, mosi=1, bits=8, start=5):
     return Script(steps), t
 
 
-def i2c_master(write, read=0, half=4, scl=0, sda=1):
-    """Ideal I2C master (open drain): START, the `write` bytes, `read` bytes (ACK after each but
-    the last, NACK after it), STOP. Data changes one clock after SCL falls."""
+def i2c_master(write, read=0, half=4, scl=0, sda=1, start=10):
+    """Ideal I2C master (open drain): START at clock `start`, the `write` bytes, `read` bytes (ACK
+    after each but the last, NACK after it), STOP. Data changes one clock after SCL falls: SCL low
+    half + 1 clocks, high half; START held half, STOP set up half; SDA rises for the STOP half
+    clocks before the end returned."""
     low, rel = (lambda p: {p: 0}), (lambda p: {p: None})
-    t = 10
+    t = start
     steps = [(t, low(sda)), (t + half, low(scl))]
     t += 2 * half
 
@@ -143,6 +145,33 @@ class I2c(unittest.TestCase):
         target = bench.add(I2cTarget(0, 1, 0x50))
         bench.run(end)
         self.assertEqual(target.transactions[0]["acks"], [])
+
+    def judge(self, us, *masters):
+        bench = Bench(pullups=0b11)
+        for m, _ in masters:
+            bench.add(m)
+        bench.add(I2cTarget(0, 1, 0x50))
+        judge = bench.add(I2cTiming(0, 1, us, "fm"))
+        bench.run(max(end for _, end in masters) + 10)
+        return judge.errors
+
+    def test_timing_met(self):
+        """At 3 clocks a microsecond Fast-mode asks SCL low 3.9 clocks (the master: 5), high,
+        START hold and STOP setup 1.8 (4), the bus free 3.9 (4)."""
+        first = i2c_master([0x50 << 1, 0x12])
+        self.assertEqual(self.judge(3, first, i2c_master([0x50 << 1], start=first[1])), [])
+
+    def test_timing_low_too_short(self):
+        """At 4 clocks a microsecond SCL low must last 5.2 clocks: every low of 5 is caught."""
+        errors = self.judge(4, i2c_master([0x50 << 1, 0x12]))
+        self.assertEqual(len(errors), 18, "every SCL low after the first fall")
+        self.assertTrue(all("tLOW 5 clocks" in e for e in errors), errors[:2])
+
+    def test_timing_bus_not_free(self):
+        """A START 2 clocks after a STOP: the bus must be free 3.9."""
+        first = i2c_master([0x50 << 1])
+        errors = self.judge(3, first, i2c_master([0x50 << 1], start=first[1] - 2))
+        self.assertEqual([e.split(": ", 1)[1] for e in errors], ["tBUF 2 clocks, fm needs 3.9"])
 
 
 class Can(unittest.TestCase):

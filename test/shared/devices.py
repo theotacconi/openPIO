@@ -244,20 +244,87 @@ class SpiMaster(Device):
 
 # ---------------------------------------------------------------------------------- I2C
 
+# UM10204 (rev. 7) Table 10, minimums in us: Standard-mode (100 kHz), Fast-mode (400 kHz), Fast-mode
+# Plus (1 MHz). tVD;DAT and tVD;ACK are maximums: a target may change SDA that late after SCL falls.
+I2C_TIMING = {
+    "sm": {"tHD;STA": 4.0, "tLOW": 4.7, "tHIGH": 4.0, "tSU;STA": 4.7, "tSU;DAT": 0.25, "tSU;STO": 4.0,
+           "tBUF": 4.7, "tVD;DAT": 3.45},
+    "fm": {"tHD;STA": 0.6, "tLOW": 1.3, "tHIGH": 0.6, "tSU;STA": 0.6, "tSU;DAT": 0.1, "tSU;STO": 0.6,
+           "tBUF": 1.3, "tVD;DAT": 0.9},
+    "fm+": {"tHD;STA": 0.26, "tLOW": 0.5, "tHIGH": 0.26, "tSU;STA": 0.26, "tSU;DAT": 0.05, "tSU;STO": 0.26,
+            "tBUF": 0.5, "tVD;DAT": 0.45},
+}
+I2C_FSCL = {"sm": 0.1, "fm": 0.4, "fm+": 1.0}             # MHz
+
+
+class I2cTiming(Device):
+    """Judge of the I2C bus timing (UM10204 Table 10) in `mode` ("sm", "fm" or "fm+"), at `us`
+    clocks a microsecond: after the first START, every SCL low lasts tLOW and every high tHIGH,
+    SDA settles tSU;DAT before SCL rises, a START is held tHD;STA before SCL falls, a repeated
+    START comes tSU;STA after SCL rises, a STOP tSU;STO after it, and the bus is free tBUF
+    between a STOP and the next START. It only watches the lines."""
+
+    def __init__(self, scl: int, sda: int, us: float, mode: str = "fm") -> None:
+        super().__init__()
+        self.scl, self.sda, self.mode = scl, sda, mode
+        self.min = {k: v * us for k, v in I2C_TIMING[mode].items()}
+        self._prev: tuple[int, int] | None = None
+        self._busy = False
+        self._fall = self._rise = self._sda = self._start = self._stop = None
+
+    def _check(self, t: int, what: str, since: int | None) -> None:
+        if since is not None and t - since < self.min[what] - 1e-9:
+            self.error(t, f"{what} {t - since} clocks, {self.mode} needs {self.min[what]:.1f}")
+
+    def tick(self, t: int, levels: int) -> None:
+        scl, sda = _bit(levels, self.scl), _bit(levels, self.sda)
+        if self._prev is None:
+            self._prev = scl, sda
+            return
+        pscl, psda = self._prev
+        self._prev = scl, sda
+        if scl and not pscl:
+            if self._busy:
+                self._check(t, "tLOW", self._fall)
+                self._check(t, "tSU;DAT", self._sda)
+            self._rise, self._start = t, None
+        elif pscl and not scl:
+            if self._start is not None:
+                self._check(t, "tHD;STA", self._start)
+            elif self._busy:
+                self._check(t, "tHIGH", self._rise)
+            self._fall = t
+        elif sda != psda:
+            if not scl:
+                self._sda = t
+            elif not sda:                                # START, or a repeated one
+                if self._busy:
+                    self._check(t, "tSU;STA", self._rise)
+                else:
+                    self._check(t, "tBUF", self._stop)
+                self._busy, self._start = True, t
+            else:                                        # STOP
+                self._check(t, "tSU;STO", self._rise)
+                self._busy, self._stop = False, t
+
+
 class I2cTarget(Device):
     """I2C target (open drain: it only pulls SCL / SDA low) at a 7-bit `address`.
 
     Follows START, address + R/W, ACK, data bytes, master ACK / NACK on reads, repeated START and
     STOP. Writes are ACKed and stored; reads send `read_data`. stretch: clocks to hold SCL low
-    after every byte (clock stretching). Checks: SDA never changes on a clock where SCL changes,
-    and START / STOP only between bytes. `transactions` lists dicts addr, rw, data, acks."""
+    after every byte (clock stretching), or a function of nothing giving them byte by byte.
+    valid: clocks after SCL falls before its SDA changes (tVD;DAT, tVD;ACK). Checks: SDA never
+    changes on a clock where SCL changes, and START / STOP only between bytes. `transactions`
+    lists dicts addr, rw, data, acks."""
 
     def __init__(self, scl: int, sda: int, address: int, read_data: list[int] = (),
-                 stretch: int = 0) -> None:
+                 stretch=0, valid: int = 0) -> None:
         super().__init__()
         self.scl, self.sda, self.address = scl, sda, address
         self.read_data = list(read_data)
-        self.stretch = stretch
+        self.stretch, self.valid = stretch, valid
+        self._pending: tuple[int, int | None] | None = None  # (clock, SDA level) after SCL fell
         self.transactions: list[dict] = []
         self._prev: tuple[int, int] | None = None
         self._state = "idle"                            # idle, addr, write, read, ignore
@@ -267,7 +334,11 @@ class I2cTarget(Device):
         self._hold_scl = 0
         self._acking = False                            # this ACK clock is ours (address / write)
 
-    def _sda(self, level: int | None) -> None:
+    def _sda(self, level: int | None, t: int | None = None) -> None:
+        if t is not None and self.valid:                 # after SCL fell: tVD;DAT later
+            self._pending = t + self.valid, level
+            return
+        self._pending = None
         if level == 0:
             self.drive[self.sda] = 0
         else:
@@ -275,6 +346,8 @@ class I2cTarget(Device):
 
     def tick(self, t: int, levels: int) -> None:
         scl, sda = _bit(levels, self.scl), _bit(levels, self.sda)
+        if self._pending and t >= self._pending[0]:
+            self._sda(self._pending[1])
         if self._hold_scl:
             self._hold_scl -= 1
             if not self._hold_scl:
@@ -314,7 +387,7 @@ class I2cTarget(Device):
                     cur["addr"], cur["rw"] = self._shift >> 1, self._shift & 1
                     self._state = "write" if cur["addr"] == self.address else "ignore"
                     if self._state == "write":
-                        self._sda(0)
+                        self._sda(0, t)
                         self._acking = True
                         cur["acks"].append(1)
                         if cur["rw"]:
@@ -322,23 +395,24 @@ class I2cTarget(Device):
                 elif self._state == "write":
                     cur["data"].append(self._shift)
                     cur["acks"].append(1)
-                    self._sda(0)
+                    self._sda(0, t)
                     self._acking = True
                 elif self._state == "read":
-                    self._sda(None)                     # master drives its ACK
-                if self.stretch and self._state != "ignore":
+                    self._sda(None, t)                  # master drives its ACK
+                hold = self.stretch() if callable(self.stretch) else self.stretch
+                if hold and self._state != "ignore":
                     self.drive[self.scl] = 0
-                    self._hold_scl = self.stretch
+                    self._hold_scl = hold
             elif self._bit == 9:                        # end of the ACK clock
                 self._bit, self._shift, self._acking = 0, 0, False
-                self._sda(None)
+                self._sda(None, t)
                 if self._state == "read":
                     value = self.read_data.pop(0) if self.read_data else 0xFF
                     cur["data"].append(value)
                     self._tx = [value >> i & 1 for i in range(7, -1, -1)]
-                    self._sda(self._tx.pop(0))
+                    self._sda(self._tx.pop(0), t)
             elif self._state == "read" and self._tx:
-                self._sda(self._tx.pop(0))
+                self._sda(self._tx.pop(0), t)
 
 
 # ---------------------------------------------------------------------------------- USB
