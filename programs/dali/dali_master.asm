@@ -1,17 +1,20 @@
 .program dali_master
 ; DALI (IEC 62386-101) bus master through an inverting transceiver: pin out_base high pulls the
 ; bus low, pin in_base reads the bus inverted; INV makes the PAU work with bus levels.
-; Manchester, 1 = the bus rising in the middle of the bit; half-bit Te = 8 strobes: 1200 baud
-; from 50 MHz is CLKDIV 2604 + 43 / 256.
+; Manchester, 1 = the bus rising in the middle of the bit; half-bit Te = 16 strobes: 1200 baud
+; from 50 MHz is CLKDIV 1302 + 21 / 256. Backward frames are received with PAU_BAUD 15: the
+; decoder takes 1.5 PAU half-bits between edges as two halves, 1.41 Te here, halfway between
+; the longest half-bit (500 us) and the shortest double (666.7 us) a DALI receiver must take,
+; 20 % either way of Te (with 16, gear 19 % fast was misread). Measured: 25 % either way.
 ; TX FIFO: one forward frame a word (address byte, data byte): start bit, 16 bits MSB first,
 ; then the bus idles high (stop bits). RX FIFO: one word a forward frame: 0x0100 | the answer
-; for a backward frame starting within 248 strobes (12.9 ms) of the forward frame's last bit,
+; for a backward frame starting within 496 strobes (12.9 ms) of the forward frame's last bit,
 ; 0 for no answer. A backward frame that is not start bit + 8 bits (two gear answering at once)
 ; raises IRQ 0 and is pushed as far as it was read.
 .out_pins 0
 .set_pins 0 1
 .in_pins 1
-.pau code=manchester inv baud=8
+.pau code=manchester inv baud=16
 .shift_out left
 .shift_in left
 
@@ -29,14 +32,15 @@
     out pins, 16            ; waits for room: the queue holds 16 bits
     set pau_ctl, 0          ; drain: the pin returns to the latch after the last bit
     wait 1 pau tx_idle
-    set dlymul, 8
-    wait 1 in_base 0 timeout    ; bus low: a backward frame starts; or 31 x 8 strobes
-    set dlymul, 1
+    set dlymul, 16
+    wait 1 in_base 0 timeout    ; bus low: a backward frame starts; or 31 x 16 strobes
+    set dlymul, 2
     jmp timeout, none
+    set pau_baud, 15
     set pau_ctl, rx         ; before the start bit's middle: its rising edge is the first one
     set x, 8
 bit:
-    wait 1 pau rx_ready timeout ; the next bit within 31 strobes (2 bit times)
+    wait 1 pau rx_ready timeout ; the next bit within 62 strobes (2 bit times)
     jmp timeout, short
     in pins, 1
     jmp x--, bit
@@ -47,5 +51,6 @@ short:
 done:
     set pau_ctl, 0
 none:
+    set pau_baud, 16        ; for the next forward frame
     push                    ; ISR: 0x0100 | answer, or 0 (cleared by the last push)
 .wrap

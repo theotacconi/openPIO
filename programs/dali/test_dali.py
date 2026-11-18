@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """DALI master against reference control gear on a DALI bus behind an inverting transceiver:
-forward frames at 1200 baud from a 50 MHz clock (CLKDIV 2604 + 43 / 256), Manchester on the
+forward frames at 1200 baud from a 50 MHz clock (CLKDIV 1302 + 21 / 256), Manchester on the
 PAU with INV; backward frames received by the PAU 5.5 ms and 10.5 ms after the forward frame
 (the settling window of IEC 62386-101), no answer, and two gear answering at once; random
 settings inside what the master promises (a divider, gear whose half-bits are 20 % short or
@@ -19,10 +19,10 @@ from seeds import seeded                                 # noqa: E402
 
 TX, RX = 0, 1
 MS = 1200 / 500                                          # half-bits (Te) a millisecond
-HALF = 8                                                 # strobes a half-bit (the program's PAU_BAUD)
+HALF = 16                                                # strobes a half-bit (the program's PAU_BAUD)
 
 
-def run(frames, gear, clkdiv=(3, 0)):
+def run(frames, gear, clkdiv=(2, 0)):
     """Send the forward frames; gear: (answers, settle in Te) per DaliGear."""
     te = round(HALF * (clkdiv[0] + clkdiv[1] / 256))
     gear = [DaliGear(te, answers=a, settle=round(s * te)) for a, s in gear]
@@ -38,11 +38,11 @@ def run(frames, gear, clkdiv=(3, 0)):
 class DaliMaster(unittest.TestCase):
 
     def test_1200_baud_from_50_mhz(self):
-        bench, gear = run([0xFF90], [({0xFF90: 0x04}, 5.5 * MS)], clkdiv=(2604, 43))
+        bench, gear = run([0xFF90], [({0xFF90: 0x04}, 5.5 * MS)], clkdiv=(1302, 21))
         self.assertEqual((gear[0].frames, bench.received[0]), ([0xFF90], [0x0104]))
         self.assertEqual(bench.errors(), [])
         bench.run(1000)
-        self.assertEqual(sigrok_dali(bench, RX, HALF * (2604 + 43 / 256)),
+        self.assertEqual(sigrok_dali(bench, RX, HALF * (1302 + 21 / 256)),
                          [("forward", 0xFF90), ("backward", 0x04)], "sigrok")
 
     def test_answers_and_silence(self):
@@ -53,7 +53,7 @@ class DaliMaster(unittest.TestCase):
         self.assertEqual(gear[0].frames, frames)
         self.assertEqual(bench.received[0], [0, 0x01A5, 0x015A, 0])
         self.assertEqual(bench.errors(), [])
-        self.assertEqual(sigrok_dali(bench, RX, HALF * 3),
+        self.assertEqual(sigrok_dali(bench, RX, HALF * 2),
                          [("forward", 0x0105), ("forward", 0x0190), ("backward", 0xA5),
                           ("forward", 0x03A0), ("backward", 0x5A), ("forward", 0x05A1)], "sigrok")
         self.assertFalse(bench.chip.sms[0].irq_flags[0])
@@ -64,13 +64,14 @@ class DaliMaster(unittest.TestCase):
         self.assertEqual(bench.errors(), [])
 
     def test_sweep(self):
-        """Random settings inside what dali_master.asm promises: a divider from 4 (fractional),
+        """Random settings inside what dali_master.asm promises: a divider from 2 (fractional),
         gear whose backward half-bits are up to 20 % short or long (a receiver takes 333.3 to
         500 us, IEC 62386-101), each edge up to 1/16 half-bit off, answering at any time in the
-        5.5 to 10.5 ms window; answers 0x00, 0xFF and random. Every answer read, no IRQ."""
+        5.5 to 10.5 ms window; answers 0x00, 0xFF and random. Every answer read, no IRQ.
+        Measured: 25 % either way passes; with PAU_BAUD 8 for both ways, 19 % short failed."""
         rnd = seeded(19)
         for trial in range(4):
-            clkdiv, frac = rnd.randrange(4, 21), rnd.choice([0, rnd.randrange(256)])
+            clkdiv, frac = rnd.randrange(2, 11), rnd.choice([0, rnd.randrange(256)])
             off = [-0.2, 0.2, rnd.uniform(-0.2, 0.2), rnd.uniform(-0.2, 0.2)][trial]   # the limits too
             te = HALF * (clkdiv + frac / 256)
             queries = [rnd.randrange(0x10000) | 0x0100 for _ in range(3)]
