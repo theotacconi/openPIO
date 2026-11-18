@@ -1,6 +1,8 @@
 .program modbus_rx
 ; Modbus RTU receiver: 11-bit characters (start, 8 data bits LSB first, 2 stop bits: RTU without
-; parity), a frame ends after 3.5 characters of silence, CRC-16/MODBUS checked on the chip.
+; parity), a frame ends after 2.9 characters of silence, CRC-16/MODBUS checked on the chip. The
+; next frame may start 3.5 characters after the last (the least Modbus allows), from a
+; transmitter up to 2 % fast or slow; characters inside a frame up to 1.5 characters apart.
 ; Pin: in_base (RX). 8 strobes a bit: baud = clk / (8 x CLKDIV); 9600 baud from 50 MHz is CLKDIV
 ; 651 + 11 / 256. Cycles below count from a start edge, seen at cycle 1-2.
 ; RX FIFO: each byte in bits 15:8 (low byte 0), then 0x0001 after a frame with a good CRC,
@@ -9,7 +11,7 @@
 .in_pins 0
 .crc width=16 poly=0x8005 init=ones     ; bits LSB first: CRC-16/MODBUS, 0 after a good CRC
 
-    set timeout_val, 29     ; x DLYMUL 11: 319 strobes from cycle 78, 3.5 characters from the end
+    set timeout_val, 24     ; x DLYMUL 11: 264 strobes from cycle 78, 2.9 characters from the end
     wait 1 in_base 0        ; an idle line first
 .wrap_target
     pau crc_reset

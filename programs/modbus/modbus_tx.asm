@@ -14,7 +14,8 @@
     set pindirs, 3
 .wrap_target
 top:
-    irq wait 1              ; until the receiver sees the end of a request
+    irq wait 1 [31]         ; until the receiver sees the end of a request (2.9 characters of
+    nop [23]                ; silence), then 0.6 more: the reply starts 3.8 characters after it
     pull
     out x, 16
     jmp x--, reply          ; N - 1 more bytes after the first
