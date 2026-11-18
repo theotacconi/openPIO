@@ -83,7 +83,7 @@ It is tested on UART, LIN, USB, CAN, HDLC, DALI, MFM, biphase mark, SPI, SD card
 | State machines | 2, each with its own program memory (an SRAM) and FIFO memory (an SRAM) |
 | Pins | 14 usable: 8 bidirectional, 6 input + output on separate pads |
 | Host interface | SPI, plus an interrupt line |
-| Clock | 45 MHz signed off in every corner, down to 1.08 V and 125 C; about 74 MHz at typical conditions (1.2 V, 25 C), where the example programs' 50 MHz and the 60 MHz that receiving 10BASE-T needs are bench rates, not signed off |
+| Clock | 50 MHz, the clock the example programs count; 45 MHz signed off in every corner, down to 1.08 V and 125 C; about 74 MHz at typical conditions (1.2 V, 25 C), where 50 MHz and the 60 MHz that receiving 10BASE-T needs run with margin but are not signed off |
 | Size | 33k standard cells and 4 SRAMs, 10 mW |
 
 ## Documentation
