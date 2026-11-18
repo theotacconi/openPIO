@@ -1397,7 +1397,8 @@ class DaliGear:
     two equal halves are the stop condition. Forward frames (start bit and 16 bits, MSB first) go
     to `frames`; frames of 9 bits (backward frames of other gear) are ignored. A forward frame in
     `answers` is answered `settle` clocks after its last bit with a backward frame: start bit and
-    8 bits. Checks: start bit 1, frame length, every edge within te / 8 of the half-bit grid.
+    8 bits. Checks: start bit 1, frame length, every edge within te / 8 of the half-bit grid,
+    and 2.4 ms (5.76 te) of idle bus after its answer before the next forward frame.
     A backward frame's half-bit is `answer_te` clocks (default te: a gear whose own oscillator
     is fast or slow), each of its edges moved by up to +- `jitter` clocks (`seed`)."""
 
@@ -1413,6 +1414,7 @@ class DaliGear:
         self._t0: int | None = None
         self._send: list[tuple[int, int]] = []           # (clock, level) of a backward frame
         self._own = False                                # until the bus is high after it
+        self._answered: int | None = None                # when its answer's bus went idle
 
     def step(self, t: int, bus: int) -> None:
         if self._send:
@@ -1424,10 +1426,15 @@ class DaliGear:
         if self._own:                                    # its own frame's last rise, slow
             self._own = not bus
             self._prev = bus
+            self._answered = t                           # the bus idle from here
             return
         if self._t0 is None:
             if self._prev and not bus:
                 self._t0, self._bits = t, []
+                if self._answered is not None and t - self._answered < 5.76 * self.te:
+                    self.errors.append(f"t={t}: forward frame {(t - self._answered) / self.te:.2f} "
+                                       f"te after an answer, under 2.4 ms")
+                self._answered = None
         else:
             rel, te = t - self._t0, self.te
             if bus != self._prev and min(rel % te, te - rel % te) > te / 8:
