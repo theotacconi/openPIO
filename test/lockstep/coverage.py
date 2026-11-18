@@ -43,6 +43,15 @@ def points(directory: Path) -> dict[tuple, tuple[dict, int]]:
     return out
 
 
+def point_type(fields: dict) -> str:
+    """A point's type: its 't' field, or (Verilator before 5.0.2x, as Ubuntu 24.04's 5.020 is,
+    writes none) the start of its page, 'v_line/fifo' for a line of fifo.v."""
+    if "t" in fields:
+        return fields["t"]
+    m = re.match(r"v_([a-z]+)/", fields.get("page", ""))
+    return m[1] if m else "?"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("directory", type=Path, help="the $OPENPIO_COVERAGE directory")
@@ -55,7 +64,7 @@ def main() -> int:
     table: dict[str, dict[str, list[int]]] = defaultdict(lambda: defaultdict(lambda: [0, 0]))
     missed = []
     for fields, n in pts.values():
-        f, kind = Path(fields.get("f", "?")).name, fields.get("t", "?")
+        f, kind = Path(fields.get("f", "?")).name, point_type(fields)
         kind = "toggle" if kind == "toggle" else "line" if kind in ("line", "block") else kind
         table[f][kind][0] += n > 0
         table[f][kind][1] += 1
