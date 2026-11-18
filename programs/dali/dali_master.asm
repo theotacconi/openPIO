@@ -33,6 +33,8 @@
     set pau_ctl, 0          ; drain: the pin returns to the latch after the last bit
     wait 1 pau tx_idle
     set dlymul, 16
+    wait 0 in_base 0 timeout    ; the bus high again: its own last half-bit may end low, and
+                                ; the input sees the bus rise late (slow, and 3 clocks behind)
     wait 1 in_base 0 timeout    ; bus low: a backward frame starts; or 31 x 16 strobes
     set dlymul, 2
     jmp timeout, none

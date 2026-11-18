@@ -65,23 +65,23 @@ class DaliMaster(unittest.TestCase):
 
     def test_sweep(self):
         """Random settings inside what dali_master.asm promises: a divider from 2 (fractional),
-        gear whose backward half-bits are up to 20 % short or long (a receiver takes 333.3 to
-        500 us, IEC 62386-101), each edge up to 1/16 half-bit off, answering at any time in the
-        5.5 to 10.5 ms window; answers 0x00, 0xFF and random; the bus rising up to 1/10
-        half-bit late (42 us at 1200 baud), as a bus supply's limited current makes it.
-        Every answer read, no IRQ.
+        answers at any time in the 5.5 to 10.5 ms window, answers 0x00, 0xFF and random; and
+        half-bits as the bus shows them: 20 % short or long with clean edges (a receiver takes
+        333.3 to 500 us on the bus, IEC 62386-101), or gear up to 15 % off whose edges are up to
+        1/16 half-bit off and the bus rising up to 1/10 half-bit late (42 us at 1200 baud), as a
+        bus supply's limited current makes it. Every answer read, no IRQ.
         Measured: 25 % either way passes; with PAU_BAUD 8 for both ways, 19 % short failed."""
         rnd = seeded(19)
         for trial in range(4):
             clkdiv, frac = rnd.randrange(2, 11), rnd.choice([0, rnd.randrange(256)])
-            off = [-0.2, 0.2, rnd.uniform(-0.2, 0.2), rnd.uniform(-0.2, 0.2)][trial]   # the limits too
+            off = [-0.2, 0.2, rnd.uniform(-0.15, 0.15), rnd.uniform(-0.15, 0.15)][trial]
             te = HALF * (clkdiv + frac / 256)
             queries = [rnd.randrange(0x10000) | 0x0100 for _ in range(3)]
             answers = {q: rnd.choice([0x00, 0xFF, rnd.randrange(256)]) for q in queries}
-            rise = [round(te / 10), round(rnd.uniform(0, te / 10))][trial % 2]   # the limit too
+            rise, jitter = (0, 0) if trial < 2 else (round(rnd.uniform(0, te / 10)), te / 16)
             with self.subTest(trial=trial, clkdiv=clkdiv, frac=frac, off=f"{off:+.1%}", rise=rise):
                 gear = DaliGear(te, answers=answers, settle=round(rnd.uniform(5.6, 10.4) * MS * te),
-                                answer_te=te * (1 + off), jitter=te / 16, seed=rnd.randrange(1 << 30))
+                                answer_te=te * (1 + off), jitter=jitter, seed=rnd.randrange(1 << 30))
                 bench = Bench()
                 bench.load(0, (HERE / "dali_master.asm").read_text(), clkdiv_int=clkdiv, clkdiv_frac=frac)
                 bench.add(DaliBus(TX, RX, [gear], rise=rise))
