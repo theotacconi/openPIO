@@ -13,7 +13,7 @@ toggle coverage, from the counts the benches write with $OPENPIO_COVERAGE set (v
 (in the dev container: ../../scripts/dev.sh env OPENPIO_COVERAGE=... python3 ...). A point is
 covered when any bench reached it once: a line run, a branch taken, a bit of a signal toggled
 (both ways). The state machines (and FIFOs) count as one: a point is covered when any of them
-reached it.
+reached it. Two branches cannot be taken, and are listed with the reason (UNREACHABLE).
 """
 from __future__ import annotations
 
@@ -24,6 +24,20 @@ from collections import defaultdict
 from pathlib import Path
 
 POINT = re.compile(r"^C '(.*)' (\d+)$")
+SRC = Path(__file__).resolve().parents[2] / "src"
+UNREACHABLE = {                             # (file, text on the point's line): why
+    ("openpio.v", "hsm = N_SM == 2"): "N_SM is 2, a constant",
+    ("openpio_sm.v", "else if (op == OP_SET)"): "every other opcode is decoded before it",
+}
+
+
+def unreachable(f: str, line: int) -> str | None:
+    """Why the branch on line `line` of src/`f` cannot be taken, or None."""
+    try:
+        text = (SRC / f).read_text().splitlines()[line - 1]
+    except (OSError, IndexError):
+        return None
+    return next((why for (g, t), why in UNREACHABLE.items() if g == f and t in text), None)
 
 
 def points(directory: Path) -> dict[tuple, tuple[dict, int]]:
@@ -86,7 +100,8 @@ def main() -> int:
     if args.uncovered:
         print()
         for f, line, kind, comment, where in sorted(missed):
-            print(f"{f}:{line}  {kind} {comment}  ({where})")
+            why = unreachable(f, line)
+            print(f"{f}:{line}  {kind} {comment}  ({where})" + (f"  unreachable: {why}" if why else ""))
     return 0
 
 
