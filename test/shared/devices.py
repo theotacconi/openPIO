@@ -1290,19 +1290,24 @@ def nec_levels(frame) -> list[tuple[int, float]]:
 class NecRemote(Device):
     """Output of an IR receiver module (active low, idle high) for NEC remote frames sent from
     clock `start`, `gap` microseconds apart; `us` clocks per microsecond. A frame is
-    (address, command), "repeat", or ("glitch", length in us): a lone burst."""
+    (address, command), "repeat", or ("glitch", length in us): a lone burst. A module stretches
+    or shortens every mark by `mark` us (its output's pulse width error, the spaces shorter or
+    longer as much), and moves each edge by up to +- `jitter` us (`seed`)."""
 
-    def __init__(self, pin: int, frames: list, us: float = 1, start: int = 0, gap: float = 5000):
+    def __init__(self, pin: int, frames: list, us: float = 1, start: int = 0, gap: float = 5000,
+                 mark: float = 0, jitter: float = 0, seed: int = 0):
         super().__init__()
+        rng = random.Random(seed)
         self.pin = pin
         self.schedule: list[tuple[int, int]] = []
         t = start
         for f in frames:
             levels = [(0, f[1])] if f[0] == "glitch" else nec_levels(f)
             for lv, length in levels:
-                self.schedule.append((round(t), lv))
+                e = t + (mark * us if lv else 0) + rng.uniform(-jitter, jitter) * us
+                self.schedule.append((round(e), lv))
                 t += length * us
-            self.schedule.append((round(t), 1))
+            self.schedule.append((round(t + mark * us), 1))
             t += gap * us
         self.end = round(t)
         self.drive = {pin: 1}
