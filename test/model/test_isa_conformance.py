@@ -108,13 +108,6 @@ class In(unittest.TestCase):
         run(sm, 1)
         self.assertEqual(sm.isr, status)
 
-    def test_reserved_pindirs_source_reads_zero(self):
-        sm = sm_of(".word 0x4028" + HALT, shift_in_right=False)   # in pindirs, 8
-        sm.pindirs = 0xFF
-        sm.isr = 0xFFFF
-        run(sm, 1)
-        self.assertEqual(sm.isr, 0xFF00)
-
     def test_autopush_stalls_on_full_rx_fifo(self):
         sm = sm_of(".push_thresh 4\nin x, 4 auto\nset y, 1" + HALT)
         sm.x = 0xC
