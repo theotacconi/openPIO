@@ -1,4 +1,4 @@
-// tt_um_theotacconi_openpio.v - Tiny Tapeout top level of openPIO v2 (HOST.md, Pins and SPI).
+// tt_um_theotacconi_openpio.v - Tiny Tapeout top level of openPIO v3 (HOST.md, Pins and SPI).
 //
 //   ui_in[0] SCLK, ui_in[1] MOSI, ui_in[2] CS_N      uo_out[0] MISO, uo_out[1] HOST_IRQ
 //   pin k = uio[k] (k < 8): bidirectional, direction latch, open drain
