@@ -1,6 +1,7 @@
-# cocotb tests (test/test.py) on the RTL, and the RTL against the model in lockstep
-# (test/lockstep/): minutes, on every push that can change their result. The cocotb tests also
-# run on the hardened netlist in gds.yaml (gl_test job).
+# cocotb tests (test/test.py) on the RTL, the RTL against the model in lockstep
+# (test/lockstep/), and the formal proofs (test/formal/): minutes, on every push that can
+# change their result. The cocotb tests also run on the hardened netlist in gds.yaml (gl_test
+# job).
 name: test
 
 on:
@@ -86,3 +87,23 @@ jobs:
 
       - name: Tiny Tapeout top through its pins
         run: cd test/lockstep && python3 top_lockstep.py --runs 10 --cycles 20000
+
+  formal:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: checkout repo
+        uses: actions/checkout@v6
+
+      # The oss-cad-suite release of the Containerfile: yosys, sby and the solvers
+      - name: Install oss-cad-suite
+        run: |
+          r=$(sed -n 's/^ARG OSS_CAD_SUITE=//p' Containerfile)
+          curl -fsSL "https://github.com/YosysHQ/oss-cad-suite-build/releases/download/$r/oss-cad-suite-linux-x64-$(echo $r | tr -d -).tgz" \
+            | tar -xz -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/oss-cad-suite/bin" >> "$GITHUB_PATH"
+
+      - name: The FIFOs deliver every word once, in order
+        run: cd test/formal && sby -f fifo.sby
+
+      - name: The strobe and the PAU's bit clock equal their rules
+        run: cd test/formal && sby -f strobe.sby
