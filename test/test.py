@@ -11,21 +11,26 @@ see it.
     test_fifo_echo          TX FIFO -> SM -> RX FIFO through the SRAM rings, RX_POP's count
     test_uart_tx            programs/uart/uart_tx.asm judged by the reference UART receiver
     test_uart_rx            programs/uart/uart_rx.asm fed by the reference UART transmitter
+    test_loopback_*         board/loopback.py's checks, unchanged: a transmitter on SM 0, the
+                            receiver on SM 1 through the chip's pads (the PAU's line codes,
+                            stuffing, CRCs and monitor, open drain, FIFO_SPLIT, IN TIME)
 """
 import sys
 from pathlib import Path
 
 import cocotb
+from cocotb._bridge import bridge, resume       # cocotb 2.0.1's names for them (public in 2.1)
 from cocotb.clock import Clock
 from cocotb.triggers import ClockCycles, RisingEdge
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(ROOT / "sim" / "model"), str(ROOT / "test" / "shared")]
+sys.path[:0] = [str(ROOT / "sim" / "model"), str(ROOT / "test" / "shared"), str(ROOT / "board")]
 from asm import assemble                                       # noqa: E402
 from chip import (CTRL, ID, OP_IMEM_RD, OP_REG_RD, OP_REG_WR, OP_RX_POP, OP_TX_PUSH, PADS_BIDIR,  # noqa: E402
                   PC, STATUS, WRAP, Chip, header, sm_register)
 from devices import UartRx, UartTx                             # noqa: E402
 from host import Host                                          # noqa: E402
+import loopback                                                # noqa: E402
 from seeds import seeded                                 # noqa: E402
 
 HALF = 3                    # clocks of each SCLK phase: SCLK = clk / 6, HOST.md's limit
@@ -218,3 +223,26 @@ async def test_uart_rx(dut):
     got = (await board.spi(header(OP_RX_POP, 0, len(data)), [0] * len(data)))[1:]
     assert [w >> 8 for w in got] == data
     assert int(dut.uo_out.value) >> 1 & 1 == 0, "no framing error: HOST_IRQ low"
+
+
+class Blocking:
+    """Board.spi for code that blocks (host.Host, board/loopback.py), run in a thread by
+    bridge(): each call waits for the transaction on the pins."""
+
+    def __init__(self, board: Board) -> None:
+        self._spi = resume(board.spi)
+
+    def spi(self, hdr: int, words=()) -> list[int]:
+        return self._spi(hdr, list(words))
+
+
+@cocotb.test()
+@cocotb.parametrize(check=loopback.CHECKS)
+async def test_loopback(dut, check):
+    """A check of board/loopback.py on the pins, as on the FPGA board: pins 0-7 pulled up when
+    nothing drives them (tang_top.v), the host at SCLK = clk / 6."""
+    board = Board(dut)
+    board.pullups = 0xFF
+    await board.start()
+    error = await bridge(check)(Host(Blocking(board)))
+    assert error is None, f"{check.__name__}: {error}"
