@@ -40,7 +40,7 @@ module strobe (
         .tx_fifo_empty (tx_fifo_empty), .rx_fifo_full (rx_fifo_full),
         .irq (), .peer_irq (peer_irq), .peer_we (), .peer_idx (), .peer_val (),
         .in_we (in_we), .in_idx (in_idx), .in_val (in_val),
-        .irq_mask (), .pc (), .stalled ()
+        .irq_mask (), .pc (), .stalled (), .fifo_split ()
     );
 
     // the first clock is a chip reset
