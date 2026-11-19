@@ -18,7 +18,7 @@ Example programs (UART, Modbus RTU, SPI, I2C, USB low speed, USB Power Delivery 
 
 ### SPI host interface
 
-SPI mode 0, MSB first, sampled by the system clock: SCLK high and low phases of at least 3 `clk` cycles (SCLK <= `clk` / 6, 8.3 MHz at 50 MHz).
+SPI mode 0, MSB first, sampled by the system clock: SCLK high and low phases of at least 3 `clk` cycles (SCLK <= `clk` / 6, 8.3 MHz at 50 MHz). CS_N falls at least 5 `clk` cycles (100 ns at 50 MHz) before the first SCLK edge and stays high at least 2 between transactions.
 
 A transaction is CS_N low, a 16-bit header `{Op[15:13], SM[12:11], 0[10:6], Addr[5:0]}`, any number of 16-bit data words, CS_N high. Addresses increment within a burst. MISO carries the read data during the data words of reads and the SM's STATUS register otherwise (during the header: the STATUS of the previous transaction's SM).
 
