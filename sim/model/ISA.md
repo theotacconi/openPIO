@@ -367,6 +367,13 @@ other is a **transition code**. The assembler's `.pau code=` names these:
   CPHA = 0 a bit queued while no bit is under way starts at once) and ends it at the next
   sampling edge, where the monitor compares; between bits the line holds. Level codes only;
   H still times the RX idle status.
+- With CPHA = 0 "at once" holds after every bit, not only before the first: the next bit starts
+  at the strobe that sees the sampling edge ending the bit before it, so the line changes the
+  input synchronizer's 2 clocks and up to a strobe after the sampling edge (3 clocks at CLKDIV
+  1), while the clock is still at its sampling level, not at the shift edge. A partner that
+  samples on the edge, as SPI hardware does, sees each bit held that long; one that samples
+  later in that phase (a software SPI master that reads MISO after raising SCK) reads the next
+  bit.
 
 The program controls the PAU with SET PAU_BAUD, SET PAU_CTL and the PAU actions:
 

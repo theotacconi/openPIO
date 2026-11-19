@@ -7,6 +7,10 @@
 ; shift register, a byte's answer is taken when the byte before it ends and waits there, its MSB
 ; on MISO, if the transfer ends first. RX FIFO: the bytes received, in bits 7:0. A byte cut by
 ; CS_N rising is dropped, its answer used up.
+; Mode 0 through the PAU puts each MISO bit out right after the rising edge that samples the bit
+; before it (ISA.md, Bit timing): 3 clocks later at CLKDIV 1, while SCK is still high. SPI
+; hardware, which samples on the edge, reads it; a software master that reads MISO after
+; raising SCK gets the next bit: use spi_target.asm, which changes MISO as SCK falls.
 .in_pins 0
 .out_pins 3
 .set_pins 3 1
