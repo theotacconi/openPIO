@@ -6,8 +6,8 @@ at 60 MHz a 1518-byte frame streamed by that host while it is sent. Receiver at 
 reference Manchester transmitter: frames of 64 to 1518 bytes with their FCS verdicts, a
 corrupted frame, a 1518-byte frame drained by an SPI-speed host through the 253-word RX FIFO
 (FIFO_SPLIT 1), a transmitter 100 ppm fast or slow with its edges jittered by +-0.45 clock (an
-unsynchronized source), random settings inside that (rate, jitter, frame lengths), and the chip
-receiving its own transmitter."""
+unsynchronized source), random settings inside that (rate, jitter, frame lengths), a glitch or
+a link pulse before each frame, and the chip receiving its own transmitter."""
 import sys
 import unittest
 import zlib
@@ -126,9 +126,10 @@ def rx_frames(words):
 
 class EthernetRx(unittest.TestCase):
 
-    def receive(self, fs, bit=6, jitter=0, host_word_clocks=0, seed=0, bad=()):
+    def receive(self, fs, bit=6, jitter=0, host_word_clocks=0, seed=0, bad=(), pulse=None):
         """The frames fs sent by a reference transmitter (frames in `bad` with one data bit
-        flipped after the FCS was computed), received by eth_rx at 60 MHz."""
+        flipped after the FCS was computed), received by eth_rx at 60 MHz. pulse = (width,
+        lead): a high pulse `width` bit times long, `lead` bit times before each frame."""
         bench = Bench(host_word_clocks=host_word_clocks)
         bench.load(0, (HERE / "eth_rx.asm").read_text())
         sent = []
@@ -137,7 +138,14 @@ class EthernetRx(unittest.TestCase):
             if i in bad:
                 bits[64 + 8 * (len(f) // 2) + 3] ^= 1
             sent.append(bits)
-        tx = bench.add(ManchesterTx(RDP, bit, sent, start=20, jitter=jitter, seed=seed))
+        start = 20 if pulse is None else 20 + 12 * bit
+        tx = bench.add(ManchesterTx(RDP, bit, sent, start=start, jitter=jitter, seed=seed))
+        if pulse is not None:
+            width, lead = pulse
+            for bits in sent:
+                tx.schedule += [(round(start - lead * bit), 1), (round(start - (lead - width) * bit), 0)]
+                start += (len(bits) + 2 + 12) * bit           # TP_IDL, the gap
+            tx.schedule.sort()
         bench.start(1)
         bench.run(tx.end + 2000 + 100 * len(fs[-1]),
                   until=lambda: len(rx_frames(bench.received[0])) == len(fs))
@@ -163,6 +171,15 @@ class EthernetRx(unittest.TestCase):
         """The line gives a word every 90 clocks, the SPI host takes one every 98: a 1518-byte
         frame (812 words) leaves about 70 in the 253-word RX FIFO."""
         self.receive(frames(seeded(9), (1518, 64)), host_word_clocks=SPI_WORD)
+
+    def test_pulse_before_each_frame(self):
+        """A glitch (half a bit wide: it decodes as a lone 1) or a link pulse (a bit wide)
+        between frames: without the idle check after the SFD's first 1, a glitch made the next
+        preamble's first 1 the SFD's second, and the frame was lost."""
+        for width in (0.5, 1):
+            for lead in (6, 3.5):
+                with self.subTest(width=width, lead=lead):
+                    self.receive(frames(seeded(16), (64, 100, 64)), pulse=(width, lead))
 
     def test_unsynchronized_source(self):
         for ppm, seed in ((100, 1), (-100, 2)):

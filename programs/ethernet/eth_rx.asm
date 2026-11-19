@@ -29,6 +29,11 @@ hunt:                           ; the SFD: a 1, then a 1
     jmp hunt
 one:
     mov isr, null
+next:                           ; a 1 alone, then the line idle (a glitch): hunt again
+    jmp pau rx_ready, second
+    jmp !pau rx_idle, next
+    jmp hunt
+second:
     in pins, 1
     mov x, isr
     jmp x--, sfd
