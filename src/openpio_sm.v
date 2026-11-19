@@ -213,16 +213,20 @@ module openpio_sm (
         for (j = 0; j < 16; j = j + 1) rev16[j] = v[15 - j];
     endfunction
 
-    function [15:0] operand;              // IN / ALU source (IN: PINS and PINDIRS below)
-        input [2:0] code;
+    // IN / ALU source (IN: PINS and PINDIRS below). Every value it reads is an argument: an
+    // assign re-evaluates a function call when its arguments change, not what the body reads
+    // (Icarus Verilog follows that to the letter; Yosys and Verilator do not).
+    function [15:0] operand;
+        input [2:0]  code;
+        input [15:0] v_pins, v_dirs, v_x, v_y, v_isr, v_osr, v_status;
         case (code)
-            R_PINS:    operand = gpio_in;
-            R_PINDIRS: operand = dir_view;
-            R_X:       operand = x;
-            R_Y:       operand = y;
-            R_ISR:     operand = isr;
-            R_OSR:     operand = osr;
-            R_SPECIAL: operand = status_w;
+            R_PINS:    operand = v_pins;
+            R_PINDIRS: operand = v_dirs;
+            R_X:       operand = v_x;
+            R_Y:       operand = v_y;
+            R_ISR:     operand = v_isr;
+            R_OSR:     operand = v_osr;
+            R_SPECIAL: operand = v_status;
             default:   operand = 16'd0;
         endcase
     endfunction
@@ -233,7 +237,7 @@ module openpio_sm (
     wire [15:0] in_src  = in_pau ? (in_shr ? rx_bits_s : rev16(rx_bits_s) >> (5'd16 - n))
                         : f_hi == R_PINS    ? gpio_in >> in_base
                         : f_hi == R_PINDIRS ? time_r
-                        : operand(f_hi);
+                        : operand(f_hi, gpio_in, dir_view, x, y, isr, osr, status_w);
     wire [15:0] in_v    = in_src & m_n;
     wire [15:0] isr_in  = in_shr ? (isr >> n) | (in_v << (5'd16 - n)) : (isr << n) | in_v;
     wire [5:0]  isr_sum = isr_cnt + n;
@@ -248,7 +252,7 @@ module openpio_sm (
 
     // ALU
     reg  [15:0] alu_d, alu_r;
-    wire [15:0] alu_s = operand(alu_src);
+    wire [15:0] alu_s = operand(alu_src, gpio_in, dir_view, x, y, isr, osr, status_w);
     always @(*) begin
         case (f_hi)
             R_PINS:    alu_d = out_view;

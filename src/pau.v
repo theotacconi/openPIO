@@ -104,10 +104,11 @@ module pau (
     wire [31:0] cres   = crc_res & cmask;
     wire [31:0] cinit  = crc_cfg[5] ? cmask : 32'd0;
 
-    function [31:0] crc_step;
+    function [31:0] crc_step;             // the polynomial an argument too (operand(), openpio_sm.v)
         input [31:0] c;
         input        b;
-        crc_step = {c[30:0], 1'b0} ^ ({32{c[31] ^ b}} & cpoly);
+        input [31:0] poly;
+        crc_step = {c[30:0], 1'b0} ^ ({32{c[31] ^ b}} & poly);
     endfunction
 
     // ------------------------------------------------------------------ state
@@ -383,7 +384,7 @@ module pau (
 
     // ------------------------------------------------------------------ step 2: CRC
     wire [31:0] crc_s = a_feed ? {crc_a[30:0], 1'b0}                  // fed its own top bit
-                      : (tx_feed | rx_feed) ? crc_step(crc_a, tx_feed ? tb : rb) : crc_a;
+                      : (tx_feed | rx_feed) ? crc_step(crc_a, tx_feed ? tb : rb, cpoly) : crc_a;
 
     // ------------------------------------------------------------------ status, outputs
     wire [1:0] pair = {pin_in1, pin_in};                    // the line state, raw
@@ -457,7 +458,7 @@ module pau (
             {r_prev, r_armed, r_last, r_p} <= {r_prev_s, r_armed_s, r_last_s, r_p_s};
             {r_thr, r_run, r_half, r_h0, r_end} <= {r_thr_s, r_run_s, r_half_s, r_h0_s, r_end_s};
             {rs_run, rs_last, r_serr, r_ovr} <= {rs_run_s, rs_last_s, r_serr_s, r_ovr_s};
-            crc_a <= feed ? crc_step(crc_s, feed_bit) : crc_s;
+            crc_a <= feed ? crc_step(crc_s, feed_bit, cpoly) : crc_s;
             if (stb)
                 e_prev <= pin_in1;
 
