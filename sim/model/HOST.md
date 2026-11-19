@@ -26,8 +26,8 @@ header:  15  14  13 | 12  11 | 10 .. 6 | 5 .. 0
 | `011` | REG_RD | MISO = register `Addr`, then Addr + 1 |
 | `100` | TX_PUSH | TX FIFO <= word (dropped when full; ISA.md, FIFOs) |
 | `101` | RX_POP | MISO = RX FIFO head, popped (0 when empty); `Addr` = words to pop, 1..63 (0 = 64), words beyond them read 0 and pop nothing |
-| `110` | IMEM_WR | the first word is an address A (0..255 in its low 8 bits), then instruction A <= word, then A + 1 (SM stopped; `Addr` ignored) |
-| `111` | IMEM_RD | the first word is an address A, then MISO = instruction A, then A + 1 (SM stopped; 0 while it runs: the port fetches; `Addr` ignored) |
+| `110` | IMEM_WR | the first word is an address A (0..255 in its low 8 bits), then instruction A <= word, then A + 1 (SM stopped, no STEP under way: CTRL; `Addr` ignored) |
+| `111` | IMEM_RD | the first word is an address A, then MISO = instruction A, then A + 1 (SM stopped, no STEP under way; 0 while it runs: the port fetches; `Addr` ignored) |
 
 MISO carries the read data during the data words of REG_RD, RX_POP and IMEM_RD after its
 address (the value is taken when the word starts) and the SM's STATUS register during every other word. During the
@@ -103,6 +103,11 @@ Bits outside the fields above read 0.
   reloaded.
   Configuration, IMEM and the pin latches (shared) are kept.
 - **STEP** (bit i, SM stopped): from the next clock SM i runs until it has executed one strobe.
+  The STEP is over at that strobe, at most CLKDIV + 2 clocks after the CTRL write lands
+  (CLKDIV_FRAC can lengthen a period by one clock). Until then IMEM_WR and IMEM_RD of SM i are
+  not allowed: the chip gives the host's address to the SM's fetch, and the step runs a wrong
+  instruction (the model raises an error). At SCLK = `clk` / 6 the header and address words of
+  an IMEM access alone take 192 clocks, so only a CLKDIV above 190 needs the host to wait.
 - A CTRL write sets EN to its bits [3:0] and applies RESET then STEP in the same clock: SMs
   enabled together start on the same clock.
 

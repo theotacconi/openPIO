@@ -423,6 +423,20 @@ class MultiSm(unittest.TestCase):
         chip.step(3)
         self.assertTrue(chip.sms[0].irq_flags[0])
 
+    def test_no_imem_access_during_a_step(self):
+        """A STEP ends at the SM's next strobe; until then the host may not use its IMEM."""
+        chip = Chip(2)
+        load(chip, 0, assemble("nop\nend: jmp end"), clkdiv_int=10)
+        chip.reg_write(0, CTRL, 1 << 8)
+        chip.step()
+        with self.assertRaises(RuntimeError):
+            chip.imem_read(0, 0)
+        with self.assertRaises(RuntimeError):
+            chip.imem_write(0, 0, 0)
+        chip.step(11)                              # at most CLKDIV + 1 clocks
+        self.assertEqual(chip.stepping, 0)
+        self.assertEqual(chip.imem_read(0, 1), assemble("nop\nend: jmp end")[1])
+
     def test_open_drain_is_per_pin(self):
         chip = Chip(2)
         load(chip, 0, assemble("set pins, 2\nset pindirs, 3\nend: jmp end"), set_count=2)

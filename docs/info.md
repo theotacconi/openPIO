@@ -28,8 +28,8 @@ A transaction is CS_N low, a 16-bit header `{Op[15:13], SM[12:11], 0[10:6], Addr
 | 011 | REG_RD | MISO = register `Addr` |
 | 100 | TX_PUSH | TX FIFO <= word (dropped when full) |
 | 101 | RX_POP | MISO = RX FIFO head, popped (0 when empty); `Addr` = words to pop, 1..63 (0 = 64) |
-| 110 | IMEM_WR | the first word is an address A (0..255), then instruction A <= word, A + 1, ... (SM stopped) |
-| 111 | IMEM_RD | the first word is an address A, then MISO = instruction A, A + 1, ... (SM stopped) |
+| 110 | IMEM_WR | the first word is an address A (0..255), then instruction A <= word, A + 1, ... (SM stopped, no STEP under way) |
+| 111 | IMEM_RD | the first word is an address A, then MISO = instruction A, A + 1, ... (SM stopped, no STEP under way) |
 
 Registers 0x00-0x1F and 0x30-0x32 belong to the SM named in the header (configuration, line code, PC, X, Y, CRC, FIFO levels, IRQ flags, the split of the FIFO memory); 0x20-0x29 are chip registers: CTRL (0x20: [3:0] enable, [7:4] reset, [11:8] single step, one bit per SM), GPIO (open-drain mask), pin state, ID (0x26, reads 0x3250) and the pads of each pin.
 

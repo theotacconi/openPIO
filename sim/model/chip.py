@@ -273,13 +273,21 @@ class Chip:
         word = self.sms[n].rx_read()
         return 0 if word is None else word
 
+    def _imem_free(self, n: int) -> bool:
+        """The host has SM n's IMEM port while the SM is stopped and not stepping (HOST.md,
+        CTRL). An access during a STEP is not allowed: the chip would give the SM's fetch the
+        host's address."""
+        if self.stepping >> n & 1:
+            raise RuntimeError(f"IMEM access to SM {n} during a STEP (HOST.md, CTRL)")
+        return not self.en >> n & 1
+
     def imem_write(self, n: int, addr: int, word: int) -> None:
-        if not self.en >> n & 1:
+        if self._imem_free(n):
             self.sms[n].memory[addr % IMEM_WORDS] = word & 0xFFFF
 
     def imem_read(self, n: int, addr: int) -> int:
         """0 while SM n runs: its IMEM port fetches instructions."""
-        if self.en >> n & 1:
+        if not self._imem_free(n):
             return 0
         return self.sms[n].memory[addr % IMEM_WORDS]
 
