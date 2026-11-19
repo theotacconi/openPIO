@@ -6,7 +6,7 @@
 ; RX FIFO, a frame: data words of 15 bits in [15:1], bit 0 = 0 (shift right: the oldest bit in
 ; bit 1); then an end word, bit 0 = 1: the bits left, then a 1 above them, zeros above it; then
 ; the verdict: 1 when the FCS is right, else 0. The bits are the frame from the destination
-; address to the FCS, LSB first, and the bit or two the decoder takes from TP_IDL after it: the
+; address to the FCS, LSB first, and the bit the decoder may take from TP_IDL after it: the
 ; host keeps whole bytes and drops the FCS. FIFO_SPLIT 1: the RX FIFO holds 253 words (3795
 ; bits, a 470-byte frame); an SPI host at SCLK clock / 6 pops a word every 97.5 clocks, the line
 ; gives one every 90: a 1518-byte frame (812 words) leaves about 60 words behind, a frame up to

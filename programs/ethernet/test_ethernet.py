@@ -146,7 +146,7 @@ class EthernetRx(unittest.TestCase):
         self.assertEqual(len(got), len(fs))
         for i, (f, (bits, verdict)) in enumerate(zip(fs, got)):
             n = 8 * (len(f) + 4)
-            self.assertIn(len(bits) - n, (0, 1, 2), "the frame, then at most 2 bits of TP_IDL")
+            self.assertIn(len(bits) - n, (0, 1), "the frame, then at most a bit of TP_IDL")
             data = bytes(bits_to_bytes(bits[:n]))
             self.assertEqual(data[:-4], f if i not in bad else data[:-4])
             self.assertEqual(data[-4:], zlib.crc32(f).to_bytes(4, "little"), "FCS")
