@@ -8,9 +8,14 @@ same RTL against the model clock by clock; these tests check the chip as a host 
 see it.
 
     test_id_and_registers   ID, reset values, write and read back, the header's MISO
-    test_fifo_echo          TX FIFO -> SM -> RX FIFO through the SRAM rings, RX_POP's count
+    test_fifo_echo          TX FIFO -> SM -> RX FIFO through the SRAM rings, RX_POP's count,
+                            at three splits of the memory (FIFO_SPLIT 16, 1, 31)
     test_uart_tx            programs/uart/uart_tx.asm judged by the reference UART receiver
     test_uart_rx            programs/uart/uart_rx.asm fed by the reference UART transmitter
+    test_alu_and_timing     every ALU operation, IN TIME, DLYMUL, a timed WAIT, a condition
+                            the program writes (ALU dest COND)
+    test_pins_10_to_15      side-set and SET on pins 11-15, read back through ui_in by the
+                            other SM, woken by a peer IRQ; a flag on HOST_IRQ
     test_loopback_*         board/loopback.py's checks, unchanged: a transmitter on SM 0, the
                             receiver on SM 1 through the chip's pads (the PAU's line codes,
                             stuffing, CRCs and monitor, open drain, FIFO_SPLIT, IN TIME)
@@ -60,6 +65,7 @@ class Board:
         self.pullups = 0
         self.t = 0
         self.spi_pins = 0b100                       # CS_N high
+        self.ui_loop = False                        # uo_out[7:3] wired to ui_in[7:3]
 
     async def start(self) -> None:
         dut = self.dut
@@ -91,7 +97,8 @@ class Board:
             for d in self.devices:
                 d.tick(self.t, levels)
             dut.uio_in.value = levels
-            dut.ui_in.value = self.spi_pins
+            loop = int(dut.uo_out.value) & 0xF8 if self.ui_loop else 0
+            dut.ui_in.value = loop | self.spi_pins
             self.t += 1
 
     async def spi(self, hdr: int, words=()) -> list[int]:
@@ -172,11 +179,13 @@ async def test_pages(dut):
 
 
 @cocotb.test()
-async def test_fifo_echo(dut):
-    """150 words through an echo program: both 128-word SRAM rings fill; RX_POP of a count."""
+@cocotb.parametrize(split=[0, 1, 31])
+async def test_fifo_echo(dut, split):
+    """150 words through an echo program: the SRAM rings fill (128 words each, or TX 8 and RX
+    248, or TX 248 and RX 8); RX_POP of a count."""
     board = Board(dut)
     await board.start()
-    await board.load(0, "loop:\npull block\nmov isr, osr\npush block\njmp loop")
+    await board.load(0, "loop:\npull block\nmov isr, osr\npush block\njmp loop", fifo_split=split)
     await board.write(0, CTRL, 0b01)
     words = seeded(1).choices(range(1 << 16), k=150)
     for k in range(0, len(words), 30):
@@ -223,6 +232,118 @@ async def test_uart_rx(dut):
     got = (await board.spi(header(OP_RX_POP, 0, len(data)), [0] * len(data)))[1:]
     assert [w >> 8 for w in got] == data
     assert int(dut.uo_out.value) >> 1 & 1 == 0, "no framing error: HOST_IRQ low"
+
+
+ALU_AND_TIMING = """
+.x 0x1234
+.y 0x00F0
+    mov isr, x
+    push
+    rev isr, x
+    push
+    mov isr, x
+    and isr, y
+    push
+    mov isr, x
+    or isr, y
+    push
+    mov isr, x
+    xor isr, y
+    push
+    mov isr, x
+    xnor isr, y
+    push
+    mov isr, x
+    add isr, y
+    push
+    mov isr, x
+    sub isr, y
+    push
+    in time, 16             ; strobe 22
+    push
+    set dlymul, 3
+    nop [4]                 ; 1 + 4 x 3 strobes
+    in time, 16             ; 22 + 16
+    push
+    set timeout_val, 5      ; 5 x 3 strobes
+    wait 1 irq 7 timeout    ; never set: issued at 41, ends 15 strobes later
+    in time, 16             ; 57
+    push
+    jmp timeout, late
+    set x, 1
+late:
+    pull block
+    mov cond, osr           ; slot 1 = the word the host sent
+    set y, 1
+    jmp cond1, one
+    set x, 2
+one:
+    mov isr, x
+    push
+    set y, 0
+    jmp cond1, wrong
+    set x, 3
+wrong:
+    mov isr, x
+    push
+halt:
+    jmp halt
+"""
+
+
+@cocotb.test()
+async def test_alu_and_timing(dut):
+    """What the PAU loopbacks do not reach: the eight ALU operations on X = 0x1234 and Y =
+    0x00F0, IN TIME across a delay times DLYMUL and a timed WAIT, the timeout flag, and a
+    condition the program writes (slot 1 = bit 0 of Y, sent by the host: 0x0150)."""
+    board = Board(dut)
+    await board.start()
+    await board.load(0, ALU_AND_TIMING)
+    await board.write(0, CTRL, 0b01)
+    await board.spi(header(OP_TX_PUSH, 0), [0x0150])
+    await ClockCycles(dut.clk, 400)
+    got = (await board.spi(header(OP_RX_POP, 0, 13), [0] * 13))[1:]
+    assert got == [0x1234, 0x2C48, 0x0030, 0x12F4, 0x12C4, 0xED3B, 0x1324, 0x1144,
+                   22, 38, 57, 0x1234, 3], [hex(w) for w in got]
+
+
+PINS_OUT = """
+.sideset_pins 11
+.side_set 1 opt
+.set_pins 12 4
+    set pins, 0b1010 side 1     ; pins 15..11 = 1, 0, 1, 0, 1
+    irq peer 2                  ; wake SM 1
+halt:
+    jmp halt
+"""
+
+PINS_IN = """
+.in_pins 11
+.shift_in left
+    wait 1 irq 2 [7]            ; the wire out and in, and the synchronizer: a few clocks
+    in pins, 5                  ; pins 11..15, through ui_in[3..7]
+    push
+    irq 0                       ; HOST_IRQ
+halt:
+    jmp halt
+"""
+
+
+@cocotb.test()
+async def test_pins_10_to_15(dut):
+    """Pins 11-15 are uo_out[3..7] and ui_in[3..7]: wired out to in here. SM 0 sets them by
+    side-set and SET and wakes SM 1 with a peer IRQ; SM 1 reads them and raises HOST_IRQ."""
+    board = Board(dut)
+    board.ui_loop = True
+    await board.start()
+    await board.load(0, PINS_OUT)
+    await board.load(1, PINS_IN)
+    assert int(dut.uo_out.value) >> 1 & 1 == 0, "HOST_IRQ low"
+    await board.write(0, CTRL, 0b11)
+    await ClockCycles(dut.clk, 40)
+    assert int(dut.uo_out.value) >> 3 == 0b10101, f"uo_out {int(dut.uo_out.value):#04x}"
+    assert (await board.spi(header(OP_RX_POP, 1, 1), [0]))[1:] == [0b10101]
+    assert int(dut.uo_out.value) >> 1 & 1 == 1, "SM 1's flag 0 on HOST_IRQ"
 
 
 class Blocking:
