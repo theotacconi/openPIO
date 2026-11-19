@@ -101,11 +101,12 @@ class Board:
             dut.ui_in.value = loop | self.spi_pins
             self.t += 1
 
-    async def spi(self, hdr: int, words=()) -> list[int]:
-        """One transaction, mode 0, MSB first: the MISO words (header first)."""
+    async def spi(self, hdr: int, words=(), lead: int = HALF, idle: int = 2 * HALF) -> list[int]:
+        """One transaction, mode 0, MSB first: the MISO words (header first). CS_N falls
+        lead + HALF clocks before the first SCLK edge and stays high idle clocks after."""
         miso = []
         self.spi_pins = 0b000                       # CS_N low
-        await ClockCycles(self.dut.clk, HALF)
+        await ClockCycles(self.dut.clk, lead)
         for word in [hdr, *words]:
             got = 0
             for bit in range(15, -1, -1):
@@ -117,7 +118,7 @@ class Board:
                 await ClockCycles(self.dut.clk, HALF)
             miso.append(got)
         self.spi_pins = 0b100
-        await ClockCycles(self.dut.clk, 2 * HALF)
+        await ClockCycles(self.dut.clk, idle)
         return miso
 
     async def read(self, sm: int, addr: int, count: int = 1) -> list[int]:
@@ -152,6 +153,24 @@ async def test_id_and_registers(dut):
     # the header's MISO is the STATUS of the previous transaction's SM
     assert (await board.spi(header(OP_REG_RD, 1, PC), [0]))[0] >> 5 & 1 == 0, "SM 0's"
     assert (await board.spi(header(OP_REG_RD, 1, STATUS), [0]))[0] >> 5 & 1 == 1, "SM 1's"
+
+
+@cocotb.test()
+async def test_cs_n_timing(dut):
+    """HOST.md's CS_N limits: CS_N falls 5 clocks before the first SCLK edge and the header's
+    MISO is already STATUS (its MSB first); CS_N high for 2 clocks between transactions."""
+    board = Board(dut)
+    await board.start()
+    await board.write(0, PC, 0xA5)                             # STATUS[15:8] = PC: MSB 1
+    want = (await board.read(0, STATUS))[0]
+    assert want >> 8 == 0xA5
+    for _ in range(3):
+        await board.spi(header(OP_RX_POP, 0, 1), [0, 0], idle=2)   # MISO ends at 0
+        got = await board.spi(header(OP_REG_RD, 0, STATUS), [0], lead=5 - HALF, idle=2)
+        assert got == [want, want], [hex(v) for v in got]
+        await board.write(0, PC, 0x3C)                         # a write, then a read 2 clocks on
+        await board.spi(header(OP_REG_WR, 0, PC), [0xA5], idle=2)
+        assert await board.read(0, PC) == [0xA5]
 
 
 @cocotb.test()

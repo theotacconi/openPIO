@@ -9,6 +9,12 @@ ISA.md. Reference model: `sim/model/chip.py`.
 - Pins: `ui_in[0]` SCLK, `ui_in[1]` MOSI, `ui_in[2]` CS_N, `uo_out[0]` MISO.
 - Mode 0 (CPOL = 0, CPHA = 0), MSB first, sampled by the system clock: SCLK high and low phases
   of at least 3 `clk` cycles (SCLK <= `clk` / 6, 8.3 MHz at 50 MHz).
+- CS_N falls at least 5 `clk` cycles (100 ns at 50 MHz) before the first SCLK edge: the slave
+  sees the fall 2 or 3 clocks after it (synchronizer) and loads MISO's first bit a clock later,
+  then the bit crosses the output pad. Closer, the header's MISO starts with a wrong bit, and an
+  edge within 2 clocks may be lost. A master whose hardware CS_N leads the first edge by half an
+  SCLK period then needs SCLK <= `clk` / 10 (5 MHz at 50 MHz). CS_N stays high at least 2 `clk`
+  cycles between transactions.
 - A transaction is CS_N low, a 16-bit header, then any number of 16-bit data words (a burst),
   then CS_N high. Each word is a host access of one clock (ISA.md, Timing within a clock): a
   read word in its first clock, a write word in the clock after its last bit is in.
