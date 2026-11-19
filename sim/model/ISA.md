@@ -180,8 +180,9 @@ full FIFO drops the word (ISR still cleared); PULL on an empty FIFO copies X int
 since the previous strobe. With `T_EN` the stall also ends after TIMEOUT_VAL x DLYMUL strobes
 (DLYMUL when the WAIT issues; at least 1), setting the timeout flag (cleared when a timed WAIT
 issues). Every timed WAIT counts from TIMEOUT_VAL again. A delay starts only after its
-instruction's stall ends, so delays and timeouts are never counted at once: one DLYMUL prescaler
-and one 5-bit counter serve both, without a multiplier.
+instruction's stall ends, so delays and timeouts are never counted at once: one 10-bit counter
+serves both (and the CRC feed's bit count), loaded with the delay or TIMEOUT_VAL times DLYMUL
+by one 5 x 5-bit multiplier.
 
 **PAU action** (see PAU): `00` CRC reset, `01` CRC append, `10` TX abort, `11` CRC feed (Count
 1..15, 0 = 16; the other actions need Count 0, else they are reserved).
