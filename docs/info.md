@@ -50,7 +50,7 @@ The instruction set has 16 pin positions; pin k is `uio[k]`, pin 8 + k is `uo_ou
 
 ### Clock
 
-`clk` runs at up to 45 MHz in every corner: signed off at 22 ns, setup and hold, from the slow corner (1.08 V, 125 C: 0.97 ns of setup slack, about 47 MHz) to the fast one. It is built for 60 MHz and signed off at less, as the place-and-route tools repair timing for the typical corner only. At typical conditions (1.2 V, 25 C) the paths allow about 74 MHz. The project's clock is 50 MHz (info.yaml), the one the example programs count, with margin at room temperature but not signed off in the slow corner; the 10BASE-T receiver needs 60 MHz (3 clocks a half-bit), a bench rate too.
+`clk` runs at up to 45 MHz in every corner: signed off at 22 ns, setup and hold, from the slow corner (1.08 V, 125 C: 0.87 ns of setup slack, about 47 MHz) to the fast one. It is built for 60 MHz and signed off at less, as the place-and-route tools repair timing for the typical corner only. At typical conditions (1.2 V, 25 C) the paths allow about 74 MHz. The project's clock is 50 MHz (info.yaml), the one the example programs count, with margin at room temperature but not signed off in the slow corner; the 10BASE-T receiver needs 60 MHz (3 clocks a half-bit), a bench rate too.
 
 ## How to test
 
