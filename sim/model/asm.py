@@ -162,24 +162,39 @@ class Program(list[int]):
         return struct.pack(f"<{len(self)}H", *self)
 
 
-def _parse_int(token: str, line_num: int, line_text: str) -> int:
-    try:
-        return int(token, 0)
-    except ValueError:
-        raise AssemblerError(f"Invalid integer literal '{token}'", line_num, line_text)
+class _At:
+    """A source line, for the errors found on it."""
+
+    def __init__(self, line_num: int, text: str) -> None:
+        self.line_num, self.text = line_num, text
+
+    def error(self, message: str) -> AssemblerError:
+        return AssemblerError(message, self.line_num, self.text)
+
+    def int(self, token: str) -> int:
+        try:
+            return int(token, 0)
+        except ValueError:
+            raise self.error(f"Invalid integer literal '{token}'") from None
+
+    def int_in(self, token: str, lo: int, hi: int, message: str) -> int:
+        """An integer from lo to hi; `message`, with {} for the value, if out of range."""
+        n = self.int(token)
+        if not lo <= n <= hi:
+            raise self.error(message.format(n))
+        return n
 
 
 def _encode_delay_sideset(delay: int, side: int | None, side_set_count: int, side_set_opt: bool,
-                          line_num: int, line_text: str) -> int:
+                          at: _At) -> int:
     total_ss_bits = side_set_count + (1 if side_set_opt else 0)
     delay_bits = 5 - total_ss_bits
     if delay_bits < 0:
-        raise AssemblerError(f"Invalid side-set configuration: {total_ss_bits} bits exceeds 5-bit field",
-                             line_num, line_text)
+        raise at.error(f"Invalid side-set configuration: {total_ss_bits} bits exceeds 5-bit field")
     max_delay = (1 << delay_bits) - 1
     if not (0 <= delay <= max_delay):
-        raise AssemblerError(f"Delay ({delay}) exceeds maximum allowed ({max_delay}) with "
-                             f"{side_set_count} side-set bits", line_num, line_text)
+        raise at.error(f"Delay ({delay}) exceeds maximum allowed ({max_delay}) with "
+                       f"{side_set_count} side-set bits")
     val = delay
     if side_set_count > 0:
         max_side = (1 << side_set_count) - 1
@@ -187,11 +202,11 @@ def _encode_delay_sideset(delay: int, side: int | None, side_set_count: int, sid
             side = 0
         if side is not None:
             if not (0 <= side <= max_side):
-                raise AssemblerError(f"Side-set value ({side}) out of range (0-{max_side})", line_num, line_text)
+                raise at.error(f"Side-set value ({side}) out of range (0-{max_side})")
             ss_field = ((1 << side_set_count) if side_set_opt else 0) | side
             val |= ss_field << delay_bits
     elif side is not None:
-        raise AssemblerError("Side-set value specified but .side_set is 0", line_num, line_text)
+        raise at.error("Side-set value specified but .side_set is 0")
     return val & 0x1F
 
 
@@ -276,7 +291,7 @@ class _Conditions:
         self.cfg[slot] = c
         self.used[slot] = True
 
-    def slot_for(self, c: int, any_polarity: bool, line_num: int, text: str, pin: bool = False) -> tuple[int, int]:
+    def slot_for(self, c: int, any_polarity: bool, at: _At, pin: bool = False) -> tuple[int, int]:
         """Slot holding condition c; with any_polarity also an inverted copy. Returns (slot, inverted)."""
         if not pin:
             for s in range(4):
@@ -294,12 +309,12 @@ class _Conditions:
                 if pin:
                     self.pin_slot = s
                 return s, 0
-        raise AssemblerError("More than 4 different conditions in one program", line_num, text)
+        raise at.error("More than 4 different conditions in one program")
 
 
-def _parse_cond(tokens: list[str], line_num: int, text: str) -> tuple[int | None, int, bool]:
+def _parse_cond(tokens: list[str], at: _At) -> tuple[int | None, int, bool]:
     """Condition tokens -> (condition byte or None for an explicit slot, slot, is `pin`)."""
-    first = tokens[0].lower()
+    first = tokens[0].lower() if tokens else ""
     if len(tokens) == 1 and re.fullmatch(r"cond[0-3]", first):
         return None, int(first[4]), False
     if len(tokens) == 1 and first in NAMED_CONDS:
@@ -310,385 +325,393 @@ def _parse_cond(tokens: list[str], line_num: int, text: str) -> tuple[int | None
     if len(tokens) == 1 and first == "pin":
         return cond_byte(inv, CS_GPIO, 0), 0, True
     if len(tokens) != 2 or first not in COND_SRC:
-        raise AssemblerError(f"Invalid condition '{' '.join(tokens)}'", line_num, text)
+        raise at.error(f"Invalid condition '{' '.join(tokens)}'")
     src = COND_SRC[first]
     names = STATUS_NAMES if src == CS_STATUS else PAU_STATUS_NAMES if src == CS_PAU else {}
     idx_tok = tokens[1].lower()
-    idx = names[idx_tok] if idx_tok in names else _parse_int(idx_tok, line_num, text)
+    idx = names[idx_tok] if idx_tok in names else at.int(idx_tok)
     limit = 7 if src in (CS_IRQ, CS_PEER) else 15
     if not 0 <= idx <= limit:
-        raise AssemblerError(f"Condition index out of range (0-{limit}): {idx}", line_num, text)
+        raise at.error(f"Condition index out of range (0-{limit}): {idx}")
     return cond_byte(inv, src, idx), 0, False
 
 
 def condition(text: str) -> int:
     """The condition byte (ISA.md, Conditions) written as in a program, for a host that loads one
     at run time (COND_CFG, or a word a program moves into COND): condition("!gpio 12") == 0x8C."""
-    c, _, _ = _parse_cond(text.replace(",", " ").split(), 0, text)
+    at = _At(0, text)
+    c, _, _ = _parse_cond(text.replace(",", " ").split(), at)
     if c is None:
-        raise AssemblerError("A condition, not a slot", 0, text)
+        raise at.error("A condition, not a slot")
     return c
 
 
-def _pins(parts: list[str], line_num: int, text: str) -> int:
+def _pins(parts: list[str], at: _At) -> int:
     """A list of pins `0, 2, 5` as a mask."""
     mask = 0
     for p in "".join(parts).split(","):
-        pin = _parse_int(p, line_num, text)
-        if not 0 <= pin <= 15:
-            raise AssemblerError(f"Pin out of range (0-15): {pin}", line_num, text)
-        mask |= 1 << pin
+        mask |= 1 << at.int_in(p, 0, 15, "Pin out of range (0-15): {}")
     return mask
 
 
-def _kv(parts: list[str], line_num: int, text: str) -> dict[str, str]:
-    out = {}
-    for p in parts:
-        key, _, val = p.partition("=")
-        out[key.lower()] = val.lower()
-    return out
+def _kv(parts: list[str]) -> dict[str, str]:
+    """`key=value` arguments (a bare `key` has the value "")."""
+    return {key.lower(): val.lower() for key, _, val in (p.partition("=") for p in parts)}
+
+
+def _split(text: str) -> tuple[list[str], str | None, str | None]:
+    """An instruction's text -> (mnemonic and arguments, delay, side-set value)."""
+    found = []
+    for pattern in (r"\[\s*([0-9a-zA-Z_]+)\s*\]", r"\bside\s+([0-9a-zA-Z_]+)\b"):
+        m = re.search(pattern, text, re.IGNORECASE)
+        found.append(m and m.group(1))
+        if m:
+            text = text[:m.start()] + text[m.end():]
+    return [t for t in re.split(r"[\s,]+", text.strip()) if t], *found
+
+
+BASE_PINS = {".in_pins": "in_base", ".out_pins": "out_base", ".sideset_pins": "sideset_base",
+             ".set_pins": "set_base"}
+WAIT_POLARITY = {"1": (1, 0), "high": (1, 0), "hi": (1, 0), "0": (0, 0), "low": (0, 0),
+                 "lo": (0, 0), "rise": (1, 1), "rising": (1, 1), "fall": (0, 1), "falling": (0, 1)}
+
+
+class _Assembler:
+    """Pass 1 (line) reads directives, labels and instruction text; pass 2 (finish) gives the
+    JMP conditions their slots, then encodes every instruction. Each directive and mnemonic has
+    a method, found in DIRECTIVES and MNEMONICS at the end of the class."""
+
+    def __init__(self) -> None:
+        self.cfg: dict = {}
+        self.name = "program"
+        self.side_set_count, self.side_set_opt = 0, False
+        self.conds = _Conditions()
+        self.labels: dict[str, int] = {}
+        self.lines: list[tuple[str, _At]] = []     # one per word: its text and source line
+        self.start: tuple[str, _At] | None = None
+
+    # Pass 1
+
+    def line(self, line_num: int, raw: str) -> None:
+        at = _At(line_num, raw)
+        code = re.split(r";|//|#", raw, maxsplit=1)[0].strip()
+        if code.startswith("."):
+            parts = code.split()
+            directive = self.DIRECTIVES.get(parts[0].lower())
+            if directive is None:
+                raise at.error(f"Unknown directive '{parts[0].lower()}'")
+            directive(self, parts[0].lower(), parts[1:], at)
+            return
+        while (m := re.match(r"^([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*(.*)$", code)):
+            label = m.group(1).lower()
+            if label in self.labels:
+                raise at.error(f"Duplicate label '{label}'")
+            self.labels[label] = len(self.lines)
+            code = m.group(2).strip()
+        if code:
+            self.word(code, at)
+
+    def word(self, text: str, at: _At) -> None:
+        if len(self.lines) >= PAGE_WORDS:
+            raise at.error(f"Program exceeds {PAGE_WORDS} instructions")
+        self.lines.append((text, at))
+
+    def d_program(self, d, args, at):
+        if args:
+            self.name = args[0]
+
+    def d_side_set(self, d, args, at):
+        if not args:
+            raise at.error(".side_set requires bit count argument")
+        self.side_set_count = at.int_in(args[0], 0, 5, "Side-set bit count must be between 0 and 5")
+        flags = {a.lower() for a in args[1:]}
+        self.side_set_opt = bool(flags & {"opt", "optional"})
+        self.cfg.update(side_set_count=self.side_set_count, side_set_opt=self.side_set_opt,
+                        side_set_pindirs=bool(flags & {"pindirs", "pindir"}))
+
+    def d_pin_list(self, d, args, at):
+        if not args:
+            raise at.error(f"{d} requires a pin list")
+        self.cfg["pin_mask" if d == ".pin_mask" else "open_drain_mask"] = _pins(args, at)
+
+    def d_base(self, d, args, at):
+        message = f"{d} requires a base pin 0..15"
+        if not args:
+            raise at.error(message)
+        self.cfg[BASE_PINS[d]] = at.int_in(args[0], 0, 15, message)
+        if d == ".set_pins" and len(args) > 1:
+            self.cfg["set_count"] = at.int_in(args[1], 1, 5, "SET pin count must be 1..5")
+
+    def d_shift(self, d, args, at):
+        if len(args) != 1 or args[0].lower() not in ("left", "right"):
+            raise at.error(f"{d} left|right")
+        self.cfg[d[1:] + "_right"] = args[0].lower() == "right"
+
+    def d_preset(self, d, args, at):
+        if len(args) != 1:
+            raise at.error(f"{d} requires a value")
+        self.cfg[d[1:]] = at.int(args[0]) & 0xFFFF
+
+    def d_start(self, d, args, at):
+        if len(args) != 1:
+            raise at.error(".start requires a label")
+        self.start = args[0].lower(), at
+
+    def d_clkdiv(self, d, args, at):
+        if not args:
+            raise at.error(".clkdiv requires a divider")
+        self.cfg["clkdiv_int"] = at.int_in(args[0], 1, 0xFFFF, "CLKDIV integer part must be 1..65535")
+        if len(args) > 1:
+            self.cfg["clkdiv_frac"] = at.int(args[1]) & 0xFF
+
+    def d_fifo_split(self, d, args, at):
+        message = ".fifo_split takes 1..31 (the TX ring in 8 words)"
+        if len(args) != 1:
+            raise at.error(message)
+        self.cfg["fifo_split"] = at.int_in(args[0], 1, 31, message)
+
+    def d_thresh(self, d, args, at):
+        if not args:
+            raise at.error("Threshold must be 1..16")
+        self.cfg[d[1:]] = at.int_in(args[0], 1, 16, "Threshold must be 1..16") & 0xF
+
+    def d_cond(self, d, args, at):
+        c, _, _ = _parse_cond(args, at)
+        if c is None:
+            raise at.error("A condition cannot be another slot")
+        self.conds.fix(int(d[5]), c)
+
+    def d_pau(self, d, args, at):
+        # .pau [code=<name>|<value>] [inv] [pin2=none|complement|clock] [align=mid] [ext]
+        #      [cpol=0|1] [cpha=0|1] [stuff=1..16 [stuff_mode=ones|equal]] [baud=0..31] [run=2..5]
+        kv = _kv(args)
+        code = kv.get("code", "nrz")
+        self.cfg["pau_code"] = PAU_CODES[code] if code in PAU_CODES else at.int(code) & 0xFFFF
+        align, run = PAU_CODE_RX.get(code, ("edge", 2))
+        align, run = kv.get("align", align), kv.get("run", str(run))
+        pin2 = kv.get("pin2", "none")
+        if pin2 not in PIN2_ROLES or align not in ("edge", "mid"):
+            raise at.error(f"pin2= one of {list(PIN2_ROLES)}, align=edge|mid")
+        mode = (PIN2_ROLES[pin2] | ("inv" in kv) << 2 | (align == "mid") << 3 | ("ext" in kv) << 4
+                | (kv.get("cpol") == "1") << 5 | (kv.get("cpha") == "1") << 6)
+        if "stuff" in kv:
+            n, stuff_mode = at.int(kv["stuff"]), kv.get("stuff_mode", "ones")
+            if not 1 <= n <= 16 or stuff_mode not in STUFF_MODES:
+                raise at.error("stuff=1..16, stuff_mode=ones|equal")
+            mode |= STUFF_MODES[stuff_mode] << 7 | (n & 0xF) << 8
+        self.cfg["pau_mode"] = mode
+        run = at.int_in(run, 2, 5, "run=2..5")
+        self.cfg["pau_cfg"] = at.int(kv.get("baud", "0")) & 0x1F | (run - 2) << 5
+
+    def d_crc(self, d, args, at):
+        kv = _kv(args)
+        width = at.int(kv.get("width", "0"))
+        if not 1 <= width <= 32 or "poly" not in kv:
+            raise at.error(".crc width=1..32 poly=<value> [init=ones] [xorout=1] [res=<value>]")
+        self.cfg["crc_cfg"] = (width - 1) | (kv.get("init") == "ones") << 5 | (kv.get("xorout") == "1") << 6
+        # CRC_POLY and CRC_RES are MSB-aligned (ISA.md, PAU): the directive's values are not
+        self.cfg["crc_poly"] = at.int(kv["poly"]) << (32 - width) & 0xFFFFFFFF
+        self.cfg["crc_res"] = at.int(kv.get("res", "0")) << (32 - width) & 0xFFFFFFFF
+
+    def d_wrap_target(self, d, args, at):
+        self.cfg["wrap_bottom"] = len(self.lines)
+
+    def d_wrap(self, d, args, at):
+        self.cfg["wrap_top"] = max(0, len(self.lines) - 1)
+
+    def d_word(self, d, args, at):
+        if not args:
+            raise at.error(".word requires a value argument")
+        self.word(" ".join([d, *args]), at)
+
+    # Pass 2
+
+    def finish(self) -> Program:
+        # JMP conditions take their slots first, in program order: a WAIT can use either polarity
+        for text, at in self.lines:
+            tokens = _split(text)[0]
+            if tokens and tokens[0].lower() == "jmp" and len(tokens) > 2 and not (
+                    len(tokens) == 3 and tokens[1].lower() in JMP_PLAIN):
+                c, _, pin = _parse_cond(tokens[1:-1], at)
+                if c is not None:
+                    self.conds.slot_for(c, False, at, pin)
+        words = [self.encode(text, at) for text, at in self.lines]
+        if self.start is not None:
+            label, at = self.start
+            if label not in self.labels:
+                raise at.error(f"Unknown label '{label}'")
+            self.cfg["start"] = self.labels[label]
+        self.cfg.setdefault("wrap_bottom", 0)
+        self.cfg.setdefault("wrap_top", max(0, len(self.lines) - 1))
+        return Program(words, name=self.name, cond_cfg=self.conds.cfg, pin_slot=self.conds.pin_slot,
+                       **self.cfg)
+
+    def encode(self, text: str, at: _At) -> int:
+        if text.startswith(".word "):
+            return at.int(text.split()[1]) & 0xFFFF
+        tokens, delay, side = _split(text)
+        dss = _encode_delay_sideset(at.int(delay) if delay else 0, side and at.int(side),
+                                    self.side_set_count, self.side_set_opt, at)
+        if not tokens:
+            raise at.error("Empty instruction line")
+        mnem, args = tokens[0].lower(), tokens[1:]
+        if mnem not in self.MNEMONICS:
+            raise at.error(f"Unknown instruction mnemonic: '{mnem}'")
+        return self.MNEMONICS[mnem](self, mnem, args, at) | dss << 8
+
+    def i_nop(self, mnem, args, at):
+        if args:
+            raise at.error("NOP takes no arguments")
+        return NOP_WORD
+
+    def i_jmp(self, mnem, args, at):
+        if not args:
+            raise at.error("JMP expects: jmp [condition,] target")
+        tok = args[-1].lower()
+        target = self.labels[tok] if tok in self.labels else at.int(args[-1])
+        if not 0 <= target < PAGE_WORDS:
+            raise at.error(f"JMP target out of range (0-{PAGE_WORDS - 1}): {target}")
+        cond = args[:-1]
+        key = cond[0].lower() if len(cond) == 1 else ("" if not cond else None)
+        if key in JMP_PLAIN:
+            code = JMP_PLAIN[key]
+        else:
+            c, slot, pin = _parse_cond(cond, at)
+            if c is not None:
+                slot, inverted = self.conds.slot_for(c, False, at, pin)
+                if inverted:
+                    raise at.error("`pin` used with both polarities in JMP")
+            code = 4 + slot
+        return (OP_JMP | target >> 5) << 13 | code << 5 | target & 0x1F
+
+    def i_wait(self, mnem, args, at):
+        if len(args) < 2:
+            raise at.error("WAIT expects: wait <polarity> <condition> [edge] [timeout]")
+        pol, edge = WAIT_POLARITY.get(args[0].lower(), (None, 0))
+        if pol is None:
+            raise at.error(f"Invalid WAIT polarity: '{args[0].lower()}'")
+        rest, t_en = args[1:], 0
+        while rest and rest[-1].lower() in ("edge", "level", "timeout", "t_en", "tout"):
+            flag = rest.pop().lower()
+            if flag in ("edge", "level"):
+                edge = int(flag == "edge")
+            else:
+                t_en = 1
+        c, slot, pin = _parse_cond(rest, at)
+        if c is not None:
+            slot, inverted = self.conds.slot_for(c & 0x7F, True, at, pin)
+            pol ^= inverted ^ (c >> 7)
+        return OP_CTRL << 13 | CT_WAIT << 6 | pol << 5 | edge << 4 | t_en << 3 | slot
+
+    def i_in_out(self, mnem, args, at):
+        auto = 0
+        if args and args[-1].lower() == "auto":
+            auto, args = 1, args[:-1]
+        if len(args) != 2:
+            raise at.error(f"{mnem.upper()} requires: {mnem} <operand>, <count> [auto]")
+        table = IN_SRC if mnem == "in" else OUT_DEST
+        name = args[0].lower()
+        if name not in table:
+            raise at.error(f"Invalid {mnem.upper()} operand: '{name}'")
+        count = at.int_in(args[1], 1, 16, f"{mnem.upper()} bit count out of range (1-16): {{}}")
+        op = OP_IN if mnem == "in" else OP_OUT
+        return op << 13 | table[name] << 5 | auto << 4 | (count & 0xF)
+
+    def i_alu(self, mnem, args, at):
+        if mnem == "not":
+            if len(args) != 1:
+                raise at.error("NOT syntax: not <dest>")
+            mnem, args = "xnor", [args[0], "null"]
+        if len(args) != 2:
+            raise at.error(f"{mnem} syntax: {mnem} <dest>, <src>")
+        dest, src = args[0].lower(), args[1].lower()
+        if dest not in ALU_DEST:
+            raise at.error(f"Invalid ALU destination: '{dest}'")
+        if src not in ALU_SRC:
+            raise at.error(f"Invalid ALU source: '{src}'")
+        op = ALU_OPS.index(mnem)
+        return (OP_ALU | op >> 2) << 13 | ALU_DEST[dest] << 5 | (op & 3) << 3 | ALU_SRC[src]
+
+    def i_irq(self, mnem, args, at):
+        bits, idx = 0, None
+        for a in args:
+            al = a.lower()
+            if al in ("clear", "clr"):
+                bits |= 1 << 5
+            elif al in ("wait", "stall"):
+                bits |= 1 << 4
+            elif al in ("peer", "peersm", "peer_sm"):
+                bits |= 1 << 3
+            elif al in ("set", "cont", "nowait", "local"):
+                pass
+            elif idx is None:
+                idx = at.int(a)
+            else:
+                raise at.error(f"Unexpected extra argument in IRQ: '{a}'")
+        if idx is None or not 0 <= idx <= 7:
+            raise at.error("IRQ instruction requires an IRQ index (0-7)")
+        return OP_CTRL << 13 | CT_IRQ << 6 | bits | idx
+
+    def i_fifo(self, mnem, args, at):
+        is_pull, block, ifcond = int(mnem == "pull"), 1, 0
+        for a in args:
+            al = a.lower()
+            if al in ("block", "blocking"):
+                block = 1
+            elif al in ("noblock", "nonblock", "nonblocking"):
+                block = 0
+            elif al in ("ifcond", "cond") or al in (("ifempty", "if_empty") if is_pull else ("iffull", "if_full")):
+                ifcond = 1
+            else:
+                raise at.error(f"Invalid argument for {mnem}: '{a}'")
+        return OP_CTRL << 13 | CT_FIFO << 6 | is_pull << 5 | block << 4 | ifcond << 3
+
+    def i_pau(self, mnem, args, at):
+        action = args[0].lower() if args else ""
+        count = 0
+        if action == "crc_feed" and len(args) == 2:
+            count = at.int_in(args[1], 1, 16, "CRC feed count out of range (1-16)")
+        elif action not in PAU_ACTIONS or len(args) != 1:
+            raise at.error(f"PAU action: one of {list(PAU_ACTIONS)}; crc_feed takes a count")
+        return OP_CTRL << 13 | CT_PAU << 6 | PAU_ACTIONS[action] << 4 | (count & 0xF)
+
+    def i_set(self, mnem, args, at):
+        if len(args) < 2:
+            raise at.error(f"{mnem} requires: {mnem} <dest>, <val>")
+        dest = args[0].lower()
+        if dest not in SET_DEST:
+            raise at.error(f"Invalid SET destination: '{dest}'")
+        text = "".join(args[1:]).lower()
+        if SET_DEST[dest] == 7:                     # PAU_CTL: flags or a number, joined by |
+            val = 0
+            for part in text.split("|"):
+                val |= PAU_CTL_FLAGS[part] if part in PAU_CTL_FLAGS else at.int(part)
+        elif text in self.labels:                   # an address, e.g. a return point for OUT PC
+            val = self.labels[text]
+        else:
+            val = at.int(text)
+        if not 0 <= val <= 31:
+            raise at.error(f"SET value out of range (0-31): {val}")
+        return OP_SET << 13 | SET_DEST[dest] << 5 | val
+
+    DIRECTIVES = {".program": d_program, ".side_set": d_side_set, ".pin_mask": d_pin_list,
+                  ".open_drain": d_pin_list, **dict.fromkeys(BASE_PINS, d_base),
+                  ".shift_in": d_shift, ".shift_out": d_shift, ".x": d_preset, ".y": d_preset,
+                  ".start": d_start, ".clkdiv": d_clkdiv, ".fifo_split": d_fifo_split,
+                  ".push_thresh": d_thresh, ".pull_thresh": d_thresh,
+                  **dict.fromkeys((f".cond{s}" for s in range(4)), d_cond), ".pau": d_pau, ".crc": d_crc,
+                  ".wrap_target": d_wrap_target, ".wrap": d_wrap, ".word": d_word}
+    MNEMONICS = {"nop": i_nop, "jmp": i_jmp, "wait": i_wait, "in": i_in_out, "out": i_in_out,
+                 **dict.fromkeys(ALU_OPS + ["not"], i_alu), "irq": i_irq, "push": i_fifo,
+                 "pull": i_fifo, "pau": i_pau, "set": i_set, "cfg": i_set}
 
 
 def assemble(source_code: str) -> Program:
     """Assemble source code text into a Program (list of 16-bit words, max 64)."""
-    lines = source_code.splitlines()
-    cfg: dict = {}
-    prog_name = "program"
-    side_set_count, side_set_opt = 0, False
-    conds = _Conditions()
-    labels: dict[str, int] = {}
-    instructions: list[tuple[int, str, int]] = []
-    current_addr = 0
-    start_label = None
-
-    # Pass 1: directives, labels, instruction text
-    for line_num, raw_line in enumerate(lines, 1):
-        code_part = re.split(r";|//|#", raw_line, maxsplit=1)[0].strip()
-        if not code_part:
-            continue
-        if code_part.startswith("."):
-            parts = code_part.split()
-            directive = parts[0].lower()
-            if directive == ".program":
-                prog_name = parts[1] if len(parts) > 1 else prog_name
-            elif directive == ".side_set":
-                if len(parts) < 2:
-                    raise AssemblerError(".side_set requires bit count argument", line_num, raw_line)
-                side_set_count = _parse_int(parts[1], line_num, raw_line)
-                if not 0 <= side_set_count <= 5:
-                    raise AssemblerError("Side-set bit count must be between 0 and 5", line_num, raw_line)
-                side_set_opt = any(p.lower() in ("opt", "optional") for p in parts[2:])
-                cfg["side_set_count"], cfg["side_set_opt"] = side_set_count, side_set_opt
-                cfg["side_set_pindirs"] = any(p.lower() in ("pindirs", "pindir") for p in parts[2:])
-            elif directive in (".open_drain", ".pin_mask"):
-                if len(parts) < 2:
-                    raise AssemblerError(f"{directive} requires a pin list", line_num, raw_line)
-                cfg[directive[1:] + ("_mask" if directive == ".open_drain" else "")] = \
-                    _pins(parts[1:], line_num, raw_line)
-            elif directive in (".in_pins", ".out_pins", ".sideset_pins", ".set_pins"):
-                n = _parse_int(parts[1], line_num, raw_line) if len(parts) > 1 else -1
-                if not 0 <= n <= 15:
-                    raise AssemblerError(f"{directive} requires a base pin 0..15", line_num, raw_line)
-                cfg[{".in_pins": "in_base", ".out_pins": "out_base", ".sideset_pins": "sideset_base",
-                     ".set_pins": "set_base"}[directive]] = n
-                if directive == ".set_pins" and len(parts) > 2:
-                    cfg["set_count"] = _parse_int(parts[2], line_num, raw_line)
-                    if not 1 <= cfg["set_count"] <= 5:
-                        raise AssemblerError("SET pin count must be 1..5", line_num, raw_line)
-            elif directive in (".shift_in", ".shift_out"):
-                if len(parts) != 2 or parts[1].lower() not in ("left", "right"):
-                    raise AssemblerError(f"{directive} left|right", line_num, raw_line)
-                cfg[directive[1:] + "_right"] = parts[1].lower() == "right"
-            elif directive in (".x", ".y"):
-                if len(parts) != 2:
-                    raise AssemblerError(f"{directive} requires a value", line_num, raw_line)
-                cfg[directive[1:]] = _parse_int(parts[1], line_num, raw_line) & 0xFFFF
-            elif directive == ".start":
-                if len(parts) != 2:
-                    raise AssemblerError(".start requires a label", line_num, raw_line)
-                start_label = (parts[1].lower(), line_num, raw_line)
-            elif directive == ".clkdiv":
-                if len(parts) < 2:
-                    raise AssemblerError(".clkdiv requires a divider", line_num, raw_line)
-                cfg["clkdiv_int"] = _parse_int(parts[1], line_num, raw_line)
-                if not 1 <= cfg["clkdiv_int"] <= 0xFFFF:
-                    raise AssemblerError("CLKDIV integer part must be 1..65535", line_num, raw_line)
-                if len(parts) > 2:
-                    cfg["clkdiv_frac"] = _parse_int(parts[2], line_num, raw_line) & 0xFF
-            elif directive == ".fifo_split":
-                n = _parse_int(parts[1], line_num, raw_line) if len(parts) == 2 else 0
-                if not 1 <= n <= 31:
-                    raise AssemblerError(".fifo_split takes 1..31 (the TX ring in 8 words)",
-                                         line_num, raw_line)
-                cfg["fifo_split"] = n
-            elif directive in (".push_thresh", ".pull_thresh"):
-                n = _parse_int(parts[1], line_num, raw_line)
-                if not 1 <= n <= 16:
-                    raise AssemblerError("Threshold must be 1..16", line_num, raw_line)
-                cfg[directive[1:]] = n & 0xF
-            elif re.fullmatch(r"\.cond[0-3]", directive):
-                c, _, _ = _parse_cond(parts[1:], line_num, raw_line)
-                if c is None:
-                    raise AssemblerError("A condition cannot be another slot", line_num, raw_line)
-                conds.fix(int(directive[5]), c)
-            elif directive == ".pau":
-                # .pau [code=<name>|<value>] [inv] [pin2=none|complement|clock] [align=mid] [ext]
-                #      [cpol=0|1] [cpha=0|1] [stuff=1..16 [stuff_mode=ones|equal]] [baud=0..31]
-                #      [run=2..5]
-                kv = _kv(parts[1:], line_num, raw_line)
-                code = kv.get("code", "nrz")
-                cfg["pau_code"] = PAU_CODES[code] if code in PAU_CODES else \
-                    _parse_int(code, line_num, raw_line) & 0xFFFF
-                align, run = PAU_CODE_RX.get(code, ("edge", 2))
-                align, run = kv.get("align", align), kv.get("run", str(run))
-                if kv.get("pin2", "none") not in PIN2_ROLES or align not in ("edge", "mid"):
-                    raise AssemblerError(f"pin2= one of {list(PIN2_ROLES)}, align=edge|mid", line_num, raw_line)
-                mode = (PIN2_ROLES[kv.get("pin2", "none")] | ("inv" in kv) << 2
-                        | (align == "mid") << 3 | ("ext" in kv) << 4
-                        | (kv.get("cpol") == "1") << 5 | (kv.get("cpha") == "1") << 6)
-                if "stuff" in kv:
-                    n = _parse_int(kv["stuff"], line_num, raw_line)
-                    if not 1 <= n <= 16 or kv.get("stuff_mode", "ones") not in STUFF_MODES:
-                        raise AssemblerError("stuff=1..16, stuff_mode=ones|equal", line_num, raw_line)
-                    mode |= STUFF_MODES[kv.get("stuff_mode", "ones")] << 7 | (n & 0xF) << 8
-                cfg["pau_mode"] = mode
-                run = _parse_int(run, line_num, raw_line)
-                if not 2 <= run <= 5:
-                    raise AssemblerError("run=2..5", line_num, raw_line)
-                cfg["pau_cfg"] = (_parse_int(kv.get("baud", "0"), line_num, raw_line) & 0x1F
-                                  | (run - 2) << 5)
-            elif directive == ".crc":
-                kv = _kv(parts[1:], line_num, raw_line)
-                width = _parse_int(kv.get("width", "0"), line_num, raw_line)
-                if not 1 <= width <= 32 or "poly" not in kv:
-                    raise AssemblerError(".crc width=1..32 poly=<value> [init=ones] [xorout=1] [res=<value>]",
-                                         line_num, raw_line)
-                cfg["crc_cfg"] = (width - 1) | (kv.get("init") == "ones") << 5 | (kv.get("xorout") == "1") << 6
-                # CRC_POLY and CRC_RES are MSB-aligned (ISA.md, PAU): the directive's values are not
-                cfg["crc_poly"] = _parse_int(kv["poly"], line_num, raw_line) << (32 - width) & 0xFFFFFFFF
-                cfg["crc_res"] = _parse_int(kv.get("res", "0"), line_num, raw_line) << (32 - width) & 0xFFFFFFFF
-            elif directive == ".wrap_target":
-                cfg["wrap_bottom"] = current_addr
-            elif directive == ".wrap":
-                cfg["wrap_top"] = max(0, current_addr - 1)
-            elif directive == ".word":
-                if len(parts) < 2:
-                    raise AssemblerError(".word requires a value argument", line_num, raw_line)
-                instructions.append((current_addr, code_part, line_num))
-                current_addr += 1
-            else:
-                raise AssemblerError(f"Unknown directive '{directive}'", line_num, raw_line)
-            continue
-
-        while (m := re.match(r"^([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*(.*)$", code_part)):
-            label = m.group(1).lower()
-            if label in labels:
-                raise AssemblerError(f"Duplicate label '{label}'", line_num, raw_line)
-            labels[label] = current_addr
-            code_part = m.group(2).strip()
-        if not code_part:
-            continue
-        if current_addr >= PAGE_WORDS:
-            raise AssemblerError(f"Program exceeds {PAGE_WORDS} instructions", line_num, raw_line)
-        instructions.append((current_addr, code_part, line_num))
-        current_addr += 1
-
-    # JMP conditions take their slots first, in program order: a WAIT can use either polarity
-    for _addr, text, line_num in instructions:
-        tokens = [t for t in re.split(r"[\s,]+", re.sub(r"\[[^\]]*\]|\bside\s+\S+", "", text, flags=re.I))
-                  if t]
-        cond_tokens = tokens[1:-1]
-        if tokens[0].lower() == "jmp" and cond_tokens and not (
-                len(cond_tokens) == 1 and cond_tokens[0].lower() in JMP_PLAIN):
-            c, _, pin = _parse_cond(cond_tokens, line_num, text)
-            if c is not None:
-                conds.slot_for(c, False, line_num, text, pin)
-
-    # Pass 2: encode
-    words: list[int] = []
-    for _addr, text, line_num in instructions:
-        if text.startswith(".word"):
-            words.append(_parse_int(text.split()[1], line_num, text) & 0xFFFF)
-            continue
-
-        delay = 0
-        if (m := re.search(r"\[\s*([0-9a-zA-Z_]+)\s*\]", text)):
-            delay = _parse_int(m.group(1), line_num, text)
-            text = text[:m.start()] + text[m.end():]
-        side = None
-        if (m := re.search(r"\bside\s+([0-9a-zA-Z_]+)\b", text, re.IGNORECASE)):
-            side = _parse_int(m.group(1), line_num, text)
-            text = text[:m.start()] + text[m.end():]
-        dss = _encode_delay_sideset(delay, side, side_set_count, side_set_opt, line_num, text) << 8
-
-        clean = text.strip()
-        tokens = [t for t in re.split(r"[\s,]+", clean) if t]
-        if not tokens:
-            raise AssemblerError("Empty instruction line", line_num, text)
-        mnem, args = tokens[0].lower(), tokens[1:]
-
-        def target_of(tok: str) -> int:
-            t = labels[tok.lower()] if tok.lower() in labels else _parse_int(tok, line_num, clean)
-            if not 0 <= t < PAGE_WORDS:
-                raise AssemblerError(f"JMP target out of range (0-{PAGE_WORDS - 1}): {t}", line_num, clean)
-            return t
-
-        def jmp(cond_code: int, target: int) -> int:
-            return ((OP_JMP | target >> 5) << 13) | dss | cond_code << 5 | (target & 0x1F)
-
-        if mnem == "nop":
-            if args:
-                raise AssemblerError("NOP takes no arguments", line_num, clean)
-            words.append(NOP_WORD | dss)
-
-        elif mnem == "jmp":
-            if not args:
-                raise AssemblerError("JMP expects: jmp [condition,] target", line_num, clean)
-            target = target_of(args[-1])
-            cond_tokens = args[:-1]
-            key = cond_tokens[0].lower() if len(cond_tokens) == 1 else ("" if not cond_tokens else None)
-            if key in JMP_PLAIN:
-                words.append(jmp(JMP_PLAIN[key], target))
-            else:
-                c, slot, pin = _parse_cond(cond_tokens, line_num, clean)
-                if c is not None:
-                    slot, inverted = conds.slot_for(c, False, line_num, clean, pin)
-                    if inverted:
-                        raise AssemblerError("`pin` used with both polarities in JMP", line_num, clean)
-                words.append(jmp(4 + slot, target))
-
-        elif mnem == "wait":
-            if len(args) < 2:
-                raise AssemblerError("WAIT expects: wait <polarity> <condition> [edge] [timeout]", line_num, clean)
-            pol_tok = args[0].lower()
-            pol, edge = {"1": (1, 0), "high": (1, 0), "hi": (1, 0), "0": (0, 0), "low": (0, 0),
-                         "lo": (0, 0), "rise": (1, 1), "rising": (1, 1), "fall": (0, 1),
-                         "falling": (0, 1)}.get(pol_tok, (None, 0))
-            if pol is None:
-                raise AssemblerError(f"Invalid WAIT polarity: '{pol_tok}'", line_num, clean)
-            rest = args[1:]
-            t_en = 0
-            while rest and rest[-1].lower() in ("edge", "level", "timeout", "t_en", "tout"):
-                flag = rest.pop().lower()
-                if flag == "edge":
-                    edge = 1
-                elif flag == "level":
-                    edge = 0
-                else:
-                    t_en = 1
-            c, slot, pin = _parse_cond(rest, line_num, clean)
-            if c is not None:
-                slot, inverted = conds.slot_for(c & 0x7F, True, line_num, clean, pin)
-                pol ^= inverted ^ (c >> 7)
-            a = pol << 5 | edge << 4 | t_en << 3 | slot
-            words.append((OP_CTRL << 13) | dss | CT_WAIT << 6 | a)
-
-        elif mnem in ("in", "out"):
-            auto = 0
-            if args and args[-1].lower() == "auto":
-                auto, args = 1, args[:-1]
-            if len(args) != 2:
-                raise AssemblerError(f"{mnem.upper()} requires: {mnem} <operand>, <count> [auto]", line_num, clean)
-            table = IN_SRC if mnem == "in" else OUT_DEST
-            name = args[0].lower()
-            if name not in table:
-                raise AssemblerError(f"Invalid {mnem.upper()} operand: '{name}'", line_num, clean)
-            count = _parse_int(args[1], line_num, clean)
-            if not 1 <= count <= 16:
-                raise AssemblerError(f"{mnem.upper()} bit count out of range (1-16): {count}", line_num, clean)
-            op = OP_IN if mnem == "in" else OP_OUT
-            words.append((op << 13) | dss | table[name] << 5 | auto << 4 | (count & 0xF))
-
-        elif mnem in ALU_OPS or mnem == "not":
-            if mnem == "not":
-                if len(args) != 1:
-                    raise AssemblerError("NOT syntax: not <dest>", line_num, clean)
-                mnem, args = "xnor", [args[0], "null"]
-            if len(args) != 2:
-                raise AssemblerError(f"{mnem} syntax: {mnem} <dest>, <src>", line_num, clean)
-            dest, src = args[0].lower(), args[1].lower()
-            if dest not in ALU_DEST:
-                raise AssemblerError(f"Invalid ALU destination: '{dest}'", line_num, clean)
-            if src not in ALU_SRC:
-                raise AssemblerError(f"Invalid ALU source: '{src}'", line_num, clean)
-            op = ALU_OPS.index(mnem)
-            words.append(((OP_ALU | op >> 2) << 13) | dss | ALU_DEST[dest] << 5 | (op & 3) << 3 | ALU_SRC[src])
-
-        elif mnem == "irq":
-            bits, idx = 0, None
-            for a in args:
-                al = a.lower()
-                if al in ("clear", "clr"):
-                    bits |= 1 << 5
-                elif al in ("wait", "stall"):
-                    bits |= 1 << 4
-                elif al in ("peer", "peersm", "peer_sm"):
-                    bits |= 1 << 3
-                elif al in ("set", "cont", "nowait", "local"):
-                    pass
-                elif idx is None:
-                    idx = _parse_int(a, line_num, clean)
-                else:
-                    raise AssemblerError(f"Unexpected extra argument in IRQ: '{a}'", line_num, clean)
-            if idx is None or not 0 <= idx <= 7:
-                raise AssemblerError("IRQ instruction requires an IRQ index (0-7)", line_num, clean)
-            words.append((OP_CTRL << 13) | dss | CT_IRQ << 6 | bits | idx)
-
-        elif mnem in ("push", "pull"):
-            is_pull, block, ifcond = int(mnem == "pull"), 1, 0
-            for a in args:
-                al = a.lower()
-                if al in ("block", "blocking"):
-                    block = 1
-                elif al in ("noblock", "nonblock", "nonblocking"):
-                    block = 0
-                elif al in ("ifcond", "cond") or al in (("ifempty", "if_empty") if is_pull else ("iffull", "if_full")):
-                    ifcond = 1
-                else:
-                    raise AssemblerError(f"Invalid argument for {mnem}: '{a}'", line_num, clean)
-            words.append((OP_CTRL << 13) | dss | CT_FIFO << 6 | is_pull << 5 | block << 4 | ifcond << 3)
-
-        elif mnem == "pau":
-            action = args[0].lower() if args else ""
-            count = 0
-            if action == "crc_feed" and len(args) == 2:
-                count = _parse_int(args[1], line_num, clean)
-                if not 1 <= count <= 16:
-                    raise AssemblerError("CRC feed count out of range (1-16)", line_num, clean)
-            elif action not in PAU_ACTIONS or len(args) != 1:
-                raise AssemblerError(f"PAU action: one of {list(PAU_ACTIONS)}; crc_feed takes a count",
-                                     line_num, clean)
-            words.append((OP_CTRL << 13) | dss | CT_PAU << 6 | PAU_ACTIONS[action] << 4 | (count & 0xF))
-
-        elif mnem in ("set", "cfg"):
-            if len(args) < 2:
-                raise AssemblerError(f"{mnem} requires: {mnem} <dest>, <val>", line_num, clean)
-            dest = args[0].lower()
-            if dest not in SET_DEST:
-                raise AssemblerError(f"Invalid SET destination: '{dest}'", line_num, clean)
-            val_str = "".join(args[1:]).lower()
-            if SET_DEST[dest] == 7:
-                val = 0
-                for part in val_str.split("|"):
-                    val |= PAU_CTL_FLAGS[part] if part in PAU_CTL_FLAGS else _parse_int(part, line_num, clean)
-            elif val_str in labels:                     # an address, e.g. a return point for OUT PC
-                val = labels[val_str]
-            else:
-                val = _parse_int(val_str, line_num, clean)
-            if not 0 <= val <= 31:
-                raise AssemblerError(f"SET value out of range (0-31): {val}", line_num, clean)
-            words.append((OP_SET << 13) | dss | SET_DEST[dest] << 5 | val)
-
-        else:
-            raise AssemblerError(f"Unknown instruction mnemonic: '{mnem}'", line_num, clean)
-
-    if start_label is not None:
-        if start_label[0] not in labels:
-            raise AssemblerError(f"Unknown label '{start_label[0]}'", *start_label[1:])
-        cfg["start"] = labels[start_label[0]]
-    cfg.setdefault("wrap_bottom", 0)
-    cfg.setdefault("wrap_top", max(0, current_addr - 1))
-    return Program(words, name=prog_name, cond_cfg=conds.cfg, pin_slot=conds.pin_slot, **cfg)
+    a = _Assembler()
+    for line_num, raw in enumerate(source_code.splitlines(), 1):
+        a.line(line_num, raw)
+    return a.finish()
 
 
 def main() -> None:
