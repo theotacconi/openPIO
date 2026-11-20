@@ -36,7 +36,7 @@ from board import Board, Serial
 from explain import Clock, bits_hex, explain, sha, us, words_sha
 
 from asm import PAGE_WORDS, assemble                     # noqa: E402  (board put it on the path)
-from chip import FIFO_LEVEL, ID, OP_IMEM_RD, OP_IMEM_WR, PINS_IN, header   # noqa: E402
+from chip import ID, OP_IMEM_RD, OP_IMEM_WR, PINS_IN, header   # noqa: E402
 from host import Host                                    # noqa: E402
 from learn import AsyncSerial, Capture, Frames, Pulses, rx_frames  # noqa: E402
 from listen import learn
@@ -286,7 +286,7 @@ def main() -> int:
             t0 = time.monotonic()
 
             def receive() -> None:
-                n = host.read(0, FIFO_LEVEL)[0] >> 8
+                n = host.rx_level(0)
                 if not n:
                     return
                 got.extend(host.pop(0, n))

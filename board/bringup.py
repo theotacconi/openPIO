@@ -19,7 +19,7 @@ from board import Board, Model, Serial
 
 ROOT = Path(__file__).resolve().parents[1]
 from asm import IMEM_WORDS, assemble                     # noqa: E402  (board put it on the path)
-from chip import (CRC_POLY_LO, CTRL, FIFO_LEVEL, ID, IRQ, ISA_VERSION, OP_IMEM_RD,   # noqa: E402
+from chip import (CRC_POLY_LO, CTRL, ID, IRQ, ISA_VERSION, OP_IMEM_RD,   # noqa: E402
                   OP_IMEM_WR, PADS_BIDIR, TT_PADS, header)
 from host import Host                                    # noqa: E402
 
@@ -29,11 +29,6 @@ ECHO = """
     mov isr, osr
     push block
 """
-
-
-def wait_rx(host: Host, n: int, count: int, polls: int = 3000) -> bool:
-    """Poll FIFO_LEVEL until SM n's RX FIFO holds `count` words."""
-    return any(host.read(n, FIFO_LEVEL)[0] >> 8 >= count for _ in range(polls))
 
 
 def check_id(board: Board, host: Host) -> str | None:
@@ -92,8 +87,8 @@ def check_echo(board: Board, host: Host) -> str | None:
         host.start(0b01)
         words = [rng.randrange(1 << 16) for _ in range(25)]
         host.push(0, words)
-        if not wait_rx(host, 0, len(words)):
-            return f"page {page}: RX FIFO holds {host.read(0, FIFO_LEVEL)[0] >> 8} words of {len(words)}"
+        if not host.wait_rx(0, len(words), 3000):
+            return f"page {page}: RX FIFO holds {host.rx_level(0)} words of {len(words)}"
         got = host.pop(0, len(words))
         bad = [i for i in range(len(words)) if got[i] != words[i]]
         if bad:
@@ -112,12 +107,12 @@ def check_uart(board: Board, host: Host) -> str | None:
     rng = random.Random(3)
     data = [rng.randrange(256) for _ in range(32)]
     host.push(0, data)
-    if not wait_rx(host, 1, len(data)):
-        return f"{host.read(1, FIFO_LEVEL)[0] >> 8} bytes of {len(data)} back: pin 0 loaded?"
+    if not host.wait_rx(1, len(data), 3000):
+        return f"{host.rx_level(1)} bytes of {len(data)} back: pin 0 loaded?"
     got = [w >> 8 for w in host.pop(1, len(data))]
     if got != data:
         return f"bytes differ: sent {bytes(data[:8]).hex()}.., got {bytes(got[:8]).hex()}.."
-    if host.read(1, IRQ)[0] & 1:
+    if host.flags(1) & 1:
         return "framing error flagged"
     return None
 

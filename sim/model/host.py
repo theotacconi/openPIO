@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Sequence
 
 from asm import CONFIG_RESET, PAGE_WORDS, Program
-from chip import (CLKDIV_FRAC, COND_CFG, CTRL, GPIO, OP_IMEM_WR, OP_REG_RD, OP_REG_WR, OP_RX_POP,
+from chip import (CLKDIV_FRAC, COND_CFG, CTRL, FIFO_LEVEL, GPIO, IRQ, OP_IMEM_WR, OP_REG_RD, OP_REG_WR, OP_RX_POP,
                   OP_TX_PUSH, PADS_BIDIR, PAU_CODE, PAU_MODE, PC, WRAP, Chip, header)
 
 
@@ -86,3 +86,27 @@ class Host:
             k = min(count - len(words), 64)
             words += self.chip.spi(header(OP_RX_POP, n, k & 63), [0] * k)[1:]
         return words
+
+    def rx_level(self, n: int) -> int:
+        """Words in SM n's RX FIFO."""
+        return self.read(n, FIFO_LEVEL)[0] >> 8
+
+    def tx_level(self, n: int) -> int:
+        """Words in SM n's TX FIFO."""
+        return self.read(n, FIFO_LEVEL)[0] & 0xFF
+
+    def drain(self, n: int) -> list[int]:
+        """Every word in SM n's RX FIFO."""
+        return self.pop(n, self.rx_level(n))
+
+    def wait_rx(self, n: int, count: int, polls: int = 5000) -> bool:
+        """Poll until SM n's RX FIFO holds `count` words; every poll is a few SPI words of chip
+        time."""
+        return any(self.rx_level(n) >= count for _ in range(polls))
+
+    def flags(self, n: int) -> int:
+        """SM n's IRQ flags."""
+        return self.read(n, IRQ)[0] & 0xFF
+
+    def clear_flags(self, n: int) -> None:
+        self.write(n, IRQ, 0x00FF)

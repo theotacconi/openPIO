@@ -32,9 +32,9 @@ import time
 from pathlib import Path
 
 from board import Board, Serial
-from loopback import clear_flags, differ, flags, program, release, rx_level, wait, wait_rx
+from loopback import differ, program, release, wait
 from asm import assemble                                 # noqa: E402  (board put it on the path)
-from chip import CTRL, FIFO_LEVEL, PINS_IN               # noqa: E402
+from chip import CTRL, PINS_IN                           # noqa: E402
 from host import Host                                    # noqa: E402
 
 CLK = 27e6
@@ -84,10 +84,6 @@ DRIVE = """
 """
 
 
-def tx_level(host: Host, n: int) -> int:
-    return host.read(n, FIFO_LEVEL)[0] & 0xFF
-
-
 def check_wires(host: Host, pico: Pico) -> str | None:
     """Each wire alone, both levels, in its direction: the Pico drives its GPIO and the chip
     reads PINS_IN, or the chip drives its pio pin and the Pico reads its GPIO; the other wires
@@ -131,7 +127,7 @@ def check_uart_out(host: Host, pico: Pico) -> str | None:
         data = random.Random(baud).choices(range(256), k=128)
         host.push(0, data)
         host.start(0b01)
-        wait(host, lambda: tx_level(host, 0) == 0, 20000)
+        wait(lambda: host.tx_level(0) == 0, 20000)
         time.sleep(30 / baud + 0.01)                     # the last byte, and the Pico's IRQ
         SEEN.append(("uart", 4, baud, data))
         error = differ(f"{baud} baud", data, pico.bytes("ur"))
@@ -147,14 +143,14 @@ def check_uart_in(host: Host, pico: Pico) -> str | None:
         pico.ask("u", baud)
         host.write(0, CTRL, 0x30)
         host.load(1, program("uart/uart_rx.asm"), clkdiv_int=div, clkdiv_frac=frac, in_base=5)
-        clear_flags(host, 1)
+        host.clear_flags(1)
         host.start(0b10)
         data = random.Random(-baud).choices(range(256), k=128)
         pico.ask("ut", bytes(data).hex())
         SEEN.append(("uart", 5, baud, data))
-        wait_rx(host, 1, len(data), 20000)
-        error = differ(f"{baud} baud", data, [w >> 8 for w in host.pop(1, rx_level(host, 1))])
-        if error or flags(host, 1) & 1:
+        host.wait_rx(1, len(data), 20000)
+        error = differ(f"{baud} baud", data, [w >> 8 for w in host.drain(1)])
+        if error or host.flags(1) & 1:
             return error or f"{baud} baud: framing error"
     return None
 
@@ -172,7 +168,7 @@ def check_spi(host: Host, pico: Pico) -> str | None:
         host.start(0b01)
         real = pico.ask("s", hz)
         miso = [b for t in transfers for b in pico.bytes("sx", bytes(t).hex())]
-        mosi = [w & 0xFF for w in host.pop(0, rx_level(host, 0))]
+        mosi = [w & 0xFF for w in host.drain(0)]
         SEEN.append(("spi", hz, sum(transfers, []), answers))
         error = (differ(f"SCK {real} Hz, MOSI", sum(transfers, []), mosi)
                  or differ(f"SCK {real} Hz, MISO", answers, miso))
@@ -190,9 +186,9 @@ def i2c(host: Host, cmds: list[int]) -> list[int] | None:
     """The commands through i2c_master: a result word per byte, bits 8:1 the byte seen on SDA,
     bit 0 its ACK (0: ACK)."""
     host.push(0, cmds)
-    if not wait_rx(host, 0, len(cmds), 20000):
+    if not host.wait_rx(0, len(cmds), 20000):
         return None
-    return host.pop(0, rx_level(host, 0))
+    return host.drain(0)
 
 
 def check_i2c(host: Host, pico: Pico) -> str | None:
@@ -216,7 +212,7 @@ def check_i2c(host: Host, pico: Pico) -> str | None:
         got = i2c(host, [cmd(TARGET << 1, start=1), cmd(reg)] + [cmd(b) for b in data[:-1]]
                   + [cmd(data[-1], stop=1)])
         if got is None:
-            return f"{hz} Hz write: {rx_level(host, 0)} results"
+            return f"{hz} Hz write: {host.rx_level(0)} results"
         seen = [TARGET << 1, reg] + data
         SEEN.append(("i2c", hz, ["Start", f"Address write: {TARGET:02X}", "ACK"]
                      + [x for b in [reg] + data for x in (f"Data write: {b:02X}", "ACK")]
@@ -232,7 +228,7 @@ def check_i2c(host: Host, pico: Pico) -> str | None:
         got = i2c(host, [cmd(TARGET << 1, start=1), cmd(reg), cmd(TARGET << 1 | 1, start=1)]
                   + [cmd(read=1)] * 15 + [cmd(read=1, nack=1, stop=1)])
         if got is None:
-            return f"{hz} Hz read: {rx_level(host, 0)} results"
+            return f"{hz} Hz read: {host.rx_level(0)} results"
         if any(w & 1 for w in got[:3]):
             return f"{hz} Hz read: address or register not ACKed: {[f'{w:03x}' for w in got[:3]]}"
         SEEN.append(("i2c", hz, ["Start", f"Address write: {TARGET:02X}", "ACK",

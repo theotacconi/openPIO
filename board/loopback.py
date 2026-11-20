@@ -24,7 +24,7 @@ from board import Board, Model, Serial
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "test" / "shared"))
 from asm import assemble                                 # noqa: E402  (board put it on the path)
-from chip import CTRL, FIFO_LEVEL, GPIO, IRQ             # noqa: E402
+from chip import CTRL, GPIO, IRQ                         # noqa: E402
 from devices import can_bits, crc7_sd                    # noqa: E402
 from host import Host                                    # noqa: E402
 from learn import AsyncSerial, Capture, characters       # noqa: E402
@@ -42,25 +42,9 @@ def program(path: str):
     return assemble((ROOT / "programs" / path).read_text())
 
 
-def rx_level(host: Host, n: int) -> int:
-    return host.read(n, FIFO_LEVEL)[0] >> 8
-
-
-def wait(host: Host, done, polls: int = 5000) -> bool:
+def wait(done, polls: int = 5000) -> bool:
     """Poll until done() is true; every poll is a few SPI words of chip time."""
     return any(done() for _ in range(polls))
-
-
-def wait_rx(host: Host, n: int, count: int, polls: int = 5000) -> bool:
-    return wait(host, lambda: rx_level(host, n) >= count, polls)
-
-
-def flags(host: Host, n: int) -> int:
-    return host.read(n, IRQ)[0] & 0xFF
-
-
-def clear_flags(host: Host, n: int) -> None:
-    host.write(n, IRQ, 0x00FF)
 
 
 def release(host: Host) -> None:
@@ -97,9 +81,9 @@ def check_uart(host: Host) -> str | None:
         host.start(0b11)
         data = random.Random(div).choices(range(256), k=64)
         host.push(0, data)
-        wait_rx(host, 1, len(data), 20000)
-        error = differ(f"CLKDIV {div} + {frac}/256", data, [w >> 8 for w in host.pop(1, rx_level(host, 1))])
-        if error or flags(host, 1) & 1:
+        host.wait_rx(1, len(data), 20000)
+        error = differ(f"CLKDIV {div} + {frac}/256", data, [w >> 8 for w in host.drain(1)])
+        if error or host.flags(1) & 1:
             return error or f"CLKDIV {div}: framing error"
     return None
 
@@ -111,13 +95,13 @@ def check_autobaud(host: Host) -> str | None:
     host.start(0b11)
     data = random.Random(4).choices(range(256), k=40)
     host.push(0, [0x55] + data)
-    wait_rx(host, 1, 1 + len(data), 20000)
-    words = host.pop(1, rx_level(host, 1))
+    host.wait_rx(1, 1 + len(data), 20000)
+    words = host.drain(1)
     if not words:
         return "nothing measured"
     if abs(words[0] - 8 * 234.375 / 4) > 2:
         return f"8 bit times measured as {words[0]} strobes, not 469"
-    return differ("bytes", data, [w >> 8 for w in words[1:]]) or ("framing error" if flags(host, 1) & 1 else None)
+    return differ("bytes", data, [w >> 8 for w in words[1:]]) or ("framing error" if host.flags(1) & 1 else None)
 
 
 def check_duplex(host: Host) -> str | None:
@@ -130,10 +114,10 @@ def check_duplex(host: Host) -> str | None:
     host.push(0, out[0])
     host.push(1, out[1])
     host.start(0b11)
-    wait(host, lambda: rx_level(host, 0) >= 48 and rx_level(host, 1) >= 48, 20000)
+    wait(lambda: host.rx_level(0) >= 48 and host.rx_level(1) >= 48, 20000)
     for n in (0, 1):
-        error = differ(f"into SM {n}", out[1 - n], [w >> 8 for w in host.pop(n, rx_level(host, n))])
-        if error or flags(host, n) & 1:
+        error = differ(f"into SM {n}", out[1 - n], [w >> 8 for w in host.drain(n)])
+        if error or host.flags(n) & 1:
             return error or f"SM {n}: framing error"
     return None
 
@@ -148,8 +132,8 @@ def check_hdlc(host: Host) -> str | None:
     for k in range(40):
         frame = [rnd.choice((0x7E, 0x7D, 0xFF, rnd.randrange(256))) for _ in range(1 + k % 20)]
         send_whole(host, [len(frame), *frame])
-        wait_rx(host, 1, len(frame) + 3)
-        words = host.pop(1, rx_level(host, 1))
+        host.wait_rx(1, len(frame) + 3)
+        words = host.drain(1)
         if [w >> 8 for w in words[:-3]] != frame or not words or words[-1] != 0x7E03:
             return f"frame {k} of {len(frame)} bytes: {len(words)} words back, end {words[-1] if words else None}"
     return None
@@ -167,14 +151,14 @@ def check_usb(host: Host) -> str | None:
         payload = [rnd.choice((0xFF, rnd.randrange(256))) for _ in range(k % 9)]
         pid = (0xC3, 0x4B)[k & 1]
         send_whole(host, [0x80 | pid << 8, len(payload), *payload])
-        if not wait(host, lambda: flags(host, 1)):
+        if not wait(lambda: host.flags(1)):
             return f"packet {k}: no end of packet"
-        f = flags(host, 1)
-        got = [w >> 8 for w in host.pop(1, rx_level(host, 1))]
+        f = host.flags(1)
+        got = [w >> 8 for w in host.drain(1)]
         if f != 1 or got[:2] != [0x80, pid] or got[2:-2] != payload:
             return f"packet {k}: IRQ {f:#04x}, bytes {bytes(got).hex()}, sent {bytes(payload).hex()}"
-        clear_flags(host, 0)
-        clear_flags(host, 1)
+        host.clear_flags(0)
+        host.clear_flags(1)
     return None
 
 
@@ -199,15 +183,15 @@ def check_can(host: Host) -> str | None:
     frames[1] = (0x7EF, [0xFF, 0xFF])                     # long recessive runs (0x7F0 up: not legal)
     for k, (ident, data) in enumerate(frames):
         host.push(0, frame_words(ident, data))
-        if not wait(host, lambda: flags(host, 0) and flags(host, 1), 20000):
-            return f"frame {k}: IRQ {flags(host, 0):#x} / {flags(host, 1):#x}"
-        tx, rx = flags(host, 0), flags(host, 1)
-        words = host.pop(1, rx_level(host, 1))
+        if not wait(lambda: host.flags(0) and host.flags(1), 20000):
+            return f"frame {k}: IRQ {host.flags(0):#x} / {host.flags(1):#x}"
+        tx, rx = host.flags(0), host.flags(1)
+        words = host.drain(1)
         got = (words[0] >> 3 & 0x7FF, [w & 0xFF for w in words[2:]]) if len(words) >= 2 else None
         if tx != 1 or rx != 1 or got != (ident, data):
             return f"frame {k}: can_tx IRQ {tx:#x} (1: acknowledged), can_rx IRQ {rx:#x}, got {got}"
-        clear_flags(host, 0)
-        clear_flags(host, 1)
+        host.clear_flags(0)
+        host.clear_flags(1)
     return None
 
 
@@ -226,12 +210,12 @@ def check_fourb5b(host: Host) -> str | None:
     data = list(range(16)) + [rnd.randrange(16) for _ in range(24)]
     host.push(0, [2 * n for n in [4, 3] * 16 + [2] + data])
     host.start(0b11)
-    wait_rx(host, 1, 1 + len(data))
-    words = host.pop(1, rx_level(host, 1))
+    host.wait_rx(1, 1 + len(data))
+    words = host.drain(1)
     if any(w & 0x7FF for w in words):
         return "bits outside a symbol"
     return differ("symbols", [CODES[2]] + [CODES[n] for n in data], [w >> 11 for w in words]) or (
-        "PAU overrun" if flags(host, 1) & 1 else None)
+        "PAU overrun" if host.flags(1) & 1 else None)
 
 
 def check_spi(host: Host) -> str | None:
@@ -244,9 +228,9 @@ def check_spi(host: Host) -> str | None:
     host.push(1, [b << 8 for b in miso])
     host.start(0b11)
     host.push(0, [b << 8 for b in mosi])
-    wait(host, lambda: rx_level(host, 0) >= 32 and rx_level(host, 1) >= 32)
-    return (differ("MOSI", mosi, [w & 0xFF for w in host.pop(1, rx_level(host, 1))])
-            or differ("MISO", miso, [w & 0xFF for w in host.pop(0, rx_level(host, 0))]))
+    wait(lambda: host.rx_level(0) >= 32 and host.rx_level(1) >= 32)
+    return (differ("MOSI", mosi, [w & 0xFF for w in host.drain(1)])
+            or differ("MISO", miso, [w & 0xFF for w in host.drain(0)]))
 
 
 def check_sd(host: Host) -> str | None:
@@ -260,8 +244,8 @@ def check_sd(host: Host) -> str | None:
         head = [0x40 | index, *(arg >> s & 0xFF for s in (24, 16, 8, 0))]
         sent += head + [crc7_sd(head) << 1 | 1]
         host.push(0, [b << 8 for b in head])
-    wait_rx(host, 1, len(sent))
-    got = [w & 0xFF for w in host.pop(1, rx_level(host, 1))]
+    host.wait_rx(1, len(sent))
+    got = [w & 0xFF for w in host.drain(1)]
     return differ("command bytes", sent, got) or (None if got[5] == 0x95 else "CMD0 does not end in 0x95")
 
 
@@ -274,8 +258,8 @@ def check_i2s(host: Host) -> str | None:
     samples = [rnd.randrange(1, 1 << 16) for _ in range(32)]
     host.push(0, samples)
     host.start(0b11)
-    wait_rx(host, 1, 100)
-    got = host.pop(1, rx_level(host, 1))
+    host.wait_rx(1, 100)
+    got = host.drain(1)
     k = got.index(samples[0]) if samples[0] in got else -1
     return differ("samples", samples, got[k:k + len(samples)]) if k >= 0 else "the first sample never came"
 
@@ -290,7 +274,7 @@ def check_edges(host: Host) -> str | None:
     host.push(0, data)
     words, quiet = [], 0
     while quiet < 30:                                      # the RX FIFO drained as it fills
-        n = rx_level(host, 1)
+        n = host.rx_level(1)
         words += host.pop(1, n) if n else []
         quiet = 0 if n else quiet + 1
     if len(words) < 2:
@@ -333,17 +317,17 @@ def check_ethernet(host: Host) -> str | None:
         words = [size // 2] + [frame[i] | frame[i + 1] << 8 for i in range(0, size, 2)]
         for i in range(0, len(words), 64):
             host.push(0, words[i:i + 64])
-        if host.read(0, FIFO_LEVEL)[0] & 0xFF != len(words):
-            return f"frame {k}: {host.read(0, FIFO_LEVEL)[0] & 0xFF} words in the TX FIFO, not {len(words)}"
+        if host.tx_level(0) != len(words):
+            return f"frame {k}: {host.tx_level(0)} words in the TX FIFO, not {len(words)}"
         host.write(0, IRQ, 1 << 8)                         # flag 0: the frame is in the FIFO
-        if not wait(host, lambda: flags(host, 0) & 2):
+        if not wait(lambda: host.flags(0) & 2):
             return f"frame {k}: eth_tx never set flag 1"
-        clear_flags(host, 0)
+        host.clear_flags(0)
         least = 8 * (size + 4) // 15 + 2
-        if not wait_rx(host, 1, least):
-            return f"frame {k}: {rx_level(host, 1)} RX words, not {least} or more"
-        wait(host, lambda: False, 5)
-        got = eth_frames(host.pop(1, rx_level(host, 1)))
+        if not host.wait_rx(1, least):
+            return f"frame {k}: {host.rx_level(1)} RX words, not {least} or more"
+        wait(lambda: False, 5)
+        got = eth_frames(host.drain(1))
         if len(got) != 1:
             return f"frame {k}: {len(got)} frames received"
         bits, verdict = got[0]

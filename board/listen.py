@@ -27,7 +27,7 @@ import time
 from board import Board, Model, Serial
 
 from asm import assemble                                 # noqa: E402  (board put it on the path)
-from chip import CTRL, FIFO_LEVEL                        # noqa: E402
+from chip import CTRL                                    # noqa: E402
 from host import Host                                    # noqa: E402
 from learn import (Capture, clocked_check, clocked_rx_program, clocked_timing,  # noqa: E402
                    crc_check, frame_timing, frames_rx_program, infer_async, infer_clocked,
@@ -152,7 +152,7 @@ def main() -> int:
     words: list[int] = []
     try:
         while end is None or port.chip.cycle < end:
-            n = host.read(0, FIFO_LEVEL)[0] >> 8
+            n = host.rx_level(0)
             if not n:
                 if end is None:
                     time.sleep(0.01)
