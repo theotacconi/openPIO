@@ -18,7 +18,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[1] / "sim" / "model"))
 from vsim import VSim                                                    # noqa: E402
 
-from chip import (OP_IMEM_RD, OP_REG_RD, OP_RX_POP, OP_TX_PUSH, Chip, header)  # noqa: E402
+from chip import OP_IMEM_RD, OP_REG_RD, OP_RX_POP, Chip, header  # noqa: E402
 from chip_lockstep import Mismatch, main, random_load                         # noqa: E402
 from host import Host                                                    # noqa: E402
 

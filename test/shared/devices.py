@@ -421,13 +421,9 @@ J, K, SE0, SE1 = "J", "K", "0", "1"
 
 
 def crc16_usb(data: list[int]) -> int:
-    """CRC-16/USB of the data bytes (the value sent after them, LSB first)."""
-    crc = 0xFFFF
-    for byte in data:
-        crc ^= byte
-        for _ in range(8):
-            crc = (crc >> 1) ^ 0xA001 if crc & 1 else crc >> 1
-    return crc ^ 0xFFFF
+    """CRC-16/USB of the data bytes (the value sent after them, LSB first): CRC-16/MODBUS with
+    the final XOR."""
+    return crc16_modbus(data) ^ 0xFFFF
 
 
 def usb_states(pid: int, payload: list[int], crc: int | None = None) -> list[str]:
@@ -495,7 +491,7 @@ class UsbRx(Device):
         s = self._state(levels)
         if self._t0 is None:
             if self._prev == J and s == K:
-                self._t0, self._states, self._eop = t, [], None
+                self._t0, self._states = t, []
         else:
             rel = t - self._t0
             if s != self._prev:
@@ -1694,7 +1690,7 @@ class IsoCard(Device):
         self.last_lead = (self.c, who)
 
     def _clock(self, t: int, io: int, rst: int) -> None:
-        E, c = self.ETU, self.c
+        c = self.c
         if not rst:
             self.mode, self.drive = "off", {}
             self.rst_low += 1

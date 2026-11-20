@@ -181,7 +181,7 @@ def random_source(rng: random.Random) -> str:
             f"set pindirs, {rng.randrange(32)}" if k < .66 else
             f"mov x, {rng.choice(['status', 'pins', 'isr', 'osr', 'y'])}" if k < .72 else
             f"jmp x--, {rng.randrange(4)}" if k < .78 else
-            f"in time, 16 auto" if k < .82 else
+            "in time, 16 auto" if k < .82 else
             f"out x, {n}" if k < .86 else
             f"set x, {rng.randrange(32)} [{rng.randrange(4)}]" if k < .9 else
             "pau crc_append" if k < .93 else

@@ -19,8 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "sim" / "learn"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "sim" / "model"))
 
 from asm import assemble                                 # noqa: E402
-from learn import (LEADER_MIN, Capture, Pulses, groups, infer_async, infer_frames,  # noqa: E402
-                   infer_pulses, pulses_timing)
+from learn import LEADER_MIN, Capture, Pulses, groups, pulses_timing  # noqa: E402
 
 DIM, BOLD, OFF = "\033[2m", "\033[1m", "\033[0m"
 

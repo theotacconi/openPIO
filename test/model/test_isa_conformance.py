@@ -202,7 +202,7 @@ class Out(unittest.TestCase):
 class Alu(unittest.TestCase):
 
     def op(self, mnem, d, s):
-        sm = run(sm_of(f"{mnem} x, y" + HALT) if True else None, 0)
+        sm = sm_of(f"{mnem} x, y" + HALT)
         sm.x, sm.y = d, s
         return run(sm, 1).x
 

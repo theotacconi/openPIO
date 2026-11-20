@@ -12,9 +12,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "test" / "shared"))
 from asm import assemble                                             # noqa: E402
 from chip import (Chip, header, CTRL, GPIO, ID, IRQ, IRQ_MASK, PC, PINS, STATUS, WRAP, X, FIFO_LEVEL,  # noqa: E402
                   FIFO_SPLIT,
-                  COND_CFG01, COND_CFG23, CRC_HI, IRQ_SUM, PINBASE, PIN_MASK, MISC, CLKDIV, CLKDIV_FRAC,
+                  COND_CFG01, COND_CFG23, CRC_HI, IRQ_SUM, PIN_MASK, CLKDIV, CLKDIV_FRAC,
                   SM_STATUS, PINS_IN, PINS_OE, PADS_BIDIR, PADS_IN, PADS_OUT,
-                  OP_IMEM_RD, OP_IMEM_WR, OP_REG_RD, OP_REG_WR, OP_RX_POP, OP_TX_PUSH)
+                  OP_IMEM_RD, OP_IMEM_WR, OP_REG_RD, OP_RX_POP, OP_TX_PUSH)
 from host import Host                                                # noqa: E402
 from seeds import seeded                                 # noqa: E402
 
