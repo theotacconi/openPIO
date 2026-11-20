@@ -18,7 +18,7 @@ from asm import (
     CS_GPIO, CS_INBASE, CS_IRQ, CS_PEER, CS_STATUS, CS_XBIT, CS_YBIT,
     COND_RESET, CT_FIFO, CT_IRQ, CT_PAU, CT_WAIT, IMEM_WORDS, PAGE_WORDS,
     JC_ALWAYS, JC_FAR, JC_XDEC, JC_YDEC,
-    OP_ALU, OP_CTRL, OP_IN, OP_JMP, OP_OUT,
+    OP_ALU, OP_CTRL, OP_IN, OP_JMP, OP_OUT, OP_SET,
     R_ISR, R_OSR, R_PINDIRS, R_PINS, R_SPECIAL, R_X, R_Y,
     disassemble,
 )
@@ -900,6 +900,8 @@ class StateMachine:
                 R_ISR: self.isr, R_OSR: self.osr}.get(code, 0)
 
     def _execute(self) -> None:
+        """One instruction: each opcode's method returns the next PC, or None when the instruction
+        stalls (or is retried at the next strobe)."""
         word = self.memory[self.pc]
         self._current_instr_str = disassemble(word, self.side_set_count, self.side_set_opt)
         opcode, args = word >> 13, word & 0xFF
@@ -908,194 +910,210 @@ class StateMachine:
         delay *= self.dlymul
 
         next_pc = self.wrap_bottom if self.pc == self.wrap_top else (self.pc + 1) % IMEM_WORDS
+        next_pc = self.OPCODES[opcode](self, opcode, args, delay, next_pc)
+        if next_pc is not None:                         # None: stalled, or to be retried
+            self._finish(delay, next_pc)
 
-        if opcode >> 1 == OP_JMP >> 1:
-            cond = (args >> 5) & 7
-            target = ((opcode & 1) << 5) | (args & 0x1F)
-            if cond == JC_ALWAYS:
-                taken = True
-            elif cond == JC_FAR:                        # reserved (FAR of a paged IMEM): a NOP
-                taken = False
-            elif cond == JC_XDEC:
-                taken, self.x = self.x != 0, (self.x - 1) & 0xFFFF
-            elif cond == JC_YDEC:
-                taken, self.y = self.y != 0, (self.y - 1) & 0xFFFF
-            else:
-                taken = bool(self._cond_value(cond - 4))
-            if taken:
-                next_pc = self.pc & -PAGE_WORDS | target        # in the page of the JMP
+    def _jmp(self, opcode: int, args: int, delay: int, next_pc: int) -> int | None:
+        """JMP: a condition (X-- and Y-- decrement), a target in the JMP's page."""
+        cond = (args >> 5) & 7
+        target = ((opcode & 1) << 5) | (args & 0x1F)
+        if cond == JC_ALWAYS:
+            taken = True
+        elif cond == JC_FAR:                        # reserved (FAR of a paged IMEM): a NOP
+            taken = False
+        elif cond == JC_XDEC:
+            taken, self.x = self.x != 0, (self.x - 1) & 0xFFFF
+        elif cond == JC_YDEC:
+            taken, self.y = self.y != 0, (self.y - 1) & 0xFFFF
+        else:
+            taken = bool(self._cond_value(cond - 4))
+        if taken:
+            next_pc = self.pc & -PAGE_WORDS | target        # in the page of the JMP
+        return next_pc
 
-        elif opcode == OP_IN:
-            src, auto = (args >> 5) & 7, (args >> 4) & 1
-            count = (args & 0xF) or 16
-            mask = (1 << count) - 1
-            if src == R_PINS and self.pau_ctl & 2:
-                if len(self.rx_queue) < count:
-                    return self._stall("RETRY")
-                bits = [self.rx_queue.popleft() for _ in range(count)]
-                if not self.shift_in_right:
-                    bits.reverse()
-                val = sum(b << i for i, b in enumerate(bits))
-            elif src == R_PINS:
-                val = (self.gpio_in >> (self.in_base & 15)) & mask
-            elif src == R_PINDIRS:                      # TIME
-                val = self.time & mask
+    def _in(self, opcode: int, args: int, delay: int, next_pc: int) -> int | None:
+        """IN: bits from the pins (or the PAU's RX queue), TIME, a register or STATUS into the ISR."""
+        src, auto = (args >> 5) & 7, (args >> 4) & 1
+        count = (args & 0xF) or 16
+        mask = (1 << count) - 1
+        if src == R_PINS and self.pau_ctl & 2:
+            if len(self.rx_queue) < count:
+                return self._stall("RETRY")
+            bits = [self.rx_queue.popleft() for _ in range(count)]
+            if not self.shift_in_right:
+                bits.reverse()
+            val = sum(b << i for i, b in enumerate(bits))
+        elif src == R_PINS:
+            val = (self.gpio_in >> (self.in_base & 15)) & mask
+        elif src == R_PINDIRS:                      # TIME
+            val = self.time & mask
+        else:
+            val = self._operand(src) & mask
+        if self.shift_in_right:
+            self.isr = ((self.isr >> count) | (val << (16 - count))) & 0xFFFF
+        else:
+            self.isr = ((self.isr << count) | val) & 0xFFFF
+        self.isr_count = min(16, self.isr_count + count)
+        if auto and self.isr_count >= (self.push_thresh or 16):
+            if self._push_word():
+                self.isr = self.isr_count = 0
             else:
-                val = self._operand(src) & mask
-            if self.shift_in_right:
-                self.isr = ((self.isr >> count) | (val << (16 - count))) & 0xFFFF
+                return self._stall("PUSH", delay=delay, next_pc=next_pc)
+        return next_pc
+
+    def _out(self, opcode: int, args: int, delay: int, next_pc: int) -> int | None:
+        """OUT: bits of the OSR to the pins (or the PAU's TX queue), a register, PAU_BAUD or the PC."""
+        dest, auto = (args >> 5) & 7, (args >> 4) & 1
+        count = (args & 0xF) or 16
+        mask = (1 << count) - 1
+        pull_at = self.pull_thresh or 16
+        if auto and self.osr_count >= pull_at:
+            if (word := self._pull_word()) is not None:
+                self.osr, self.osr_count = word, 0
+            return self._stall("RETRY")
+        if dest == R_PINS and self.pau_ctl & 1 and PAU_QUEUE_BITS - len(self.tx_queue) < count:
+            return self._stall("RETRY")
+        if self.shift_out_right:
+            val = self.osr & mask
+            self.osr = (self.osr >> count) & 0xFFFF
+        else:
+            val = (self.osr >> (16 - count)) & mask
+            self.osr = (self.osr << count) & 0xFFFF
+        self.osr_count = min(16, self.osr_count + count)
+        if auto and self.osr_count >= pull_at and self.tx_fifo:
+            self.osr, self.osr_count = self._pull_word(), 0
+        if dest == R_PINS and self.pau_ctl & 1:
+            order = range(count) if self.shift_out_right else range(count - 1, -1, -1)
+            for i in order if not self.tx_bit_err else ():
+                b = (val >> i) & 1
+                self.tx_queue.append((b, bool(self.pau_ctl & 4), bool(self.pau_ctl & 16),
+                                      bool(self.pau_ctl & 8)))
+        elif dest == R_PINS:
+            self._write_pins(_group(mask, self.out_base), _group(val, self.out_base))
+        elif dest == R_PINDIRS:
+            self._write_dirs(_group(mask, self.out_base), _group(val, self.out_base))
+        elif dest == R_X:
+            self.x = val
+        elif dest == R_Y:
+            self.y = val
+        elif dest == R_ISR:
+            self.isr, self.isr_count = val, count
+        elif dest == R_OSR:                         # PAU_BAUD
+            self.pau_baud = val & 0x1F
+        elif dest == R_SPECIAL:                     # in the page of the OUT
+            next_pc = self.pc & -PAGE_WORDS | val % PAGE_WORDS
+        return next_pc
+
+    def _alu(self, opcode: int, args: int, delay: int, next_pc: int) -> int | None:
+        """ALU: an operation of a destination and a source, into the destination."""
+        op = ((opcode & 1) << 2) | ((args >> 3) & 3)
+        dest, src = (args >> 5) & 7, args & 7
+        s = self._operand(src)
+        d = {R_PINS: self.gpio_out, R_PINDIRS: self.pindirs, R_X: self.x, R_Y: self.y,
+             R_ISR: self.isr, R_OSR: self.osr}.get(dest, 0)
+        res = [s, _rev16(s), d & s, d | s, d ^ s, ~(d ^ s), d + s, d - s][op] & 0xFFFF
+        if dest == R_PINS:
+            self._write_pins(PIN_ALL, res)
+        elif dest == R_PINDIRS:
+            self._write_dirs(PIN_ALL, res)
+        elif dest == R_X:
+            self.x = res
+        elif dest == R_Y:
+            self.y = res
+        elif dest == R_ISR:
+            self.isr, self.isr_count = res, 0          # empty, as the OSR is full
+        elif dest == R_OSR:
+            self.osr, self.osr_count = res, 0
+        elif dest == R_SPECIAL:
+            self.cond[(res >> 8) & 3] = res & 0xFF
+        return next_pc
+
+    def _ctrl(self, opcode: int, args: int, delay: int, next_pc: int) -> int | None:
+        """IRQ, PUSH / PULL, WAIT, PAU actions (ISA.md, Control)."""
+        ctype, a = args >> 6, args & 0x3F
+        if ctype == CT_IRQ:
+            clear, wait, peer, idx = a >> 5 & 1, a >> 4 & 1, a >> 3 & 1, a & 7
+            if peer:
+                self.peer_irq_writes.append((idx, not clear))
             else:
-                self.isr = ((self.isr << count) | val) & 0xFFFF
-            self.isr_count = min(16, self.isr_count + count)
-            if auto and self.isr_count >= (self.push_thresh or 16):
-                if self._push_word():
+                self.irq_flags[idx] = not clear
+            if wait and not clear:
+                return self._stall("IRQ", peer=peer, idx=idx, delay=delay, next_pc=next_pc)
+        elif ctype == CT_FIFO and not a & 7:
+            is_pull, block, ifcond = a >> 5 & 1, a >> 4 & 1, a >> 3 & 1
+            if is_pull:
+                if ifcond and self.osr_count < (self.pull_thresh or 16):
+                    pass
+                elif (word := self._pull_word()) is not None:
+                    self.osr, self.osr_count = word, 0
+                elif not block:
+                    self.osr, self.osr_count = self.x, 0
+                else:
+                    return self._stall("PULL", delay=delay, next_pc=next_pc)
+            else:
+                if ifcond and self.isr_count < (self.push_thresh or 16):
+                    pass
+                elif self._push_word():
+                    self.isr = self.isr_count = 0
+                elif not block:
                     self.isr = self.isr_count = 0
                 else:
                     return self._stall("PUSH", delay=delay, next_pc=next_pc)
-
-        elif opcode == OP_OUT:
-            dest, auto = (args >> 5) & 7, (args >> 4) & 1
-            count = (args & 0xF) or 16
-            mask = (1 << count) - 1
-            pull_at = self.pull_thresh or 16
-            if auto and self.osr_count >= pull_at:
-                if (word := self._pull_word()) is not None:
-                    self.osr, self.osr_count = word, 0
-                return self._stall("RETRY")
-            if dest == R_PINS and self.pau_ctl & 1 and PAU_QUEUE_BITS - len(self.tx_queue) < count:
-                return self._stall("RETRY")
-            if self.shift_out_right:
-                val = self.osr & mask
-                self.osr = (self.osr >> count) & 0xFFFF
-            else:
-                val = (self.osr >> (16 - count)) & mask
-                self.osr = (self.osr << count) & 0xFFFF
-            self.osr_count = min(16, self.osr_count + count)
-            if auto and self.osr_count >= pull_at and self.tx_fifo:
-                self.osr, self.osr_count = self._pull_word(), 0
-            if dest == R_PINS and self.pau_ctl & 1:
-                order = range(count) if self.shift_out_right else range(count - 1, -1, -1)
-                for i in order if not self.tx_bit_err else ():
-                    b = (val >> i) & 1
-                    self.tx_queue.append((b, bool(self.pau_ctl & 4), bool(self.pau_ctl & 16),
-                                          bool(self.pau_ctl & 8)))
-            elif dest == R_PINS:
-                self._write_pins(_group(mask, self.out_base), _group(val, self.out_base))
-            elif dest == R_PINDIRS:
-                self._write_dirs(_group(mask, self.out_base), _group(val, self.out_base))
-            elif dest == R_X:
-                self.x = val
-            elif dest == R_Y:
-                self.y = val
-            elif dest == R_ISR:
-                self.isr, self.isr_count = val, count
-            elif dest == R_OSR:                         # PAU_BAUD
-                self.pau_baud = val & 0x1F
-            elif dest == R_SPECIAL:                     # in the page of the OUT
-                next_pc = self.pc & -PAGE_WORDS | val % PAGE_WORDS
-
-        elif opcode >> 1 == OP_ALU >> 1:
-            op = ((opcode & 1) << 2) | ((args >> 3) & 3)
-            dest, src = (args >> 5) & 7, args & 7
-            s = self._operand(src)
-            d = {R_PINS: self.gpio_out, R_PINDIRS: self.pindirs, R_X: self.x, R_Y: self.y,
-                 R_ISR: self.isr, R_OSR: self.osr}.get(dest, 0)
-            res = [s, _rev16(s), d & s, d | s, d ^ s, ~(d ^ s), d + s, d - s][op] & 0xFFFF
-            if dest == R_PINS:
-                self._write_pins(PIN_ALL, res)
-            elif dest == R_PINDIRS:
-                self._write_dirs(PIN_ALL, res)
-            elif dest == R_X:
-                self.x = res
-            elif dest == R_Y:
-                self.y = res
-            elif dest == R_ISR:
-                self.isr, self.isr_count = res, 0          # empty, as the OSR is full
-            elif dest == R_OSR:
-                self.osr, self.osr_count = res, 0
-            elif dest == R_SPECIAL:
-                self.cond[(res >> 8) & 3] = res & 0xFF
-
-        elif opcode == OP_CTRL:
-            ctype, a = args >> 6, args & 0x3F
-            if ctype == CT_IRQ:
-                clear, wait, peer, idx = a >> 5 & 1, a >> 4 & 1, a >> 3 & 1, a & 7
-                if peer:
-                    self.peer_irq_writes.append((idx, not clear))
-                else:
-                    self.irq_flags[idx] = not clear
-                if wait and not clear:
-                    return self._stall("IRQ", peer=peer, idx=idx, delay=delay, next_pc=next_pc)
-            elif ctype == CT_FIFO and not a & 7:
-                is_pull, block, ifcond = a >> 5 & 1, a >> 4 & 1, a >> 3 & 1
-                if is_pull:
-                    if ifcond and self.osr_count < (self.pull_thresh or 16):
-                        pass
-                    elif (word := self._pull_word()) is not None:
-                        self.osr, self.osr_count = word, 0
-                    elif not block:
-                        self.osr, self.osr_count = self.x, 0
-                    else:
-                        return self._stall("PULL", delay=delay, next_pc=next_pc)
-                else:
-                    if ifcond and self.isr_count < (self.push_thresh or 16):
-                        pass
-                    elif self._push_word():
-                        self.isr = self.isr_count = 0
-                    elif not block:
-                        self.isr = self.isr_count = 0
-                    else:
-                        return self._stall("PUSH", delay=delay, next_pc=next_pc)
-            elif ctype == CT_WAIT and not a & 4:
-                pol, edge, t_en, slot = a >> 5 & 1, a >> 4 & 1, a >> 3 & 1, a & 3
-                if t_en:                                # TIMEOUT_VAL x DLYMUL strobes from now
-                    self.timeout_counter = self.timeout_val * self.dlymul
-                    self.timeout_flag = False
-                if not self._wait_met(pol, edge, slot):
-                    return self._stall("WAIT", pol=pol, edge=edge, t_en=t_en, slot=slot,
-                                       delay=delay, next_pc=next_pc)
-            elif ctype == CT_PAU and (a >> 4 == 3 or not a & 0xF):
-                action = a >> 4
-                if action != 2 and self.tx_append:      # the CRC is busy: it is being sent
-                    return self._stall("RETRY")
-                if action == 3:                         # CRC feed: last bits into the ISR, oldest first
-                    n = (a & 0xF) or 16
-                    order = list(range(16 - n, 16) if self.shift_in_right else range(n - 1, -1, -1))
-                    self._crc_feed(self.isr >> order[0] & 1)    # a bit a strobe
-                    if n > 1:
-                        return self._stall("FEED", bits=order[1:], delay=delay, next_pc=next_pc)
-                elif action == 0:                       # CRC reset: a new frame, no RX errors
-                    self.crc = self._crc_mask if self.crc_cfg >> 5 & 1 else 0
-                    self.rx_stuff_err = self.rx_overrun = False
-                elif action == 2:
-                    self._tx_abort()
-                elif action == 1:                       # after the data bits: the CRC is complete
-                    if self.tx_queue:
-                        return self._stall("RETRY")
-                    if not self.tx_bit_err:             # sent from the CRC register, MSB first
-                        self.tx_append = self._crc_width
-                        self.tx_append_flags = bool(self.pau_ctl & 4), bool(self.pau_ctl & 16)
-
-        else:  # SET
-            dest, val = (args >> 5) & 7, args & 0x1F
-            if dest in (0, 1):
-                m = _group(((1 << self.set_count) - 1) & 0x1F, self.set_base)
-                (self._write_dirs if dest else self._write_pins)(m, _group(val, self.set_base))
-            elif dest == 2:
-                self.x = val
-            elif dest == 3:
-                self.y = val
-            elif dest == 4:
-                self.dlymul = val or 1
-            elif dest == 5:
-                self.timeout_val = val
+        elif ctype == CT_WAIT and not a & 4:
+            pol, edge, t_en, slot = a >> 5 & 1, a >> 4 & 1, a >> 3 & 1, a & 3
+            if t_en:                                # TIMEOUT_VAL x DLYMUL strobes from now
+                self.timeout_counter = self.timeout_val * self.dlymul
                 self.timeout_flag = False
-            elif dest == 6:
-                self.pau_baud = val
-            else:
-                self._set_pau_ctl(val)
+            if not self._wait_met(pol, edge, slot):
+                return self._stall("WAIT", pol=pol, edge=edge, t_en=t_en, slot=slot,
+                                   delay=delay, next_pc=next_pc)
+        elif ctype == CT_PAU and (a >> 4 == 3 or not a & 0xF):
+            action = a >> 4
+            if action != 2 and self.tx_append:      # the CRC is busy: it is being sent
+                return self._stall("RETRY")
+            if action == 3:                         # CRC feed: last bits into the ISR, oldest first
+                n = (a & 0xF) or 16
+                order = list(range(16 - n, 16) if self.shift_in_right else range(n - 1, -1, -1))
+                self._crc_feed(self.isr >> order[0] & 1)    # a bit a strobe
+                if n > 1:
+                    return self._stall("FEED", bits=order[1:], delay=delay, next_pc=next_pc)
+            elif action == 0:                       # CRC reset: a new frame, no RX errors
+                self.crc = self._crc_mask if self.crc_cfg >> 5 & 1 else 0
+                self.rx_stuff_err = self.rx_overrun = False
+            elif action == 2:
+                self._tx_abort()
+            elif action == 1:                       # after the data bits: the CRC is complete
+                if self.tx_queue:
+                    return self._stall("RETRY")
+                if not self.tx_bit_err:             # sent from the CRC register, MSB first
+                    self.tx_append = self._crc_width
+                    self.tx_append_flags = bool(self.pau_ctl & 4), bool(self.pau_ctl & 16)
+        return next_pc
 
-        self._finish(delay, next_pc)
+    def _set(self, opcode: int, args: int, delay: int, next_pc: int) -> int | None:
+        """SET: a 5-bit value into pins, directions, X, Y or a PAU / timing register."""
+        dest, val = (args >> 5) & 7, args & 0x1F
+        if dest in (0, 1):
+            m = _group(((1 << self.set_count) - 1) & 0x1F, self.set_base)
+            (self._write_dirs if dest else self._write_pins)(m, _group(val, self.set_base))
+        elif dest == 2:
+            self.x = val
+        elif dest == 3:
+            self.y = val
+        elif dest == 4:
+            self.dlymul = val or 1
+        elif dest == 5:
+            self.timeout_val = val
+            self.timeout_flag = False
+        elif dest == 6:
+            self.pau_baud = val
+        else:
+            self._set_pau_ctl(val)
+        return next_pc
+
+    OPCODES = {OP_JMP: _jmp, OP_JMP | 1: _jmp, OP_IN: _in, OP_OUT: _out,      # JMP and ALU: two
+               OP_ALU: _alu, OP_ALU | 1: _alu, OP_CTRL: _ctrl, OP_SET: _set}   # opcodes each
 
     # ------------------------------------------------------------------ traces
 
