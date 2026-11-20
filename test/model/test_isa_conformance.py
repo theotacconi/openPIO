@@ -73,6 +73,24 @@ class Jmp(unittest.TestCase):
         self.assertEqual((sm.pc, sm.x), (2, 0), "1 strobe + 3 delay strobes, then at target")
         self.assertEqual(run(sm, 1).x, 7)
 
+    def test_jump_above_32_and_wait_on_x_bit(self):
+        src = "jmp far\n" + "nop\n" * 40 + """
+        far:
+            set x, 4
+            wait 1 x 2       ; bit 2 of X
+            jmp !x, bad
+            jmp x--, done
+        bad:
+            irq 1
+        done:
+            irq 0
+        end:
+            jmp end
+        """
+        sm = run(StateMachine(assemble(src)), 10)
+        self.assertTrue(sm.irq_flags[0] and not sm.irq_flags[1])
+        self.assertGreaterEqual(sm.pc, 32)
+
 
 class Wrap(unittest.TestCase):
 
@@ -118,6 +136,17 @@ class In(unittest.TestCase):
         run(sm, 1)
         self.assertEqual((sm.rx_fifo[-1], sm.isr_count), (0xC000, 0))
         self.assertEqual(run(sm, 1).y, 1)
+
+    def test_autopush_bytes(self):
+        sm = sm_of("""
+            .push_thresh 8
+        loop:
+            in pins, 4 auto
+            jmp loop
+        """)
+        sm.gpio_in = 0x5
+        run(sm, 12)
+        self.assertEqual([w >> 8 for w in sm.rx_fifo], [0x55, 0x55, 0x55])
 
 
 class Out(unittest.TestCase):
@@ -205,6 +234,50 @@ class Alu(unittest.TestCase):
         sm = sm_of("mov x, status" + HALT)
         expected = sm.status_word()
         self.assertEqual(run(sm, 1).x, expected)
+
+    def test_a_chain_of_operations(self):
+        sm = run(sm_of("""
+            set x, 12
+            set y, 10
+            and x, y        ; 8
+            or y, x         ; 10
+            sub y, x        ; 2
+            not x           ; ~8
+            mov isr, x
+            add x, y        ; ~8 + 2
+        end:
+            jmp end
+        """), 12)
+        self.assertEqual((sm.y, sm.isr, sm.x), (2, 0xFFF7, 0xFFF9))
+
+    def test_program_writes_a_condition(self):
+        sm = sm_of("""
+            pull block
+            mov cond, osr        ; COND3 = gpio 5
+            jmp cond3, high
+            irq 1
+        high:
+            irq 0
+        end:
+            jmp end
+        """)
+        sm.gpio_in = 1 << 5
+        sm.tx_fifo.append(0x0305)
+        run(sm, 10)
+        self.assertTrue(sm.irq_flags[0] and not sm.irq_flags[1])
+
+    def test_alu_pins(self):
+        sm = sm_of("""
+            set x, 0x15
+            mov pindirs, x
+            mov pins, x
+            mov y, pins
+        end:
+            jmp end
+        """)
+        sm.gpio_in = 0xA0
+        run(sm, 5)
+        self.assertEqual((sm.pindirs, sm.gpio_out, sm.y), (0x15, 0x15, 0xA0))
 
 
 class IrqFifo(unittest.TestCase):
