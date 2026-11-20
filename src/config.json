@@ -57,8 +57,16 @@
   "RT_MIN_LAYER": "Metal1",
   "//": "Fill insertion runs after detailed routing, and a decap's VDD/VSS Metal1 covers the inside",
   "//": "of the cell: dropped on a Metal1 route, it shorts it to the supply (3859 nets, LVS failed).",
-  "//": "Fill cells only, their Metal1 is the rails.",
+  "//": "Fill cells only, their Metal1 is the rails. The decaps go in before global routing",
+  "//": "(Project.InsertDecaps, odb_decap.py), and the router draws Metal1 around them. Most free",
+  "//": "area is in wide gaps, so only gaps of 48 sites or more get decaps, over 80 % of each less",
+  "//": "6 sites by each neighbour: 25033 decaps (317000 um^2), signed off (slow-corner setup",
+  "//": "+0.87 ns at 22 ns, fast-corner hold +0.12 ns). 30 % of every gap: 12030 decaps, also",
+  "//": "signed off; 50 % of every gap: 205 global-route overflows on Metal3.",
   "DECAP_CELLS": [],
+  "PRE_ROUTE_DECAP_FRACTION": 0.8,
+  "PRE_ROUTE_DECAP_MIN_GAP": 48,
+  "PRE_ROUTE_DECAP_MARGIN": 6,
 
   "//": "LibreLane 3.1.0.dev3 passes '-threads None' to OpenROAD when this is unset (str(None) is",
   "//": "true): every OpenROAD step then runs on one thread. 4: a GitHub runner's cores.",
@@ -116,7 +124,8 @@
     "substituting_steps": {
       "+OpenROAD.GeneratePDN": "Project.ExtendPowerStripes",
       "-OpenROAD.GlobalPlacement*": "Project.SeedPlacement",
-      "+OpenROAD.GlobalPlacement": "Project.BufferSramPins"
+      "+OpenROAD.GlobalPlacement": "Project.BufferSramPins",
+      "-OpenROAD.GlobalRouting": "Project.InsertDecaps"
     }
   },
 

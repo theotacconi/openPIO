@@ -20,6 +20,7 @@ on:
       - 'librelane_plugin_openpio_place.py'
       - 'odb_seed.py'
       - 'odb_sram_buf.py'
+      - 'odb_decap.py'
   workflow_dispatch:
 
 jobs:
