@@ -261,11 +261,12 @@ def run(seed: int, cycles: int) -> None:
             chip.pin_in = chip.pin_in & ~0xFF | chip.pins[0] & 0xFF
 
 
-def main() -> None:
+def main(run=run, runs: int = 40, cycles: int = 4000) -> None:
+    """`--runs` runs of run(seed, cycles), each from its own seed; exits 1 if one disagrees."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--seed", type=int, default=1)
-    ap.add_argument("--runs", type=int, default=40)
-    ap.add_argument("--cycles", type=int, default=4000)
+    ap.add_argument("--runs", type=int, default=runs)
+    ap.add_argument("--cycles", type=int, default=cycles)
     args = ap.parse_args()
     t0, fails = time.time(), 0
     for i in range(args.runs):

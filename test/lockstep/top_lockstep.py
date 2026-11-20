@@ -10,10 +10,8 @@ count. host.Host loads and runs random programs through it, with random SPI traf
 """
 from __future__ import annotations
 
-import argparse
 import random
 import sys
-import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -21,7 +19,7 @@ sys.path.insert(0, str(HERE.parents[1] / "sim" / "model"))
 from vsim import VSim                                                    # noqa: E402
 
 from chip import (OP_IMEM_RD, OP_REG_RD, OP_RX_POP, OP_TX_PUSH, Chip, header)  # noqa: E402
-from chip_lockstep import Mismatch, random_load                          # noqa: E402
+from chip_lockstep import Mismatch, main, random_load                         # noqa: E402
 from host import Host                                                    # noqa: E402
 
 SOURCES = ["spi.v", "pau.v", "openpio_sm.v", "fifo.v", "openpio.v", "imem.v", "fifo_ram.v",
@@ -146,22 +144,5 @@ def run(seed: int, cycles: int) -> None:
             top.pin_in ^= 1 << rng.choice([0, 1, 2, 3, 4, 5, 6, 7, 11, 12, 13, 14, 15])
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--seed", type=int, default=1)
-    ap.add_argument("--runs", type=int, default=20)
-    ap.add_argument("--cycles", type=int, default=20000)
-    args = ap.parse_args()
-    t0, fails = time.time(), 0
-    for i in range(args.runs):
-        try:
-            run(args.seed * 100_003 + i, args.cycles)
-        except Mismatch as e:
-            fails += 1
-            print(f"run {i} (seed {args.seed}): {e}")
-    print(f"{args.runs - fails}/{args.runs} runs agree, {args.cycles} clocks each, {time.time() - t0:.0f} s")
-    raise SystemExit(1 if fails else 0)
-
-
 if __name__ == "__main__":
-    main()
+    main(run, 20, 20000)
