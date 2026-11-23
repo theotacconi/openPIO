@@ -18,7 +18,8 @@ The Pico's own peripherals, the counterparts of the chip's programs in board/per
 answer starts with r:
 
     pv                -> r <MicroPython version> i2ctarget|-
-    u <baud>          -> r: UART1, 8N1, TX GP8, RX GP9 (its receive buffer emptied)
+    u <baud> [n|e|o]  -> r: UART1, 8 data bits, no parity (or even, odd), 1 stop bit, TX GP8,
+                         RX GP9 (its receive buffer emptied)
     ut <hex>          -> r: those bytes sent, once they are out
     ur                -> r <hex>: the bytes received since
     s <hz>            -> r <hz it runs at>: SPI1 controller, mode 0, MSB first, SCK GP10,
@@ -96,7 +97,8 @@ def peripherals():
                             "i2ctarget" if I2CTarget else "-")
 
     def uart(a):
-        on["u"] = UART(1, baudrate=int(a[0]), bits=8, parity=None, stop=1, tx=Pin(8),
+        parity = {"n": None, "e": 0, "o": 1}[a[1] if len(a) > 1 else "n"]
+        on["u"] = UART(1, baudrate=int(a[0]), bits=8, parity=parity, stop=1, tx=Pin(8),
                        rx=Pin(9), rxbuf=4096, timeout=0)
         on["u"].read()
         return "r"

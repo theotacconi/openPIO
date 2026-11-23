@@ -31,10 +31,12 @@ import time
 from pathlib import Path
 
 from board import Board, Serial
+from listen import record
 from loopback import differ, program, release, wait
 from asm import assemble                                 # noqa: E402  (board put it on the path)
 from chip import CTRL, PINS_IN                           # noqa: E402
 from host import Host                                    # noqa: E402
+from learn import infer_async, rx_program, timing, word_value   # noqa: E402
 
 CLK = 27e6
 BAUDS = (9600, 115200, 1_000_000, 3_000_000)
@@ -42,6 +44,7 @@ SPI_HZ = (250_000, 500_000, 900_000)                     # spi_target: SCK up to
 I2C_HZ = (100_000, 400_000)
 TARGET = 0x42                                            # the Pico's I2C address
 CHIP = 0x50                                              # i2c_target's address
+UNTOLD = ((31250, "n"), (57600, "e"), (250_000, "o"))    # the UART formats check_learn learns
 SEEN: list[tuple] = []          # what the checks put on the wires, for judge()
 
 
@@ -349,7 +352,47 @@ def judge(path: Path) -> list[str]:
     return bad
 
 
-CHECKS = [check_wires, check_uart_out, check_uart_in, check_spi, check_i2c, check_i2c_target]
+def check_learn(host: Host, pico: Pico) -> str | None:
+    """The chip learns the Pico's UART1 from its own recording, at rates and parities it is not
+    told: edges.asm records 24 bytes on pio 5 (listen.py's record), sim/learn/learn.py finds
+    the format, and the receiver it writes, on the same SM, takes 128 bytes more, no framing or
+    parity error. Prints what it learned."""
+    for baud, parity in UNTOLD:
+        pico.ask("u", baud, parity)
+        rnd = random.Random(baud)
+        first, then = rnd.choices(range(256), k=24), rnd.choices(range(256), k=128)
+        sent: list[int] = []
+
+        def done() -> bool:                              # the recording: one burst, then stop
+            if sent:
+                return True
+            sent.append(1)
+            pico.ask("ut", bytes(first).hex())
+            return False
+
+        try:
+            cap = record(host, 5, 1, done)
+            p = infer_async(cap)
+        except ValueError as e:
+            return f"{baud} baud: {e}"
+        print(f"      {baud} baud {parity}: learned {p}")
+        want = {"n": None, "e": "even", "o": "odd"}[parity]
+        if p.data_bits != 8 or p.parity != want or abs(p.bit * baud / CLK - 1) > 0.01:
+            return f"{baud} baud {parity}: learned {p}"
+        _, div, frac = timing(p)
+        host.load(0, assemble(rx_program(p, 5)), clkdiv_int=div, clkdiv_frac=frac)
+        host.clear_flags(0)
+        host.start(host.read(0, CTRL)[0] | 0b01)
+        pico.ask("ut", bytes(then).hex())
+        host.wait_rx(0, len(then), 20000)
+        error = differ(f"{baud} baud", then, [word_value(p, w) for w in host.drain(0)])
+        if error or host.flags(0) & 3:
+            return error or f"{baud} baud: IRQ flags {host.flags(0) & 3:#x}"
+    return None
+
+
+CHECKS = [check_wires, check_uart_out, check_uart_in, check_spi, check_i2c, check_i2c_target,
+          check_learn]
 
 
 def main() -> int:
