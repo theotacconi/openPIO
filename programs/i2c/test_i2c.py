@@ -315,11 +315,11 @@ class I2cTargetProgram(unittest.TestCase):
 
     def test_timing(self):
         """At the top SCL of each mode, at the smallest and the largest divider the target
-        promises, at 45 MHz (the clock signed off) and 50 MHz, a controller changing SDA a
+        promises, at 50 MHz (the clock signed off) and 45 MHz, a controller changing SDA a
         clock after SCL falls and a host answering a read late: every byte acknowledged, every
         bit the target sends valid within tVD;DAT, the first bit of the stretched read set up
         tSU;DAT before SCL rises, the bus timing of Table 10."""
-        for us in (45, 50):
+        for us in (50, 45):
             for mode, divs in DIVS.items():
                 for div in divs:
                     with self.subTest(us=us, mode=mode, div=div):
