@@ -110,3 +110,6 @@ jobs:
 
       - name: Every instruction takes the strobes ISA.md gives it
         run: cd test/formal && sby -f timing.sby
+
+      - name: The host's write data has the two clocks signoff.sdc gives it
+        run: cd test/formal && yosys -q -s host_wdata_top.ys

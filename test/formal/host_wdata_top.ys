@@ -1,0 +1,30 @@
+# The two-clock multicycle path from the flip-flops behind spi.v's w (host_wdata_top.v).
+# Run from test/formal: yosys -q -s host_wdata_top.ys
+#
+# spi_seen.v: spi.v renamed, with a garbage input, and w replaced by what a reader sees when
+# the bits that changed at the last edge have not arrived (the sed fails the run if spi.v's
+# line has changed).
+! grep -q '^    wire \[15:0\] w = {sr, s_mosi\[1\]};$' ../../src/spi.v
+! sed -e 's/^module spi (/module spi_seen (\n    input  wire [15:0] garbage,/' -e 's/^    wire \[15:0\] w = {sr, s_mosi\[1\]};$/    wire [15:0] w_raw = {sr, s_mosi[1]};\n    reg  [15:0] w_prev;\n    always @(posedge clk) w_prev <= w_raw;\n    wire [15:0] w = w_raw ^ ((w_raw ^ w_prev) \& garbage);/' ../../src/spi.v > spi_seen.v
+read_verilog -sv ../../src/spi.v spi_seen.v ../../src/pau.v ../../src/openpio_sm.v
+read_verilog -sv ../../src/fifo.v ../../src/openpio.v host_wdata_top.v
+! rm spi_seen.v
+hierarchy -check
+proc
+flatten
+memory
+opt_clean
+# match only registers and ports: every other wire private, so no combinational net is
+# assumed equal (w_prev, in top_gate alone, stays unmatched)
+select -set keep_gold top_gold/t:*dff* %co:+[Q] top_gold/w:* %i top_gold/x:* %u
+select -set keep_gate top_gate/t:*dff* %co:+[Q] top_gate/w:* %i top_gate/x:* %u
+rename -hide top_gold/w:* @keep_gold %d
+rename -hide top_gate/w:* @keep_gate %d
+# openpio.v's im_rd_sm takes the host's SM every clock and is read only in the clock after an
+# IMEM_RD: unmatched too, so it is proved through what reads it (h_imem_rdata, MISO)
+rename -hide top_gold/w:u.u_chip.im_rd_sm top_gate/w:u.u_chip.im_rd_sm
+equiv_make top_gold top_gate equiv
+hierarchy -top equiv
+equiv_simple -seq 4
+equiv_induct
+equiv_status -assert
