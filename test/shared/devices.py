@@ -6,6 +6,7 @@ hold around clock edges, line idle levels, framing) and lists violations in `err
 """
 from __future__ import annotations
 
+import math
 import random
 
 from bench import Device
@@ -306,6 +307,163 @@ class I2cTiming(Device):
             else:                                        # STOP
                 self._check(t, "tSU;STO", self._rise)
                 self._busy, self._stop = False, t
+
+
+class I2cController(Device):
+    """I2C controller (open drain: it only pulls SCL / SDA low) at the top SCL of `mode`
+    (UM10204 Table 10), `us` clocks a microsecond: SCL low tLOW, high the rest of the period.
+
+    transactions: each a list of segments, (address, [bytes]) a write or (address, n) a read of
+    n bytes, joined by repeated STARTs and ended by a STOP; the last byte of a read is NACKed. A
+    segment whose address or byte is NACKed ends its transaction. A transaction starts once the
+    bus is free (tBUF) and at least `gap` clocks after the previous one; gap(k) may give the gap
+    before transaction k. SDA changes `hold` clocks after SCL falls (tHD;DAT, at least 1). After
+    releasing SCL it waits for SCL to rise (clock stretching), then counts tHIGH. It judges the
+    target: SDA steady while SCL is high, and each bit the target drives valid tVD;DAT after
+    SCL falls, unless the target stretches that low: then tSU;DAT before it lets SCL go
+    (UM10204, the note to tHD;DAT in Table 10). A target that holds SCL only while the
+    controller does stretches unseen: held(), true while the target pulls SCL low, shows it
+    (the bench knows; without it a stretch is SCL rising late).
+    `results`: per segment, dicts addr, rw, data (written or read), acks (1 = ACK: the
+    address byte, then each byte written). `done` once the last STOP is out."""
+
+    def __init__(self, scl: int, sda: int, us: float, transactions: list, mode: str = "fm",
+                 hold: int = 1, start: int = 0, gap=0, held=None) -> None:
+        super().__init__()
+        self.scl, self.sda = scl, sda
+        self.min = {k: math.ceil(v * us - 1e-9) for k, v in I2C_TIMING[mode].items()}
+        self.low = self.min["tLOW"]
+        self.high = max(self.min["tHIGH"], round(us / I2C_FSCL[mode]) - self.low)
+        self.hold, self.gap = max(1, hold), gap
+        self.results: list[dict] = []
+        self.done = False
+        self.now, self.levels = 0, 0
+        self._prev: tuple[int, int] | None = None
+        self._sda_at = 0                                # clock of SDA's last change by the target
+        self._own_sda = -1                              # clock our SDA drive changes the line
+        self._fall = self._release = 0
+        self.held, self._held = held, -1                 # the last clock the target held SCL low
+        self._until = start
+        self._steps = self._run(transactions)
+
+    def _set(self, pin: int, level: int) -> None:
+        """Pull `pin` low (0) or release it (1) from the next clock."""
+        if pin == self.sda:
+            self._own_sda = self.now + 1
+        if level:
+            self.drive.pop(pin, None)
+        else:
+            self.drive[pin] = 0
+
+    def _line(self, pin: int) -> int:
+        return self.levels >> pin & 1
+
+    def tick(self, t: int, levels: int) -> None:
+        scl, sda = _bit(levels, self.scl), _bit(levels, self.sda)
+        if self._prev is not None and sda != self._prev[1] and t != self._own_sda:
+            self._sda_at = t
+            if scl and self._prev[0]:
+                self.error(t, "the target changed SDA while SCL was high")
+        self._prev = scl, sda
+        self.now, self.levels = t, levels
+        if self.held and self.held():
+            self._held = t
+        while not self.done:                            # steps: clocks to wait, or a predicate
+            w = self._until
+            if (not w()) if callable(w) else t < w:
+                return
+            try:
+                step = next(self._steps)
+            except StopIteration:
+                self.done = True
+                return
+            self._until = step if callable(step) else t + step
+
+    def _run(self, transactions: list):
+        for k, segments in enumerate(transactions):
+            yield self.gap(k) if callable(self.gap) else self.gap
+            yield lambda: self._line(self.scl) and self._line(self.sda)
+            yield self.min["tBUF"]
+            self._set(self.sda, 0)                      # START
+            yield self.min["tHD;STA"]
+            self._set(self.scl, 0)
+            self._fall = self.now + 1
+            for i, (addr, what) in enumerate(segments):
+                if i:                                   # repeated START
+                    yield self.hold
+                    self._set(self.sda, 1)
+                    yield self.low - self.hold
+                    yield from self._rise()
+                    yield self.min["tSU;STA"]
+                    self._set(self.sda, 0)
+                    yield self.min["tHD;STA"]
+                    self._set(self.scl, 0)
+                    self._fall = self.now + 1
+                read = isinstance(what, int)
+                ack = yield from self._byte(addr << 1 | read)
+                seg = {"addr": addr, "rw": int(read), "data": [], "acks": [ack]}
+                self.results.append(seg)
+                if not ack:
+                    break
+                if read:
+                    for n in range(what):
+                        seg["data"].append((yield from self._byte(None, nack=n == what - 1)))
+                else:
+                    for b in what:
+                        seg["data"].append(b)
+                        seg["acks"].append((yield from self._byte(b)))
+                        if not seg["acks"][-1]:
+                            break
+                    if not seg["acks"][-1]:
+                        break
+            yield self.hold                             # STOP
+            self._set(self.sda, 0)
+            yield self.low - self.hold
+            yield from self._rise()
+            yield self.min["tSU;STO"]
+            self._set(self.sda, 1)
+        yield 1
+
+    def _rise(self):
+        """Release SCL and wait until it is high: the target may hold it low (stretching)."""
+        self._set(self.scl, 1)
+        self._release = self.now + 1
+        yield lambda: self._line(self.scl)
+
+    def _clock(self, out: int | None):
+        """One bit from SCL's fall: SDA = out (None: released, the target drives it); returns
+        SDA as it was at the end of SCL high."""
+        yield self.hold
+        self._set(self.sda, 1 if out is None else out)
+        yield self.low - self.hold
+        yield from self._rise()
+        rise = self.now
+        yield self.high - 1
+        bit = self._line(self.sda)
+        if out is None:
+            stretched = self._held >= self._fall if self.held else rise > self._release
+            let_go = self._held + 1 if self.held else rise
+            late = let_go - self.min["tSU;DAT"] if stretched else self._fall + self.min["tVD;DAT"]
+            if self._sda_at > late:
+                self.error(self.now, f"the target's SDA changed {self._sda_at - self._fall} clocks"
+                                     f" after SCL fell{' (stretched)' if stretched else ''}")
+        yield 1
+        self._set(self.scl, 0)
+        self._fall = self.now + 1
+        return bit
+
+    def _byte(self, value: int | None, nack: bool = False):
+        """Write `value` (returns 1 if the target ACKs) or read a byte (value None; returns it,
+        then ACKs it, or NACKs it with `nack`)."""
+        if value is None:
+            byte = 0
+            for _ in range(8):
+                byte = byte << 1 | (yield from self._clock(None))
+            yield from self._clock(1 if nack else 0)
+            return byte
+        for i in range(7, -1, -1):
+            yield from self._clock(value >> i & 1)
+        return 1 - (yield from self._clock(None))
 
 
 class I2cTarget(Device):

@@ -8,7 +8,7 @@ import unittest
 
 from bench import Bench, Script
 from seeds import seeded
-from devices import (BmcRx, BmcTx, DaliBus, DaliGear, WiredAndBus, CanNode, HdlcRx, I2cTarget, I2cTiming,
+from devices import (BmcRx, BmcTx, DaliBus, DaliGear, WiredAndBus, CanNode, HdlcRx, I2cController, I2cTarget, I2cTiming,
                      I2sCodec, SpiMaster, SpiSlave, UartRx, UartTx, Ws2812Chain, can_crc15, crc7_sd,
                      crc8_maxim, crc16_ccitt, crc16_modbus, crc16_usb, crc16_x25)
 
@@ -172,6 +172,36 @@ class I2c(unittest.TestCase):
         first = i2c_master([0x50 << 1])
         errors = self.judge(3, first, i2c_master([0x50 << 1], start=first[1] - 2))
         self.assertEqual([e.split(": ", 1)[1] for e in errors], ["tBUF 2 clocks, fm needs 3.9"])
+
+    def test_controller_against_the_target(self):
+        """The reference controller and target agree: a write, a write then a read after a
+        repeated START, an absent address; the target stretching SCL after every byte and
+        changing SDA as late as Fast-mode allows (it answers a clock after it sees SCL fall);
+        the timing judged."""
+        us = 10
+        bench = Bench(pullups=0b11)
+        ctl = bench.add(I2cController(0, 1, us, [[(0x50, [0x12, 0x34])],
+                                                 [(0x50, [0x07]), (0x50, 3)],
+                                                 [(0x51, [0x99])]], mode="fm", hold=2))
+        target = bench.add(I2cTarget(0, 1, 0x50, read_data=[0xAB, 0xCD, 0xEF], stretch=25, valid=8))
+        judge = bench.add(I2cTiming(0, 1, us, "fm"))
+        bench.run(20000, until=lambda: ctl.done)
+        self.assertTrue(ctl.done)
+        self.assertEqual(ctl.errors + target.errors + judge.errors, [])
+        self.assertEqual(ctl.results, [
+            {"addr": 0x50, "rw": 0, "data": [0x12, 0x34], "acks": [1, 1, 1]},
+            {"addr": 0x50, "rw": 0, "data": [0x07], "acks": [1, 1]},
+            {"addr": 0x50, "rw": 1, "data": [0xAB, 0xCD, 0xEF], "acks": [1]},
+            {"addr": 0x51, "rw": 0, "data": [], "acks": [0]}])
+        self.assertEqual([t["acks"] for t in target.transactions], [[1, 1, 1], [1, 1], [1, 1, 1, 0], []])
+
+    def test_controller_sees_a_late_target(self):
+        """A target changing SDA after Fast-mode's tVD;DAT (0.9 us) is caught."""
+        bench = Bench(pullups=0b11)
+        ctl = bench.add(I2cController(0, 1, 10, [[(0x50, 1)]], mode="fm"))
+        bench.add(I2cTarget(0, 1, 0x50, read_data=[0x55], valid=11))
+        bench.run(5000, until=lambda: ctl.done)
+        self.assertTrue(any("after SCL fell" in e for e in ctl.errors), ctl.errors)
 
 
 class Can(unittest.TestCase):
