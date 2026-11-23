@@ -1,0 +1,17 @@
+[options]
+mode prove
+
+[engines]
+smtbmc yices
+
+[script]
+read -formal pau.v openpio_sm.v
+hierarchy -top openpio_sm
+expose openpio_sm/ss_count openpio_sm/ss_opt openpio_sm/tmo_val openpio_sm/ph_exec openpio_sm/ph_stall openpio_sm/ph_delay openpio_sm/done openpio_sm/delaying openpio_sm/retry openpio_sm/cnt openpio_sm/dlymul
+read -formal timing.v
+prep -top timing
+
+[files]
+../../src/pau.v
+../../src/openpio_sm.v
+timing.v
