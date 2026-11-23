@@ -144,6 +144,52 @@ class Listen(unittest.TestCase):
         self.assertEqual("".join(eval(line.split(maxsplit=1)[1]) for line in got),
                          text.decode())
 
+    def test_the_chip_records_its_line(self):
+        """--record: edges.asm records the line SM 1's uart_tx sends with even parity, the
+        learner reads the chip's recording, and the receiver replaces edges.asm on SM 0."""
+        import contextlib
+        import io
+        import listen
+        from asm import assemble
+        from chip import CTRL
+        first, then = b"a recording made by the chip", b"received by what it learned"
+        src = (HERE.parent / "programs/uart/uart_tx.asm").read_text().replace(
+            "set x, 7", "set x, 8")                      # 9 bits: the 9th the parity
+
+        class Model(listen.Model):                       # SM 1: uart_tx, 8E1, 40 clocks a bit
+            def __init__(self, play=None):
+                super().__init__(play)
+                Host(self.chip).load(1, assemble(src), clkdiv_int=5)
+                Host(self.chip).start(0b10)
+                self.sent = 0
+
+            def ask(self, line):
+                host = Host(self.chip)
+                if self.sent == 0 and host.read(0, CTRL)[0] & 1:     # edges.asm runs
+                    self.sent = 1
+                    host.push(1, [even(b) for b in first])
+                elif self.sent == 1 and self.chip.t0 is not None:    # the receiver runs
+                    self.sent = 2
+                    host.push(1, [even(b) for b in then])
+                return super().ask(line)
+
+        def even(b):
+            return b | bin(b).count("1") % 2 << 8
+
+        out = io.StringIO()
+        argv, sys.argv = sys.argv, ["listen.py", "--record", "0.02", "--record-div", "1",
+                                    "--model", "--clock-hz", "1e6"]
+        model, listen.Model = listen.Model, Model
+        try:
+            with contextlib.redirect_stdout(out):
+                listen.main()
+        finally:
+            sys.argv, listen.Model = argv, model
+        lines = out.getvalue().splitlines()
+        self.assertIn("learned async: async serial 8E1, 40.00 clocks a bit", lines[2])
+        self.assertEqual("".join(eval(line.split(maxsplit=1)[1]) for line in lines[5:]),
+                         then.decode())
+
     def test_ps2_keyboard_with_its_parity(self):
         rnd = seeded(3)
         keys = [rnd.randrange(256) for _ in range(56)]  # 41 different ones prove a parity

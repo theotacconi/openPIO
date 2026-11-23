@@ -10,12 +10,21 @@ an openPIO receiver for it, and this loads it on state machine 0 and prints what
     python3 board/listen.py remote.sr --channel D0 --model          # the recording played on
                                                                     # the Python model instead
     python3 board/listen.py remote.sr --channel D0 --program        # only the receiver's source
+    python3 board/listen.py --record 3 --pin 5                      # no analyzer: the chip
+                                                                    # records the line itself
 
 The line goes to the board's pin --pin (and, for a clocked line, its clock to --pin + 1); the
 recording's times count clocks of --clock-hz, the board's clock (the Tang Nano 20K: 27 MHz).
 Each frame is printed as its bits in hex, and the CRC's verdict when the line has a CRC.
 State machine 1 is left as it is: a transmitter loaded there on the same pin is received, the
 chip learning its own line.
+
+With --record, no logic analyzer: programs/logic/edges.asm on state machine 0 records the line
+on --pin for that many seconds (its times strobes of --record-div clocks), the learner reads the
+recording, and the receiver it writes replaces edges.asm on the same state machine: one chip,
+from recording to receiving. A line of one wire (pulses, frames, asynchronous), whose edges come
+no faster than the host empties the RX FIFO, and with no gap of 65536 strobes or more (16-bit
+times: a longer one is read short), so for a burst of characters or frames.
 """
 
 from __future__ import annotations
@@ -23,6 +32,8 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+from pathlib import Path
+from typing import Callable
 
 from board import Board, Model, Serial
 
@@ -33,6 +44,31 @@ from learn import (Capture, clocked_check, clocked_rx_program, clocked_timing,  
                    crc_check, frame_timing, frames_rx_program, infer_async, infer_clocked,
                    infer_frames, infer_pulses, pulses_check, pulses_rx_program, pulses_timing,
                    rx_frames, rx_program, timing, word_value)
+
+
+EDGES = Path(__file__).resolve().parents[1] / "programs" / "logic" / "edges.asm"
+
+
+def record(host: Host, pin: int, div: int, done: Callable[[], bool]) -> Capture:
+    """The line on `pin` recorded by the chip: edges.asm on state machine 0 at CLKDIV `div`,
+    the RX FIFO at its largest (253 words), emptied until done(); times in clocks. ValueError
+    when no edge came, or the RX FIFO filled (edges.asm then stalls, and edges are lost)."""
+    host.load(0, assemble(EDGES.read_text()), clkdiv_int=div, in_base=pin, fifo_split=1)
+    host.start(host.read(0, CTRL)[0] | 0b01)
+    words: list[int] = []
+    full = False
+    while not done():
+        n = host.rx_level(0)
+        full |= n >= 253
+        words += host.pop(0, n) if n else []
+    host.start(host.read(0, CTRL)[0] & ~0b01)
+    words += host.drain(0)
+    if full:
+        raise ValueError(f"the RX FIFO filled: edges faster than the host reads them "
+                         f"({len(words) - 1} recorded)")
+    if len(words) < 2:
+        raise ValueError(f"no edge on pin {pin}")
+    return Capture.from_edges_program(words, div)
 
 
 def learn(kind: str, caps: dict[str, Capture], channel: str, args) -> tuple:
@@ -93,7 +129,7 @@ def hexbits(b: list[int], lsb: bool) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0],
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("recording", help="a sigrok session file (.sr)")
+    ap.add_argument("recording", nargs="?", help="a sigrok session file (.sr)")
     ap.add_argument("--channel", default="D0", help="the line's channel in the recording")
     ap.add_argument("--pin", type=int, default=0, help="the board's pin the line goes to")
     ap.add_argument("--kind", default="auto", choices=("auto", "pulses", "frames", "async",
@@ -109,9 +145,37 @@ def main() -> int:
                     help="play the recording on the Python model instead of the board")
     ap.add_argument("--program", action="store_true",
                     help="print the receiver's source and stop: no board needed")
+    ap.add_argument("--record", type=float, metavar="SECONDS",
+                    help="no recording file: the chip records --pin itself for SECONDS")
+    ap.add_argument("--record-div", type=int, default=4, metavar="CLKDIV",
+                    help="edges.asm's CLKDIV for --record: its times' resolution")
     args = ap.parse_args()
+    if (args.recording is None) == (args.record is None):
+        ap.error("a recording file, or --record")
+    if args.record is not None and (args.clock_channel or args.kind == "clocked" or args.program):
+        ap.error("--record: a line of one wire, on the board (or --model)")
 
-    caps = Capture.from_sigrok(args.recording, args.clock_hz)
+    host = None
+    if args.record is not None:                         # the board first: it records
+        port = Model() if args.model else Serial(args.port)
+        host = Host(Board(port, args.hz))
+        t_end = time.monotonic() + args.record
+        if args.model:                                   # the model's own clock
+            c_end = port.chip.cycle + round(args.record * args.clock_hz)
+            done = lambda: port.chip.cycle >= c_end      # noqa: E731
+        else:
+            done = lambda: time.monotonic() >= t_end     # noqa: E731
+        print(f"recording pin {args.pin} for {args.record:g} s")
+        try:
+            cap = record(host, args.pin, args.record_div, done)
+        except ValueError as e:
+            print(f"nothing recorded: {e}")
+            return 1
+        print(f"recorded {len(cap.edges)} edges")
+        args.channel = "pin"
+        caps = {"pin": cap}
+    else:
+        caps = Capture.from_sigrok(args.recording, args.clock_hz)
     if args.channel not in caps:
         ap.error(f"no channel {args.channel}: {', '.join(caps)}")
     if args.clock_channel:
@@ -131,7 +195,9 @@ def main() -> int:
         print(src)
         return 0
 
-    if args.model:
+    if host is not None:                               # recorded: the same chip, as long again
+        end = port.chip.cycle + round(args.record * args.clock_hz) if args.model else None
+    elif args.model:
         play = {args.pin: caps[args.channel]}
         if kind == "clocked":
             play[args.pin + 1] = caps[args.clock_channel]
@@ -141,12 +207,14 @@ def main() -> int:
         end = caps[args.channel].span[1]
     else:
         port, end = Serial(args.port), None
-    host = Host(Board(port, args.hz))
+    host = host or Host(Board(port, args.hz))
     host.load(0, assemble(src), clkdiv_int=div, clkdiv_frac=frac)
     host.start(host.read(0, CTRL)[0] | 0b01)            # SM 1 left as it is
-    if args.model:                                     # the recording from now on, then the
+    if args.model and args.record is None:             # the recording from now on, then the
         port.chip.t0 = port.chip.cycle                     # line at rest a tenth as long: a
         end += port.chip.t0 + end // 10 + 1000             # receiver sees the last frame end
+    elif args.model:
+        port.chip.t0 = port.chip.cycle
     print("listening (Ctrl-C to stop)" if end is None else "playing the recording")
 
     words: list[int] = []
