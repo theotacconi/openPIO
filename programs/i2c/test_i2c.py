@@ -173,16 +173,15 @@ class I2cController(unittest.TestCase):
 
 
 TARGET = 0x50    # i2c_target.asm's address (Y = 0x100 | address << 1)
-DIVS = {"fm+": (1, 2), "fm": (2, 4), "sm": (4, 18)}     # the CLKDIVs the target promises at 50 MHz
+DIVS = {"fm+": (1, 2), "fm": (2, 4), "sm": (4, 18)}     # the CLKDIVs the target promises
 
 
-def run_target(transactions, mode="fm+", div=1.0, hold=1, reads=(), delay=0, extra=(),
+def run_target(transactions, mode="fm+", div=1.0, hold=1, reads=(), delay=0, extra=(), us=50,
                gap=0, clocks=None):
     """i2c_target.asm on SM 0 at CLKDIV `div` against the reference controller running
-    `transactions` at the top SCL of `mode` (50 clocks a microsecond), judged by I2cTiming. The
-    host loads the bytes of each read (`reads`, one list per read, in order, then `extra`)
+    `transactions` at the top SCL of `mode` (`us` clocks a microsecond), judged by I2cTiming.
+    The host loads the bytes of each read (`reads`, one list per read, in order, then `extra`)
     `delay` clocks after the read's address byte reaches it. Returns (bench, controller)."""
-    us = 50
     bench = Bench(pullups=1 << SCL | 1 << SDA)
     bench.load(0, (HERE / "i2c_target.asm").read_text(), clkdiv_int=int(div),
                clkdiv_frac=round(div % 1 * 256))
@@ -316,17 +315,18 @@ class I2cTargetProgram(unittest.TestCase):
 
     def test_timing(self):
         """At the top SCL of each mode, at the smallest and the largest divider the target
-        promises, a controller changing SDA a clock after SCL falls and a host answering a read
-        late: every byte acknowledged, every bit the target sends valid within tVD;DAT, the
-        first bit of the stretched read set up tSU;DAT before SCL rises, the bus timing of
-        Table 10."""
-        for mode, divs in DIVS.items():
-            for div in divs:
-                with self.subTest(mode=mode, div=div):
-                    rng = seeded(42)
-                    data = [rng.randrange(256) for _ in range(3)]
-                    self.check([[(TARGET, data)], [(TARGET, [0x20]), (TARGET, 3)]], [[0xA5, 0x00, 0xFF]],
-                               mode=mode, div=div, delay=2000)
+        promises, at 45 MHz (the clock signed off) and 50 MHz, a controller changing SDA a
+        clock after SCL falls and a host answering a read late: every byte acknowledged, every
+        bit the target sends valid within tVD;DAT, the first bit of the stretched read set up
+        tSU;DAT before SCL rises, the bus timing of Table 10."""
+        for us in (45, 50):
+            for mode, divs in DIVS.items():
+                for div in divs:
+                    with self.subTest(us=us, mode=mode, div=div):
+                        rng = seeded(42)
+                        data = [rng.randrange(256) for _ in range(3)]
+                        self.check([[(TARGET, data)], [(TARGET, [0x20]), (TARGET, 3)]],
+                                   [[0xA5, 0x00, 0xFF]], mode=mode, div=div, delay=2000, us=us)
 
     def test_sweep(self):
         """Random settings inside what i2c_target.asm promises: a mode, a divider in the

@@ -12,10 +12,11 @@
 ; START and STOP are found anywhere, also inside a byte: the PAU's line state of SDA and SCL
 ; changes once, so one WAIT sees either line move. Not supported: general call, 10-bit addresses.
 ; SDA (an ACK, or a bit sent) is valid at most 9 strobes and 2 clocks after SCL falls, and set
-; up 4 strobes or more before the target releases a stretched SCL: UM10204's tVD;DAT and
-; tSU;DAT at 50 MHz in Fast-mode Plus (1 MHz) at CLKDIV 1 to 2, Fast-mode (400 kHz) 2 to 4,
-; Standard-mode (100 kHz) 4 to 18 (a fraction: its longer strobes count for tVD;DAT, its
-; shorter ones for tSU;DAT).
+; up 4 strobes or more before the target releases a stretched SCL (an ACK holds SCL from the
+; strobe it pulls SDA: a late one stretches): UM10204's tVD;DAT and tSU;DAT at 45 MHz (the
+; clock signed off) and at 50 MHz in Fast-mode Plus (1 MHz) at CLKDIV 1 to 2, Fast-mode
+; (400 kHz) 2 to 4, Standard-mode (100 kHz) 4 to 18 (a fraction: its longer strobes count
+; for tVD;DAT, its shorter ones for tSU;DAT).
 .in_pins 2               ; SCL
 .set_pins 3 1            ; SDA
 .out_pins 3
