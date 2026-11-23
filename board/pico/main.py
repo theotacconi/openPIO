@@ -28,9 +28,14 @@ answer starts with r:
                          memory of 256 bytes, all 0, at register addresses of one byte
     tw <reg> <hex>    -> r: those bytes into the memory from reg (hex)
     tm <reg> <n>      -> r <hex>: n bytes of the memory from reg
+    c <hz>            -> r: I2C1 controller instead, SDA GP14, SCL GP15
+    cw <addr> <hex>   -> r <n>: those bytes written to the 7-bit address (hex), STOP; n of
+                         them ACKed (an address nobody ACKs: an e answer)
+    cr <addr> <n>     -> r <hex>: n bytes read from the address, the last NACKed, STOP
+    cwr <addr> <hex> <n> -> r <hex>: those bytes written, then a repeated START and n bytes read
     g <mask> <values> -> r <levels>: GP8-GP15 (bit k: GP8 + k, hex) outputs where mask is 1, at
                          those values, the others inputs; the levels of all eight, read back
-    x                 -> r: all three off, GP8-GP15 inputs again (as after a reset), so that
+    x                 -> r: all of them off, GP8-GP15 inputs again (as after a reset), so that
                          they do not drive the chip's pins in the other checks
 """
 
@@ -76,7 +81,7 @@ def reply(line, xfer, irq, clock, more=None):
 def peripherals():
     """The commands of the Pico's UART1, SPI1 and I2C1 (the module's docstring)."""
     import binascii
-    from machine import SPI, UART, Pin
+    from machine import I2C, SPI, UART, Pin
     try:
         from machine import I2CTarget                # MicroPython 1.26 and later
     except ImportError:
@@ -118,11 +123,15 @@ def peripherals():
         on["cs"](1)
         return hexed(got)
 
+    def i2c_off():
+        if "t" in on:
+            on.pop("t").deinit()
+        on.pop("c", None)
+
     def target(a):
         if not I2CTarget:
             return "e t no machine.I2CTarget: MicroPython 1.26 or later"
-        if "t" in on:
-            on["t"].deinit()
+        i2c_off()
         on["mem"] = bytearray(256)
         on["t"] = I2CTarget(1, int(a[0], 16), scl=Pin(15), sda=Pin(14), mem=on["mem"])
         return "r"
@@ -136,6 +145,22 @@ def peripherals():
         reg = int(a[0], 16)
         return hexed(on["mem"][reg:reg + int(a[1])])
 
+    def controller(a):
+        i2c_off()
+        on["c"] = I2C(1, scl=Pin(15), sda=Pin(14), freq=int(a[0]))
+        return "r"
+
+    def controller_write(a):
+        return "r %d" % on["c"].writeto(int(a[0], 16), binascii.unhexlify(a[1]))
+
+    def controller_read(a):
+        return hexed(on["c"].readfrom(int(a[0], 16), int(a[1])))
+
+    def controller_write_read(a):
+        addr = int(a[0], 16)
+        on["c"].writeto(addr, binascii.unhexlify(a[1]), False)       # no STOP: a repeated START
+        return hexed(on["c"].readfrom(addr, int(a[2])))
+
     def gpio(a):
         mask, values = int(a[0], 16), int(a[1], 16)
         pins = [Pin(8 + k, Pin.OUT, value=values >> k & 1) if mask >> k & 1 else
@@ -143,7 +168,8 @@ def peripherals():
         return "r %02x" % sum(p.value() << k for k, p in enumerate(pins))
 
     def off(a):
-        for k in ("u", "s", "t"):
+        i2c_off()
+        for k in ("u", "s"):
             if k in on:
                 on.pop(k).deinit()
         for n in range(8, 16):
@@ -151,7 +177,8 @@ def peripherals():
         return "r"
 
     return {"x": off, "g": gpio, "pv": version, "u": uart, "ut": uart_send, "ur": uart_read, "s": spi,
-            "sx": spi_transfer, "t": target, "tw": target_write, "tm": target_memory}
+            "sx": spi_transfer, "t": target, "tw": target_write, "tm": target_memory,
+            "c": controller, "cw": controller_write, "cr": controller_read, "cwr": controller_write_read}
 
 
 def main():

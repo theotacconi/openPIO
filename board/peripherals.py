@@ -41,6 +41,7 @@ BAUDS = (9600, 115200, 1_000_000, 3_000_000)
 SPI_HZ = (250_000, 500_000, 900_000)                     # spi_target: SCK up to clk / 28
 I2C_HZ = (100_000, 400_000)
 TARGET = 0x42                                            # the Pico's I2C address
+CHIP = 0x50                                              # i2c_target's address
 SEEN: list[tuple] = []          # what the checks put on the wires, for judge()
 
 
@@ -246,6 +247,71 @@ def check_i2c(host: Host, pico: Pico) -> str | None:
     return None
 
 
+def check_i2c_target(host: Host, pico: Pico) -> str | None:
+    """i2c_target on pio 6 (SCL) and 7 (SDA), open drain, against the Pico's I2C1 controller at
+    each SCL: 16 bytes written; a register written, a repeated START and 8 bytes read (loaded
+    into the TX FIFO before); an address nobody answers; a read of 2 bytes of 6 loaded, then one
+    of 3 that gets its own, the bytes the first left dropped at its NACK."""
+    def written(addr: int, data: list[int]) -> list[str]:
+        return [f"Address write: {addr:02X}", "ACK"] + [x for b in data for x in (f"Data write: {b:02X}", "ACK")]
+
+    def read(data: list[int]) -> list[str]:
+        return ([f"Address read: {CHIP:02X}", "ACK"] + [x for b in data[:-1] for x in (f"Data read: {b:02X}", "ACK")]
+                + [f"Data read: {data[-1]:02X}", "NACK", "Stop"])
+
+    def rx(count: int) -> list[int]:
+        host.wait_rx(0, count, 3000)
+        return host.drain(0)
+
+    address = 0x100 | CHIP << 1                          # an address byte in the RX FIFO
+    for hz in I2C_HZ:
+        rnd = random.Random(hz + 1)
+        host.write(0, CTRL, 0x30)
+        host.load(0, program("i2c/i2c_target.asm"), clkdiv_int=2,     # at 27 MHz: both modes
+                  in_base=6, sideset_base=6, set_base=7, out_base=7,
+                  pin_mask=0xC0, open_drain_mask=0xC0, y=address)
+        host.start(0b01)
+        pico.ask("c", hz)
+
+        data = [rnd.randrange(256) for _ in range(16)]
+        acks = pico.ask("cw", f"{CHIP:x}", bytes(data).hex())
+        SEEN.append(("i2c", hz, ["Start"] + written(CHIP, data) + ["Stop"]))
+        error = differ(f"{hz} Hz write", [address] + data, rx(17))
+        if error or acks != "16":
+            return error or f"{hz} Hz write: {acks} bytes ACKed"
+
+        reg, data = rnd.randrange(256), [rnd.randrange(256) for _ in range(8)]
+        host.push(0, data)
+        got = pico.bytes("cwr", f"{CHIP:x}", f"{reg:02x}", 8)
+        SEEN.append(("i2c", hz, ["Start"] + written(CHIP, [reg]) + ["Start repeat"] + read(data)))
+        error = (differ(f"{hz} Hz read", data, got)
+                 or differ(f"{hz} Hz read, the RX FIFO", [address, reg, address | 1], rx(3)))
+        if error:
+            return error
+
+        try:
+            pico.ask("cw", f"{CHIP + 1:x}", "00")
+            return f"{hz} Hz: address {CHIP + 1:#x} ACKed"
+        except IOError:
+            pass
+        SEEN.append(("i2c", hz, ["Start", f"Address write: {CHIP + 1:02X}", "NACK", "Stop"]))
+        if host.rx_level(0):
+            return f"{hz} Hz: another address reported: {host.drain(0)}"
+
+        first, second = [rnd.randrange(256) for _ in range(6)], [rnd.randrange(256) for _ in range(3)]
+        host.push(0, first)
+        got = pico.bytes("cr", f"{CHIP:x}", 2)
+        host.push(0, second)
+        got += pico.bytes("cr", f"{CHIP:x}", 3)
+        SEEN.append(("i2c", hz, ["Start"] + read(first[:2]) + ["Start"] + read(second)))
+        error = (differ(f"{hz} Hz, a read cut short and the next", first[:2] + second, got)
+                 or differ(f"{hz} Hz reads, the RX FIFO", [address | 1] * 2, rx(2)))
+        if error:
+            return error
+    pico.ask("x")
+    return None
+
+
 def sigrok(path: Path, decoder: str, annotations: str) -> list[str]:
     """The annotations of one of sigrok's decoders on the recording, in order."""
     out = subprocess.run(["sigrok-cli", "-i", str(path), "-P", decoder, "-A", annotations],
@@ -283,7 +349,7 @@ def judge(path: Path) -> list[str]:
     return bad
 
 
-CHECKS = [check_wires, check_uart_out, check_uart_in, check_spi, check_i2c]
+CHECKS = [check_wires, check_uart_out, check_uart_in, check_spi, check_i2c, check_i2c_target]
 
 
 def main() -> int:
